@@ -174,6 +174,34 @@ impl RepositorySession {
         })
     }
 
+    /// Ahead/behind counts for many branches using a single repository open.
+    ///
+    /// Row-level stack rendering only needs `(ahead, behind)` versus the
+    /// parent, so this deliberately skips the config load and the remote
+    /// comparisons that `branch_details` performs per branch.
+    pub fn ahead_behind_many(
+        &self,
+        branches: &[BranchSummary],
+    ) -> Result<HashMap<String, (usize, usize)>> {
+        let repo = self.open_repo()?;
+        let pairs: Vec<(String, String)> = branches
+            .iter()
+            .filter(|b| !b.is_trunk)
+            .filter_map(|b| b.parent.clone().map(|p| (p, b.name.clone())))
+            .collect();
+        let names: Vec<String> = branches
+            .iter()
+            .filter(|b| !b.is_trunk && b.parent.is_some())
+            .map(|b| b.name.clone())
+            .collect();
+        let results = repo.commits_ahead_behind_many(&pairs);
+        Ok(names
+            .into_iter()
+            .zip(results)
+            .filter_map(|(name, r)| r.ok().map(|ab| (name, ab)))
+            .collect())
+    }
+
     /// Loads a branch's merge-base diff and the compatible TUI disk cache.
     ///
     /// Ref resolution and diff calculation errors remain actionable errors.

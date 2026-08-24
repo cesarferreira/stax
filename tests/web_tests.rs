@@ -633,3 +633,67 @@ fn web_command_reports_busy_port_fallback_and_startup_progress() {
     assert!(output.contains("Workspace  http://127.0.0.1:"));
     assert!(output.contains("Press Ctrl-C to stop."));
 }
+
+#[test]
+fn web_select_branch_emits_pane_refresh_trigger() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+
+        let repo_path = repo.path().to_path_buf();
+        let server = stax::web::start_test_server(repo_path)
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+
+        let body = client
+            .get(&server.base_url)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        assert!(
+            body.contains("stax:branch-selected from:body"),
+            "changes + inspector panes should re-fetch on branch selection"
+        );
+        assert_eq!(
+            body.matches("stax:branch-selected from:body").count(),
+            2,
+            "both #changes-pane and #inspector-pane should listen"
+        );
+        assert!(
+            body.contains(r#"hx-sync="this:replace""#),
+            "hx-sync prevents a stale 30s poll from overwriting a fresh selection"
+        );
+
+        let csrf = body
+            .split(r#"id="workspace-csrf""#)
+            .nth(1)
+            .and_then(|s| s.split(r#"value=""#).nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("csrf token in workspace HTML")
+            .to_string();
+
+        let body = format!("branch=main&csrf={csrf}");
+        let resp = client
+            .post(format!("{}select", server.base_url))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("hx-trigger")
+                .and_then(|v| v.to_str().ok()),
+            Some("stax:branch-selected"),
+            "/select must tell the changes + inspector panes to refresh"
+        );
+    });
+}

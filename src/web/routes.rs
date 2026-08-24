@@ -94,17 +94,25 @@ fn compute_stack_row_meta(
     session: &crate::application::RepositorySession,
     snapshot: &RepositorySnapshot,
 ) -> StackRowMeta {
-    use std::collections::HashMap;
-    let mut meta = HashMap::new();
-    for branch in &snapshot.branches {
-        if branch.is_trunk {
-            continue;
-        }
-        if let Ok(details) = session.branch_details(branch) {
-            meta.insert(branch.name.clone(), (details.ahead, details.behind));
-        }
-    }
-    meta
+    session
+        .ahead_behind_many(&snapshot.branches)
+        .unwrap_or_default()
+}
+
+/// Event name fired at `body` so the changes + inspector panes re-fetch
+/// whatever `session.selected_branch` is at the time they issue their request.
+const PANE_REFRESH_EVENT: &str = "stax:branch-selected";
+
+/// Attach `HX-Trigger` so htmx fires `stax:branch-selected` before swapping
+/// `#stack-pane`. Firing before the swap matters: the triggering `.card-select`
+/// element lives inside `#stack-pane` and is destroyed by the swap, so a
+/// post-swap trigger would fire on a detached node and never bubble to `body`.
+fn with_pane_refresh(mut resp: axum::response::Response<Body>) -> axum::response::Response<Body> {
+    resp.headers_mut().insert(
+        axum::http::HeaderName::from_static("hx-trigger"),
+        axum::http::HeaderValue::from_static(PANE_REFRESH_EVENT),
+    );
+    resp
 }
 
 fn load_snapshot_with_meta(
@@ -204,12 +212,18 @@ async fn stack_partial(
         return r;
     }
 
+    let changed = q.branch.is_some();
     if let Some(branch) = &q.branch {
         let mut s = state.lock().unwrap();
         s.selected_branch = Some(branch.clone());
     }
 
-    render_stack_pane(&state, &token).await
+    let resp = render_stack_pane(&state, &token).await;
+    if changed {
+        with_pane_refresh(resp)
+    } else {
+        resp
+    }
 }
 
 // ── Select branch ────────────────────────────────────────────────────────────
@@ -241,7 +255,7 @@ async fn select_branch(
         s.selected_branch = Some(form.branch.clone());
     }
 
-    render_stack_pane(&state, &token).await
+    with_pane_refresh(render_stack_pane(&state, &token).await)
 }
 
 // ── Branch details (inspector) ────────────────────────────────────────────────
@@ -524,7 +538,7 @@ async fn refresh_handler(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
-    render_stack_pane(&state, &token).await
+    with_pane_refresh(render_stack_pane(&state, &token).await)
 }
 
 // ── Op: checkout ──────────────────────────────────────────────────────────────
@@ -1057,7 +1071,7 @@ async fn run_mutation(
     // Disarm: flag already cleared above; guard drop should be a no-op.
     guard.disarm();
 
-    render_stack_pane_with_banner(&state, &token, &message, success).await
+    with_pane_refresh(render_stack_pane_with_banner(&state, &token, &message, success).await)
 }
 
 // ── Guard unit tests ──────────────────────────────────────────────────────────

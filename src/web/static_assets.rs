@@ -29,15 +29,11 @@ pub const APP_CSS: &str = r#"
   --diff-hunk:        #6750a4;
   --disabled-surface: #ebebed;
   --disabled-text:    #85878c;
-  --lane-0:           #1677a8;
-  --lane-1:           #287a45;
-  --lane-2:           #668a14;
+  --lane-0: #3d6fa5; --lane-1: #3f7d58; --lane-2: #8a6d3b;
   --radius:           6px;
   --radius-card:      8px;
   --shadow-sm:        0 1px 3px rgba(0,0,0,.08);
   --shadow-md:        0 2px 8px rgba(0,0,0,.12);
-  --sans:             -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --mono:             "Menlo", "Monaco", "Consolas", "SF Mono", monospace;
   color-scheme: light;
 }
 
@@ -64,15 +60,11 @@ pub const APP_CSS: &str = r#"
   --diff-hunk:        #9b8fff;
   --disabled-surface: #1a1a28;
   --disabled-text:    #5a5a78;
-  --lane-0:           #4ec9ff;
-  --lane-1:           #4ec97a;
-  --lane-2:           #a3e635;
+  --lane-0: #6fb3e0; --lane-1: #74c294; --lane-2: #cbb072;
   --radius:           6px;
   --radius-card:      8px;
   --shadow-sm:        0 1px 3px rgba(0,0,0,.5);
   --shadow-md:        0 2px 8px rgba(0,0,0,.6);
-  --sans:             -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --mono:             "Menlo", "Monaco", "Consolas", "SF Mono", monospace;
   color-scheme: dark;
 }
 
@@ -100,15 +92,11 @@ pub const APP_CSS: &str = r#"
     --diff-hunk:        #9b8fff;
     --disabled-surface: #1a1a28;
     --disabled-text:    #5a5a78;
-    --lane-0:           #4ec9ff;
-    --lane-1:           #4ec97a;
-    --lane-2:           #a3e635;
+    --lane-0: #6fb3e0; --lane-1: #74c294; --lane-2: #cbb072;
     --radius:           6px;
     --radius-card:      8px;
     --shadow-sm:        0 1px 3px rgba(0,0,0,.5);
     --shadow-md:        0 2px 8px rgba(0,0,0,.6);
-    --sans:             -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --mono:             "Menlo", "Monaco", "Consolas", "SF Mono", monospace;
     color-scheme: dark;
   }
 }
@@ -119,14 +107,29 @@ pub const APP_CSS: &str = r#"
   }
 }
 
-/* ── Theme-independent layout metrics ────────────────────────────────── */
+/* ── Theme-independent layout metrics + type scale ───────────────────── */
 :root {
-  --card-pad-y:    6px;
+  --card-pad-y:    7px;
   --card-border-w: 1px;
   --card-margin-y: 2px;
   --rail-bleed:     calc(var(--card-pad-y) + var(--card-border-w) + var(--card-margin-y));
   --topo-lane-w:   20px;
   --stack-rail-w:  240px;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI Variable Text", "Segoe UI", Inter, Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo,
+          Consolas, "Liberation Mono", monospace;
+
+  --fs-micro:  9.5px;
+  --fs-label:  10px;
+  --fs-sm:     11px;
+  --fs-body:   12px;
+  --fs-md:     13px;
+  --fs-title:  15px;
+  --ls-label:  .11em;
+  --ls-title:  -.014em;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -134,10 +137,14 @@ pub const APP_CSS: &str = r#"
 html, body {
   height: 100%;
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: var(--fs-md);
   line-height: 1.5;
   background: var(--window);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
 }
 
 /* ── Workspace shell ────────────────────────────────────────────────── */
@@ -317,7 +324,10 @@ html, body {
 }
 
 .stack-header {
-  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 14px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -325,67 +335,95 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 8px;
 }
 .stack-header-label {
-  font-size: 10px;
+  font-size: var(--fs-label);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: var(--ls-label);
   color: var(--text-muted);
 }
 .stack-trunk-badge {
-  font-size: 10px;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
+  font-size: var(--fs-label);
+  font-weight: 500;
   color: var(--text-muted);
-  background: var(--border);
-  padding: 1px 6px;
-  border-radius: 3px;
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.stack-trunk-badge::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--lane-0);
+  flex-shrink: 0;
 }
 .stack-title-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
 }
 .stack-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: var(--fs-title);
+  font-weight: 640;
+  letter-spacing: var(--ls-title);
+  line-height: 1.25;
   color: var(--text);
 }
 .stack-meta {
-  font-size: 11px;
+  font-size: var(--fs-sm);
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .branch-cards {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 8px 0 10px;
 }
 
 /* ── Branch cards ────────────────────────────────────────────────────── */
 .branch-card {
   display: flex;
   align-items: stretch;
-  padding: var(--card-pad-y) 10px var(--card-pad-y) 4px;
+  padding: var(--card-pad-y) 8px var(--card-pad-y) 4px;
   margin: var(--card-margin-y) 8px;
   border-radius: var(--radius-card);
   border: var(--card-border-w) solid transparent;
   position: relative;
-  transition: background .1s, border-color .1s;
-  gap: 6px;
+  transition: background .12s ease, border-color .12s ease;
+  gap: 4px;
 }
-.branch-card:hover {
-  background: var(--surface-hover);
-  border-color: var(--border);
-}
+.branch-card:hover { background: var(--surface-hover); }
 .branch-card.selected {
   background: var(--surface-selected);
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-.branch-card.is-current .card-name { font-weight: 600; }
-.branch-card.is-trunk { opacity: .8; }
+.branch-card.selected::before {
+  content: "";
+  position: absolute;
+  left: -1px; top: 6px; bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.branch-card.is-current .card-name { font-weight: 620; }
+.branch-card.is-trunk .card-name { color: var(--text-muted); }
+.branch-card.is-trunk { opacity: 1; }
 
 /* Card selection surface — carries role=button so checkout is a sibling */
 .card-select {
@@ -432,9 +470,9 @@ html, body {
 }
 .tc-rail.tc-top    { top: calc(-1 * var(--rail-bleed)); bottom: 50%; }
 .tc-rail.tc-bottom { top: 50%; bottom: calc(-1 * var(--rail-bleed)); }
-.tc-rail.lane-0 { background: var(--lane-0); opacity: .7; }
-.tc-rail.lane-1 { background: var(--lane-1); opacity: .7; }
-.tc-rail.lane-2 { background: var(--lane-2); opacity: .7; }
+.tc-rail.lane-0 { background: var(--lane-0); opacity: .55; }
+.tc-rail.lane-1 { background: var(--lane-1); opacity: .55; }
+.tc-rail.lane-2 { background: var(--lane-2); opacity: .55; }
 .tc-h {
   position: absolute;
   top: 50%;
@@ -446,19 +484,20 @@ html, body {
 .tc-h.tc-left  { left: 0; right: 50%; }
 .tc-h.tc-right { left: 50%; right: 0; }
 .tc-node {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   position: relative;
   z-index: 3;
   flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--sidebar);
 }
 .tc-node.lane-0 { background: var(--lane-0); }
 .tc-node.lane-1 { background: var(--lane-1); }
 .tc-node.lane-2 { background: var(--lane-2); }
 .tc-node.current {
   background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 35%, transparent);
+  box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* ── Card inner ──────────────────────────────────────────────────────── */
@@ -467,7 +506,8 @@ html, body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  padding: 1px 0;
 }
 .card-top {
   display: flex;
@@ -475,7 +515,9 @@ html, body {
   gap: 6px;
 }
 .card-name {
-  font-size: 12px;
+  font-size: var(--fs-body);
+  font-weight: 500;
+  letter-spacing: -.008em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -485,76 +527,88 @@ html, body {
 .card-chips {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex-shrink: 0;
 }
 .card-bottom {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
+  gap: 8px;
+  font-size: var(--fs-micro);
   color: var(--text-muted);
 }
 .card-ci {
-  font-size: 10px;
-  font-weight: 500;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: .01em;
 }
 .card-ci.ci-pass { color: var(--success); }
 .card-ci.ci-fail { color: var(--danger); }
 .card-ci.ci-pending { color: var(--warning); }
 .card-diverge {
   font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 /* ── Quick actions ───────────────────────────────────────────────────── */
 .quick-actions {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
-  padding: 10px 12px;
+  padding: 12px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .quick-actions-label {
-  font-size: 10px;
+  font-size: var(--fs-label);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: var(--ls-label);
   color: var(--text-muted);
+  padding: 0 4px;
   margin-bottom: 6px;
 }
 .quick-action {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  padding: 5px 8px;
+  padding: 6px 8px;
   border: none;
   border-radius: var(--radius);
   background: transparent;
   color: var(--text);
   font-family: var(--sans);
-  font-size: 12px;
+  font-size: var(--fs-body);
+  font-weight: 500;
   cursor: pointer;
-  transition: background .1s;
+  transition: background .12s ease;
   text-align: left;
 }
 .quick-action:hover { background: var(--surface-hover); }
-.quick-action:disabled { opacity: .4; cursor: default; pointer-events: none; }
+.quick-action:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.quick-action:disabled { opacity: .38; cursor: default; pointer-events: none; }
 .qa-icon {
   width: 16px;
   flex-shrink: 0;
+  text-align: center;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--fs-body);
 }
-.qa-label { flex: 1; }
+.qa-label { flex: 1; letter-spacing: -.006em; }
 .qa-key {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-label);
+  font-weight: 500;
   color: var(--text-muted);
-  background: var(--border);
+  background: transparent;
+  border: 1px solid var(--border);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: 4px;
   flex-shrink: 0;
+  line-height: 1.4;
 }
 
 /* ── Review header ───────────────────────────────────────────────────── */
@@ -895,23 +949,47 @@ html, body {
 .btn-danger { border-color: var(--danger); color: var(--danger); }
 .btn-danger:hover { background: var(--danger); color: #fff; }
 .btn-icon { padding: 4px 7px; }
-.btn-checkout { font-size: 10px; padding: 2px 6px; flex-shrink: 0; }
+.btn-checkout {
+  align-self: center;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity .12s ease, background .12s ease, color .12s ease;
+}
+.branch-card:hover .btn-checkout,
+.branch-card.selected .btn-checkout,
+.btn-checkout:focus-visible { opacity: 1; }
+.btn-checkout:hover {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text);
+}
 
 /* ── Chips / badges ──────────────────────────────────────────────────── */
 .meta-chip {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  line-height: 1.3;
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  letter-spacing: .03em;
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  line-height: 1.4;
   white-space: nowrap;
   flex-shrink: 0;
+  border: 1px solid transparent;
 }
-.meta-chip.chip-trunk { background: var(--border); color: var(--text); }
-.meta-chip.chip-head { background: var(--surface-selected); color: var(--focus); }
+.meta-chip.chip-trunk   { background: transparent; border-color: var(--border-strong); color: var(--text-muted); }
+.meta-chip.chip-head    { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--focus); }
 .meta-chip.chip-diverge { background: var(--surface-hover); color: var(--text-muted); }
-.meta-chip.chip-warning { background: rgba(232,180,78,.15); color: var(--warning); }
-.meta-chip.chip-pr { background: var(--surface-selected); color: var(--focus); }
+.meta-chip.chip-warning { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.meta-chip.chip-pr      { background: transparent; border-color: color-mix(in srgb, var(--focus) 40%, transparent); color: var(--focus); font-family: var(--mono); font-weight: 550; }
 
 /* ── Stat add / del ──────────────────────────────────────────────────── */
 .stat-add { color: var(--diff-add); }
@@ -982,12 +1060,30 @@ html, body {
 .mt-2 { margin-top: 8px; }
 
 /* ── HTMX loading treatment ──────────────────────────────────────────── */
-.pane-body.htmx-request {
-  opacity: 0.6;
-  transition: opacity 0.15s;
-  pointer-events: none;
+#changes-pane, #inspector-pane { position: relative; }
+
+/* Requesting element gets .htmx-request from htmx itself. Delay the fade-in so
+   a cache-warm diff (the common case) never flashes a spinner. */
+.pane-body.htmx-request { pointer-events: none; }
+.pane-body.htmx-request > * { opacity: .45; transition: opacity .12s ease; }
+.pane-body.htmx-request::after {
+  content: "";
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  z-index: 5;
+  animation: spin .6s linear infinite, fade-in .15s .18s both;
 }
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+
 .htmx-request.mutating-btn { opacity: 0.5; }
+
+/* Static spinner slot rendered inside the pane on first paint. */
+.pane-spinner { display: none; }
 
 /* Loading overlay for the whole panel during stack-targeted mutations */
 .pane.is-loading .pane-body {
@@ -1194,12 +1290,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Rehydrate inspector + changes when stack pane reloads
+  // Rehydrate changes pane's file-list JS when it swaps. Note: htmx only
+  // processes 'load' at initial page/swap time and never registers a
+  // listener for it afterward, so dispatching 'load' here would do nothing —
+  // the panes instead refresh via the server-driven HX-Trigger:
+  // stax:branch-selected header (see routes.rs), which they listen for via
+  // hx-trigger="... stax:branch-selected from:body".
   document.body.addEventListener('htmx:afterSwap', function(e) {
-    if (e.detail && e.detail.target && e.detail.target.id === 'stack-pane') {
-      htmx.trigger('#inspector-pane', 'load');
-      htmx.trigger('#changes-pane', 'load');
-    }
     if (e.detail && e.detail.target && e.detail.target.id === 'changes-pane') {
       initFileList();
     }
@@ -1388,6 +1485,22 @@ mod tests {
         assert!(
             node.contains("z-index: 3;"),
             "nodes should paint above rails"
+        );
+    }
+
+    #[test]
+    fn selection_driven_panes_show_a_pending_indicator() {
+        assert!(
+            APP_CSS.contains(".pane-body.htmx-request::after"),
+            "panes must render a spinner while their request is in flight"
+        );
+    }
+
+    #[test]
+    fn dead_load_retrigger_is_not_reintroduced() {
+        assert!(
+            !APP_JS.contains("'load')"),
+            "pane refresh must use the stax:branch-selected event, not htmx.trigger(el,'load')"
         );
     }
 }

@@ -227,8 +227,10 @@ pub fn workspace_page(
                             div .pane-body #changes-pane
                                 style="display:flex;flex-direction:column;flex:1;min-height:0;padding:0;"
                                 hx-get=(format!("{base}/diff"))
-                                hx-trigger="load, every 30s"
+                                hx-trigger="load, every 30s, stax:branch-selected from:body"
+                                hx-sync="this:replace"
                                 {
+                                div .pane-spinner aria-hidden="true" { div .op-spinner {} }
                                 (changes_pane_placeholder(selected))
                             }
                         }
@@ -243,8 +245,10 @@ pub fn workspace_page(
                             {
                             div .pane-body #inspector-pane
                                 hx-get=(format!("{base}/details"))
-                                hx-trigger="load"
+                                hx-trigger="load, stax:branch-selected from:body"
+                                hx-sync="this:replace"
                                 {
+                                div .pane-spinner aria-hidden="true" {}
                                 (inspector_placeholder(selected))
                             }
                         }
