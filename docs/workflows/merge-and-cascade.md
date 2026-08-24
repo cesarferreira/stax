@@ -87,6 +87,10 @@ Gitea/Forgejo does not support `st merge --stack`.
 
 For the no-extra-CI behavior, GitHub branch protection should require status checks but should not require branches to be up to date before merging. If GitHub requires up-to-date branches, it can force another revalidation at merge time.
 
+### Native GitHub Stacks: atomic merge via `gh stack merge`
+
+If the current repo's stack is a confirmed-enabled native GitHub Stack (see [GitHub native Stacked PRs](../integrations/github-native-stacks.md)) and the installed `github/gh-stack` extension is v0.1.0+, `st merge --stack` delegates to `gh stack merge` instead of the retarget-then-merge flow above: GitHub lands every selected PR up to the tip atomically, or none of them. This skips the per-PR base retargeting and indirect-merge polling described above entirely. If the base branch uses a merge queue, the stack may be enqueued instead of merged immediately; `st merge --stack` reports that and skips local branch cleanup (run `st sync` once the queue lands it). If the installed `gh-stack` predates v0.1.0, `st merge --stack` falls back to the forge-API flow above and prints a `note:` recommending an upgrade.
+
 ## `st merge --remote` (GitHub only)
 
 Merges the entire stack via the GitHub API — no local git operations. You can keep working on other branches while it runs. Dependent PR head branches are updated on GitHub using the same mechanism as the **Update branch** button (REST `PUT .../pulls/{pull}/update-branch`).

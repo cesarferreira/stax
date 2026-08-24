@@ -172,13 +172,14 @@ pub fn run(fix: bool) -> Result<()> {
                         "{} {}",
                         "⚠".yellow(),
                         format!(
-                            "gh-stack v{installed} is out of date — v0.0.8+ uses the public \
-                             Stacks API and normal GitHub CLI authentication \
-                             (run `gh extension upgrade stack`)"
+                            "gh-stack v{installed} is out of date — v0.1.0+ adds `gh stack \
+                             merge` for atomic native stack merges (run `gh extension upgrade \
+                             stack`)"
                         )
                         .yellow()
                     );
-                    if gh_stack::auth_override_env_present()
+                    if gh_stack::is_legacy_auth_version(&installed)
+                        && gh_stack::auth_override_env_present()
                         && gh_stack::oauth_login_status() == OAuthLoginStatus::MissingOrInvalid
                     {
                         println!(

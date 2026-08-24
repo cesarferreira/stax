@@ -261,8 +261,9 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
 # stax strips those overrides before `gh stack` and falls back to a keyring OAuth
 # account. `stax doctor` always shows the installed version, marks anything below
-# v0.0.8 as out of date, can upgrade it with `stax doctor --fix`, and probes
-# legacy OAuth only when token overrides exist.
+# v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `merge --stack`),
+# can upgrade it with `stax doctor --fix`, and probes legacy OAuth (versions
+# below v0.0.8 only) only when token overrides exist.
 # Native GitHub Stack updates are append-only. If relinking would remove or insert
 # a PR, run `stax stack unlink <stack-number>` and then `stax stack link` again.
 # stax prints the repository-scoped Stack number when gh-stack returns it.
@@ -295,6 +296,8 @@ stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
 stax merge --stack                 # GitHub/GitLab only: target selected items to trunk, merge the tip, preserve merged state
+                                    # (GitHub: delegates to atomic `gh stack merge` when the repo has a confirmed native
+                                    # Stack and gh-stack v0.1.0+; falls back to the flow above otherwise, with a note)
 stax merge --stack --method rebase # Single-PR GitHub only; multi-PR GitHub and all GitLab ranges reject rewriting methods
 stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
 stax merge --stack --full          # Stack-merge full stack even from the middle

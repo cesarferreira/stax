@@ -5,9 +5,20 @@ use std::process::{Command, Output};
 const FEATURE_ENABLED_KEY: &str = "stax.nativeStack.enabled";
 
 /// v0.0.8 moved gh-stack to the public Stacks REST API, which supports the
-/// normal GitHub CLI authentication sources. Older link-capable versions still
-/// work, but need stax's legacy OAuth fallback when PAT overrides are present.
-const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 8);
+/// normal GitHub CLI authentication sources. v0.1.0 adds `gh stack merge`,
+/// which lands an entire native GitHub Stack atomically in one call — `st
+/// merge --stack` delegates to it when the installed extension supports it.
+/// Older link-capable versions still work, but need stax's legacy OAuth
+/// fallback when PAT overrides are present.
+const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 1, 0);
+
+/// Version at which gh-stack moved to the public Stacks REST API and normal
+/// GitHub CLI authentication. Token stripping in `gh_stack_command` stays
+/// pinned to this boundary regardless of `RECOMMENDED_GH_STACK_VERSION`, so
+/// recommending a newer version (e.g. for `gh stack merge`) never regresses
+/// legacy-auth handling for versions between this boundary and the new
+/// recommendation.
+const PUBLIC_STACKS_API_VERSION: (u32, u32, u32) = (0, 0, 8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionStatus {
@@ -78,6 +89,32 @@ pub enum LinkOutcome {
     },
 }
 
+/// Outcome of `gh stack merge`, gh-stack v0.1.0's atomic native-stack merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StackMergeOutcome {
+    Merged {
+        message: String,
+    },
+    /// The base branch uses a merge queue; gh-stack enqueued the stack
+    /// instead of merging it immediately.
+    Queued {
+        message: String,
+    },
+    /// The tip PR isn't registered as part of a native GitHub Stack.
+    NotStacked {
+        message: String,
+    },
+    FeatureDisabled {
+        message: String,
+    },
+    AuthTokenUnsupported {
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 pub fn extension_status() -> ExtensionStatus {
     extension_status_with_env(&[])
 }
@@ -113,9 +150,15 @@ fn extension_status_with_env(env: &[(&str, &str)]) -> ExtensionStatus {
 }
 
 /// Probe whether the installed `gh-stack` exposes the `link` subcommand that
-/// stax relies on. Parses `gh stack --help` output rather than exit codes so it
-/// stays robust across the extension's cobra help behavior.
+/// stax relies on.
 fn link_command_supported(env: &[(&str, &str)]) -> bool {
+    stack_subcommand_supported(env, "link")
+}
+
+/// Probe whether the installed `gh-stack` exposes `subcommand` (e.g. `link`
+/// or `merge`). Parses `gh stack --help` output rather than exit codes so it
+/// stays robust across the extension's cobra help behavior.
+fn stack_subcommand_supported(env: &[(&str, &str)], subcommand: &str) -> bool {
     match gh_command(env).args(["stack", "--help"]).output() {
         Ok(output) => {
             let text = format!(
@@ -124,10 +167,25 @@ fn link_command_supported(env: &[(&str, &str)]) -> bool {
                 String::from_utf8_lossy(&output.stderr)
             );
             text.lines()
-                .any(|line| line.trim_start().starts_with("link"))
+                .any(|line| line.trim_start().starts_with(subcommand))
         }
         Err(_) => false,
     }
+}
+
+/// Probe whether the installed `gh-stack` exposes the `merge` subcommand
+/// (gh-stack v0.1.0+) that `st merge --stack` delegates to for native
+/// GitHub Stacks.
+pub fn merge_command_supported() -> bool {
+    merge_command_supported_with_env(&[])
+}
+
+pub fn merge_command_supported_with_path(path: &str) -> bool {
+    merge_command_supported_with_env(&[("PATH", path)])
+}
+
+pub fn merge_command_supported_with_env(env: &[(&str, &str)]) -> bool {
+    stack_subcommand_supported(env, "merge")
 }
 
 pub fn auth_override_env_present() -> bool {
@@ -199,6 +257,12 @@ fn installed_gh_stack_version(env: &[(&str, &str)]) -> Option<String> {
                 })
                 .map(str::to_string)
         })
+}
+
+/// True when `installed` predates the public Stacks REST API (v0.0.8), and
+/// therefore needs stax's legacy OAuth fallback rather than PAT overrides.
+pub fn is_legacy_auth_version(installed: &str) -> bool {
+    parse_semver(installed).is_some_and(|v| v < PUBLIC_STACKS_API_VERSION)
 }
 
 fn parse_semver(version: &str) -> Option<(u32, u32, u32)> {
@@ -342,6 +406,64 @@ pub fn unlink_stack_with_env(stack_number: Option<u64>, env: &[(&str, &str)]) ->
     }
 }
 
+/// Merge a native GitHub Stack atomically through its tip PR via
+/// `gh stack merge` (gh-stack v0.1.0+). GitHub either merges every PR up to
+/// and including the tip, or none of them.
+pub fn merge_stack(tip_pr_number: u64, method: &str) -> StackMergeOutcome {
+    merge_stack_with_env(tip_pr_number, method, &[])
+}
+
+pub fn merge_stack_with_path(tip_pr_number: u64, method: &str, path: &str) -> StackMergeOutcome {
+    merge_stack_with_env(tip_pr_number, method, &[("PATH", path)])
+}
+
+pub fn merge_stack_with_env(
+    tip_pr_number: u64,
+    method: &str,
+    env: &[(&str, &str)],
+) -> StackMergeOutcome {
+    let mut command = gh_stack_command(env);
+    command.args([
+        "stack",
+        "merge",
+        &tip_pr_number.to_string(),
+        "--merge-method",
+        method,
+        "--yes",
+    ]);
+
+    match command.output() {
+        Ok(output) if output.status.success() && merge_queue_output(&output) => {
+            StackMergeOutcome::Queued {
+                message: command_message(&output),
+            }
+        }
+        Ok(output) if output.status.success() => StackMergeOutcome::Merged {
+            message: command_message(&output),
+        },
+        Ok(output) if auth_token_unsupported_output(&output) => {
+            StackMergeOutcome::AuthTokenUnsupported {
+                message: command_message(&output),
+            }
+        }
+        Ok(output) if feature_disabled_output(&output) => StackMergeOutcome::FeatureDisabled {
+            message: command_message(&output),
+        },
+        Ok(output) if not_stacked_output(&output) => StackMergeOutcome::NotStacked {
+            message: command_message(&output),
+        },
+        Ok(output) => StackMergeOutcome::Failed {
+            message: command_message(&output),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => StackMergeOutcome::Failed {
+            message: "`gh` executable not found".to_string(),
+        },
+        Err(err) => StackMergeOutcome::Failed {
+            message: err.to_string(),
+        },
+    }
+}
+
 pub fn install_extension_with_env(env: &[(&str, &str)]) -> Result<()> {
     let output = gh_command(env)
         .args(["extension", "install", "github/gh-stack"])
@@ -390,12 +512,16 @@ fn gh_command(env: &[(&str, &str)]) -> Command {
 
 /// gh-stack versions before v0.0.8 use private-preview endpoints that reject
 /// PAT overrides. Current and unknown versions keep the normal gh environment;
-/// known legacy versions fall back to a keyring-stored OAuth account.
+/// known legacy versions fall back to a keyring-stored OAuth account. This
+/// boundary is intentionally pinned to `PUBLIC_STACKS_API_VERSION` rather
+/// than `RECOMMENDED_GH_STACK_VERSION`, so raising the recommended version
+/// (e.g. for `gh stack merge`) never reintroduces token stripping for
+/// versions that already support normal authentication.
 fn gh_stack_command(env: &[(&str, &str)]) -> Command {
     let mut command = gh_command(env);
     let is_known_legacy = installed_gh_stack_version(env)
         .and_then(|version| parse_semver(&version))
-        .is_some_and(|version| version < RECOMMENDED_GH_STACK_VERSION);
+        .is_some_and(|version| version < PUBLIC_STACKS_API_VERSION);
     if is_known_legacy {
         for var in AUTH_OVERRIDE_ENV_VARS {
             command.env_remove(var);
@@ -437,6 +563,24 @@ fn non_append_update_output(output: &Output) -> bool {
     let lower = command_message(output).to_lowercase();
     (lower.contains("would remove") && lower.contains("from the stack"))
         || lower.contains("must be added to the top")
+}
+
+/// True when `gh stack merge` reports it routed the stack onto the base
+/// branch's merge queue instead of merging it immediately.
+fn merge_queue_output(output: &Output) -> bool {
+    let details = output_details(output).to_lowercase();
+    details.contains("merge queue")
+        || details.contains("added to the queue")
+        || details.contains("enqueued")
+}
+
+/// True when `gh stack merge` rejected the tip PR because it isn't
+/// registered as part of a native GitHub Stack.
+fn not_stacked_output(output: &Output) -> bool {
+    let message = command_message(output).to_lowercase();
+    message.contains("not part of a stack")
+        || message.contains("no stack found")
+        || message.contains("is not stacked")
 }
 
 fn stack_number_from_message(message: &str) -> Option<u64> {
