@@ -1,5 +1,7 @@
 # st web — Localhost Web Workspace
 
+![stax web workspace showing stacked branches, changes, and a branch inspector](../assets/web.png)
+
 `st web` starts a fast, secure, browser-based workspace for stax on `127.0.0.1`. The layout uses a three-column reference design: a connected stack rail on the left, a review workspace in the centre, and a branch inspector on the right — all powered by [HTMX](https://htmx.org/) for partial-page updates without a JavaScript framework.
 
 ## Quick start

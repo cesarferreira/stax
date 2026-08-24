@@ -1664,7 +1664,7 @@ pub fn help_fragment() -> Markup {
                 p style="font-size:11px;color:var(--text-muted);margin-top:12px" {
                     "Mutations (checkout, create, rename, delete, move, reorder, restack, submit, undo/redo) use the same "
                     code { "stax::application" }
-                    " operations as Stax.app. Rebase conflicts must be resolved in the CLI with "
+                    " operations as the CLI. Rebase conflicts must be resolved in the CLI with "
                     code { "st continue" }
                     " / "
                     code { "st abort" }

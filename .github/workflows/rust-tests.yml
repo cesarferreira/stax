@@ -17,27 +17,6 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  changes:
-    name: Detect GUI changes
-    runs-on: ubuntu-latest
-    outputs:
-      gui: ${{ steps.filter.outputs.gui }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Detect GUI-related changes
-        uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            gui:
-              - 'src/**'
-              - 'crates/stax-gui/**'
-              - 'scripts/build-gui**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '.github/workflows/rust-tests.yml'
-
   quality:
     name: Formatting and Clippy
     runs-on: ubuntu-latest
@@ -57,60 +36,6 @@ jobs:
           key: ubuntu-latest-quality
       - name: Run quality gates
         run: make lint
-
-  gui-quality:
-    name: GPUI Compile and Clippy
-    needs: changes
-    if: needs.changes.outputs.gui == 'true'
-    runs-on: macos-latest
-    env:
-      RUSTFLAGS: ""
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.98.0
-          components: clippy
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: nextest@0.9.114
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: macos-latest-gui
-      - name: Check GPUI package
-        run: cargo check -p stax-gui --locked
-      - name: Test GPUI package
-        run: cargo nextest run -p stax-gui --locked
-      - name: Lint GPUI package
-        # Clippy also lints the local stax path dependency. Mirror the reviewed
-        # legacy allowances from scripts/clippy-lint.sh while keeping other warnings fatal.
-        run: |
-          cargo clippy -p stax-gui --all-targets --locked --no-deps -- \
-            -D warnings \
-            -A clippy::assertions_on_constants \
-            -A clippy::bool_assert_comparison \
-            -A clippy::clone_on_copy \
-            -A clippy::collapsible_if \
-            -A clippy::collapsible_match \
-            -A clippy::double_comparisons \
-            -A clippy::if_same_then_else \
-            -A clippy::items_after_test_module \
-            -A clippy::len_zero \
-            -A clippy::let_and_return \
-            -A clippy::manual_checked_ops \
-            -A clippy::needless_borrow \
-            -A clippy::needless_lifetimes \
-            -A clippy::too_many_arguments \
-            -A clippy::to_string_in_format_args \
-            -A clippy::type_complexity \
-            -A clippy::unnecessary_map_or \
-            -A clippy::unnecessary_sort_by \
-            -A clippy::useless_format \
-            -A clippy::useless_vec
 
   unit-tests:
     name: Unit Tests

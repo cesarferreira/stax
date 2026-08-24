@@ -111,7 +111,6 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | Command | Description |
 |---|---|
 | `st` | Launch the TUI |
-| `st gui [path]` | Launch the installed native macOS GUI for a repository |
 | `st web [path] [--port <n>] [--no-open]` | Start the localhost HTMX workspace; a busy requested port falls back to a free OS-selected port |
 | `st split` | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | Split a single commit by selecting individual diff hunks |
@@ -417,19 +416,6 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 ### `st checkout`
 
 - `--trunk` / `--parent` / `--child 1`
-
-### `st gui`
-
-- `st gui` launches the native macOS GUI for the current directory.
-- `st gui <path>` launches it for an explicit repository path.
-- The launcher canonicalizes the selected path before forwarding it to the app.
-- macOS support is required; other platforms return an actionable unsupported-platform error.
-- The bundle id is `com.cesarferreira.stax`. Public releases install at `/Applications/Stax.app`; `make install-gui-app` installs a contributor build at `$HOME/Applications/Stax.app`. On macOS, `curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh` downloads the matching release zip and installs `Stax.app`.
-- Production launch uses the exact LaunchServices contract `open -n -b com.cesarferreira.stax --args <canonical-path>`.
-- `-n` is intentional: every invocation starts a fresh app process/window for one repository instead of reusing an existing instance.
-- If the bundle is missing or LaunchServices fails, install the architecture-specific `Stax-aarch64-apple-darwin.zip` or `Stax-x86_64-apple-darwin.zip` release, run the install script above, or run `make install-gui-app` for a contributor build.
-
-The GUI can search branches; check out, create, rename, delete, move, and reorder eligible local branches; restack selected branches or all tracked branches; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. A pathless app launch restores the most recent project; the toolbar project dropdown switches among up to ten recent repositories and offers **Add Project…**. Rename remains local-only. Delete shows affected descendants. Move and reorder preview their exact plans and require a second explicit auto-stash confirmation after a dirty-worktree rejection. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and native menus dispatch the same guarded actions as buttons and shortcuts. All enabled visible actions are keyboard-operable with visible focus and textual labels. Remote-effect receipts keep CLI recovery guidance.
 
 ### `st web`
 

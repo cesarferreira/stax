@@ -109,36 +109,6 @@ Verify the install:
 st --version
 ```
 
-### Native macOS GUI
-
-One-liner:
-
-```bash
-curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh
-```
-
-Manual install: download the architecture-specific app from the same [GitHub Release](https://github.com/cesarferreira/stax/releases/latest) as the CLI. For Apple Silicon:
-
-```bash
-curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip
-ditto -x -k Stax-aarch64-apple-darwin.zip .
-mv Stax.app /Applications/
-```
-
-On an Intel Mac, use `Stax-x86_64-apple-darwin.zip` instead. The app is a separate release artifact, not a new crates.io package, and installing it does not enlarge the `stax` or `st` CLI binaries.
-
-Ad-hoc-signed releases are supported. Download only from the project Releases page, move the app to `/Applications`, and try to open it once. Then use **System Settings → Privacy & Security → Open Anyway** for Stax, authenticate, and confirm **Open**. The override is available for about an hour after the blocked launch. Do not disable Gatekeeper globally. Releases open normally when the optional signing and notarization credentials are configured.
-
-Contributors can also build or install the app locally:
-
-```bash
-make gui-app           # Build target/gui-app/Stax.app
-make install-gui-app   # Build and install $HOME/Applications/Stax.app
-st gui [path]          # Launch a fresh Stax.app instance for one repository
-```
-
-The bundle id is `com.cesarferreira.stax`. `st gui [path]` is macOS-only; it canonicalizes the supplied path, defaults to the current directory when omitted, and launches LaunchServices as `open -n -b com.cesarferreira.stax --args <canonical-path>`. The `-n` flag is intentional: every invocation starts a fresh app process/window for exactly one repository.
-
 <a id="quickstart"></a>
 ## Quickstart
 
@@ -300,23 +270,13 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 → [TUI guide](docs/interface/tui.md)
 
-### Native macOS GUI
-
-<p align="center">
-  <img alt="Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector" src="assets/gui.png" width="960">
-</p>
-
-The native GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
-
-When the app starts without an explicit path, it reopens the most recently used project. Use the project dropdown in the toolbar to switch between recent projects or choose **Add Project…** to open another repository. An explicit `st gui <path>` launch still opens that repository.
-
-Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. The app also restores its last window size and reduces it to fit the current display after a monitor change. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
-
-→ [GUI guide](docs/interface/gui.md)
-
 ### Localhost web workspace
 
-`st web` starts a secure, browser-based workspace on `127.0.0.1` — the same three-pane layout as Stax.app, available everywhere (Linux, macOS, SSH sessions):
+<p align="center">
+  <img alt="stax web workspace showing a stacked branch graph, changes, and branch inspector" src="assets/web.png" width="960">
+</p>
+
+`st web` starts a secure, browser-based workspace on `127.0.0.1` — the same three-pane layout as the TUI, available everywhere (Linux, macOS, SSH sessions):
 
 ```bash
 st web            # opens port 8787, or warns and uses a free port if busy
@@ -355,7 +315,7 @@ st config --set-ai
 | Command | What it does |
 |---|---|
 | `st` | Launch interactive TUI |
-| `st gui [path]` | Launch the installed native macOS GUI for a repository |
+| `st web [path]` | Start a localhost web workspace in the browser |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |

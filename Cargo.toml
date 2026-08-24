@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/stax-gui"]
+members = ["."]
 default-members = ["."]
 resolver = "2"
 
