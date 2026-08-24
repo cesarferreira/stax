@@ -10,6 +10,8 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
 
+ <img src="assets/screenshot.png" width="100%" alt="stax in action">
+
   <p>
     <a href="#install">Install</a>
     &nbsp;·&nbsp;
@@ -20,9 +22,9 @@
     <a href="https://cesarferreira.github.io/stax/">Docs</a>
   </p>
 
-  <br>
 
-  <img src="assets/screenshot.png" width="880" alt="stax in action">
+
+ 
 </div>
 
 ---
