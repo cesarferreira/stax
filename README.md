@@ -314,6 +314,20 @@ Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them
 
 → [GUI guide](docs/interface/gui.md)
 
+### Localhost web workspace
+
+`st web` starts a secure, browser-based workspace on `127.0.0.1` — the same three-pane layout as Stax.app, available everywhere (Linux, macOS, SSH sessions):
+
+```bash
+st web            # opens port 8787, or warns and uses a free port if busy
+st web --port 0   # ephemeral port
+st web --no-open  # start without opening browser; prints URL
+```
+
+Binds 127.0.0.1 only with an unguessable session token in the URL, CSRF protection on every mutating POST, and one-mutation-at-a-time enforcement. No `--host` flag — it cannot be exposed to the network.
+
+→ [Web workspace guide](docs/interface/web.md)
+
 ### AI branch names, PR details, and standups
 
 ```bash

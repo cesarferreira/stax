@@ -1,7 +1,9 @@
+pub use stax::application::{ActionAvailability, InteractionState};
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, OperationError,
     OperationEvent, OperationOutcome, OperationProgress, OperationReceipt, OperationRequest,
-    OperationResult, RepositorySnapshot,
+    OperationResult, RepositorySnapshot, descendants_of,
+    interaction_state as shared_interaction_state, linear_stack_order, move_parent_candidates,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -121,47 +123,6 @@ pub struct CompletionEffect {
     pub refresh_snapshot: bool,
     pub preferred_selection: Option<String>,
     pub open_url: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionAvailability {
-    pub enabled: bool,
-    pub reason: Option<String>,
-}
-
-impl ActionAvailability {
-    fn enabled() -> Self {
-        Self {
-            enabled: true,
-            reason: None,
-        }
-    }
-
-    fn disabled(reason: impl Into<String>) -> Self {
-        Self {
-            enabled: false,
-            reason: Some(reason.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InteractionState {
-    pub checkout: ActionAvailability,
-    pub create: ActionAvailability,
-    pub rename: ActionAvailability,
-    pub delete: ActionAvailability,
-    pub move_subtree: ActionAvailability,
-    pub reorder: ActionAvailability,
-    pub undo: ActionAvailability,
-    pub redo: ActionAvailability,
-    pub restack: ActionAvailability,
-    pub restack_all: ActionAvailability,
-    pub submit: ActionAvailability,
-    pub open_pr: ActionAvailability,
-    pub open_repository: ActionAvailability,
-    pub refresh: ActionAvailability,
-    pub navigation: ActionAvailability,
 }
 
 impl WorkspaceState {
@@ -324,118 +285,12 @@ impl WorkspaceState {
             };
         }
 
-        let selected = self.selected_branch_summary();
-        let selected_name = selected
-            .map(|branch| branch.name.as_str())
-            .unwrap_or("the selected branch");
-        let has_non_trunk = self.snapshot.branches.iter().any(|branch| !branch.is_trunk);
-        let local_transaction = self
-            .last_receipt
-            .as_ref()
-            .and_then(|receipt| receipt.transaction.as_ref())
-            .filter(|transaction| !transaction.changed_remote_refs);
-        let reorder_order = selected.and_then(|branch| self.linear_stack_order(&branch.name));
-
-        InteractionState {
-            checkout: match selected {
-                Some(branch) if !branch.is_current && !branch.is_trunk => {
-                    ActionAvailability::enabled()
-                }
-                Some(branch) if branch.is_trunk => {
-                    ActionAvailability::disabled("Select a tracked branch to check out.")
-                }
-                Some(_) => {
-                    ActionAvailability::disabled(format!("{selected_name} is already current."))
-                }
-                None => ActionAvailability::disabled("Select a branch to check out."),
-            },
-            create: if selected.is_some() {
-                ActionAvailability::enabled()
-            } else {
-                ActionAvailability::disabled("Open a repository before creating a branch.")
-            },
-            rename: match selected {
-                Some(branch) if branch.is_current && !branch.is_trunk => {
-                    ActionAvailability::enabled()
-                }
-                Some(branch) if branch.is_trunk => {
-                    ActionAvailability::disabled("The trunk branch cannot be renamed here.")
-                }
-                Some(_) => ActionAvailability::disabled("Check out the branch before renaming it."),
-                None => ActionAvailability::disabled("Select a branch to rename."),
-            },
-            delete: match selected {
-                Some(branch) if !branch.is_current && !branch.is_trunk => {
-                    ActionAvailability::enabled()
-                }
-                Some(branch) if branch.is_trunk => {
-                    ActionAvailability::disabled("The trunk branch cannot be deleted.")
-                }
-                Some(_) => ActionAvailability::disabled(
-                    "Check out another branch before deleting this one.",
-                ),
-                None => ActionAvailability::disabled("Select a branch to delete."),
-            },
-            move_subtree: match selected {
-                Some(branch)
-                    if !branch.is_trunk
-                        && !self.move_parent_candidates(&branch.name).is_empty() =>
-                {
-                    ActionAvailability::enabled()
-                }
-                Some(branch) if branch.is_trunk => {
-                    ActionAvailability::disabled("The trunk branch cannot be moved.")
-                }
-                Some(_) => ActionAvailability::disabled("No eligible parent branch is available."),
-                None => ActionAvailability::disabled("Select a branch to move."),
-            },
-            reorder: if reorder_order.is_some_and(|order| order.len() >= 2) {
-                ActionAvailability::enabled()
-            } else {
-                ActionAvailability::disabled("Select a linear stack with at least two branches.")
-            },
-            undo: match local_transaction {
-                Some(transaction) if transaction.can_undo => ActionAvailability::enabled(),
-                Some(_) => {
-                    ActionAvailability::disabled("The latest local operation cannot be undone.")
-                }
-                None => {
-                    ActionAvailability::disabled("No safe local operation is available to undo.")
-                }
-            },
-            redo: match local_transaction {
-                Some(transaction) if transaction.can_redo => ActionAvailability::enabled(),
-                Some(_) => {
-                    ActionAvailability::disabled("The latest local operation cannot be redone.")
-                }
-                None => {
-                    ActionAvailability::disabled("No safe local operation is available to redo.")
-                }
-            },
-            restack: match selected {
-                Some(branch) if !branch.is_trunk => ActionAvailability::enabled(),
-                Some(_) => ActionAvailability::disabled("Select a tracked branch to restack."),
-                None => ActionAvailability::disabled("Select a branch to restack."),
-            },
-            restack_all: if has_non_trunk {
-                ActionAvailability::enabled()
-            } else {
-                ActionAvailability::disabled("No tracked branches are available to restack.")
-            },
-            submit: if has_non_trunk {
-                ActionAvailability::enabled()
-            } else {
-                ActionAvailability::disabled("No stack branches are available to submit.")
-            },
-            open_pr: match selected {
-                Some(branch) if !branch.is_trunk => ActionAvailability::enabled(),
-                Some(_) => ActionAvailability::disabled("Select a branch with a pull request."),
-                None => ActionAvailability::disabled("Select a branch to open its pull request."),
-            },
-            open_repository: ActionAvailability::enabled(),
-            refresh: ActionAvailability::enabled(),
-            navigation: self.navigation_availability(),
-        }
+        shared_interaction_state(
+            &self.snapshot,
+            self.selected_branch.as_deref(),
+            false,
+            self.last_receipt.as_ref(),
+        )
     }
 
     pub fn dismiss_operation_presentation(&mut self) {
@@ -444,88 +299,15 @@ impl WorkspaceState {
     }
 
     pub fn descendants_of(&self, source: &str) -> Vec<String> {
-        let mut descendants = Vec::new();
-        loop {
-            let mut changed = false;
-            for branch in &self.snapshot.branches {
-                let is_descendant = branch.parent.as_deref().is_some_and(|parent| {
-                    parent == source || descendants.iter().any(|name| name == parent)
-                });
-                if branch.name != source && is_descendant && !descendants.contains(&branch.name) {
-                    descendants.push(branch.name.clone());
-                    changed = true;
-                }
-            }
-            if !changed {
-                return descendants;
-            }
-        }
+        descendants_of(&self.snapshot, source)
     }
 
     pub fn move_parent_candidates(&self, source: &str) -> Vec<String> {
-        let Some(source_branch) = self
-            .snapshot
-            .branches
-            .iter()
-            .find(|branch| branch.name == source && !branch.is_trunk)
-        else {
-            return Vec::new();
-        };
-        let descendants = self.descendants_of(source);
-        self.snapshot
-            .branches
-            .iter()
-            .filter(|branch| {
-                branch.name != source
-                    && source_branch.parent.as_deref() != Some(branch.name.as_str())
-                    && !descendants.contains(&branch.name)
-            })
-            .map(|branch| branch.name.clone())
-            .collect()
+        move_parent_candidates(&self.snapshot, source)
     }
 
     pub fn linear_stack_order(&self, branch: &str) -> Option<Vec<String>> {
-        let selected = self
-            .snapshot
-            .branches
-            .iter()
-            .find(|candidate| candidate.name == branch && !candidate.is_trunk)?;
-        let mut root = selected;
-        let mut seen = vec![root.name.clone()];
-        loop {
-            let parent = root.parent.as_deref()?;
-            if parent == self.snapshot.trunk {
-                break;
-            }
-            root = self
-                .snapshot
-                .branches
-                .iter()
-                .find(|candidate| candidate.name == parent && !candidate.is_trunk)?;
-            if seen.contains(&root.name) {
-                return None;
-            }
-            seen.push(root.name.clone());
-        }
-
-        let mut order = vec![root.name.clone()];
-        let mut current = root.name.as_str();
-        loop {
-            let children = self
-                .snapshot
-                .branches
-                .iter()
-                .filter(|candidate| candidate.parent.as_deref() == Some(current))
-                .collect::<Vec<_>>();
-            match children.as_slice() {
-                [] => return order.contains(&branch.to_string()).then_some(order),
-                [child] if !order.contains(&child.name) => {
-                    order.push(child.name.clone());
-                    current = order.last().expect("order has a child");
-                }
-                [_] | [_, ..] => return None,
-            }
-        }
+        linear_stack_order(&self.snapshot, branch)
     }
 
     pub fn present_operation_error(&mut self, error: OperationError) {
@@ -883,6 +665,7 @@ impl WorkspaceState {
             .map(|summary| (summary.name.clone(), summary.parent.clone()))
     }
 
+    #[allow(dead_code)]
     fn selected_branch_summary(&self) -> Option<&BranchSummary> {
         self.selected_branch.as_deref().and_then(|selected| {
             self.snapshot

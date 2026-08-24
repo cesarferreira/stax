@@ -198,3 +198,30 @@ impl LiveTimer {
         }
     }
 }
+
+impl Drop for LiveTimer {
+    fn drop(&mut self) {
+        self.stop_thread();
+        self.bar.finish_and_clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LiveTimer;
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn dropping_timer_stops_its_worker_thread() {
+        let timer = LiveTimer::new("Testing cancellation...");
+        let stop_flag = Arc::clone(&timer.stop_flag);
+
+        drop(timer);
+
+        assert!(
+            stop_flag.load(Ordering::Relaxed),
+            "dropping a live timer must signal its worker thread to stop"
+        );
+    }
+}

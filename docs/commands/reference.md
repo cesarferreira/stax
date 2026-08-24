@@ -112,6 +112,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st` | Launch the TUI |
 | `st gui [path]` | Launch the installed native macOS GUI for a repository |
+| `st web [path] [--port <n>] [--no-open]` | Start the localhost HTMX workspace; a busy requested port falls back to a free OS-selected port |
 | `st split` | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | Split a single commit by selecting individual diff hunks |
 | `st split --file <pathspec>` | Split by extracting matching files into a new parent branch |
@@ -430,7 +431,22 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 
 The GUI can search branches; check out, create, rename, delete, move, and reorder eligible local branches; restack selected branches or all tracked branches; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. A pathless app launch restores the most recent project; the toolbar project dropdown switches among up to ten recent repositories and offers **Add Project…**. Rename remains local-only. Delete shows affected descendants. Move and reorder preview their exact plans and require a second explicit auto-stash confirmation after a dirty-worktree rejection. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and native menus dispatch the same guarded actions as buttons and shortcuts. All enabled visible actions are keyboard-operable with visible focus and textual labels. Remote-effect receipts keep CLI recovery guidance.
 
-### `st get`
+### `st web`
+
+- `st web` starts the localhost HTMX workspace for the current directory and opens it in the browser.
+- `st web <path>` opens an explicit repository path.
+- `st web --port <n>` binds on a specific port (default 8787). `--port 0` picks an ephemeral port. If the requested port is busy, stax warns and uses a free OS-selected port.
+- `st web --no-open` starts the server and prints the URL without opening the browser.
+- Binds **127.0.0.1 only**; no `--host` flag is available.
+- Each session URL embeds an unguessable 48-hex session token: `/s/<token>/`. Requests with a wrong or missing token return 404.
+- Every mutating POST requires a matching CSRF token field; mismatches return 403.
+- Non-local `Host` / `Origin` headers are rejected with 403.
+- Only one mutation runs at a time; mutating controls are disabled while an operation is in flight.
+- All git operations run in `spawn_blocking` to avoid blocking the async Tokio runtime.
+- Session state is in-memory; restarting the server generates a new token and URL.
+- See [Web workspace guide](../interface/web.md) for the full routes reference, keyboard shortcuts, and layout details.
+
+
 
 - With no argument, `st get` syncs and restacks the current stack, equivalent to the Graphite `gt get` current-stack flow.
 - The argument may be a remote branch name, `origin/<branch>`, or a PR number when forge auth is configured.
