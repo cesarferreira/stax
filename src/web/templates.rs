@@ -1,8 +1,8 @@
 //! Maud HTML templates for the `st web` workspace.
 
 use crate::application::{
-    BranchDetails, BranchDiff, BranchSummary, DiffLineKind, InteractionState, RepositorySnapshot,
-    TopologyCell, TopologyNode, topology_layout,
+    BranchDetails, BranchDiff, BranchSummary, DiffLine, DiffLineKind, InteractionState,
+    RepositorySnapshot, TopologyCell, TopologyNode, topology_layout,
 };
 use crate::web::session::{ThemePreference, WebSession};
 use maud::{DOCTYPE, Markup, html};
@@ -14,6 +14,126 @@ pub type StackRowMeta = HashMap<String, (usize, usize)>;
 fn csrf_input(csrf: &str) -> Markup {
     html! { input type="hidden" name="csrf" value=(csrf) {} }
 }
+
+// ── Diff gutter helpers ───────────────────────────────────────────────────────
+
+struct GutteredLine<'a> {
+    old_num: Option<usize>,
+    new_num: Option<usize>,
+    line: &'a DiffLine,
+    anchor_id: Option<String>,
+}
+
+/// Parse "@@ -old_start[,count] +new_start[,count] @@" and return (old, new).
+fn parse_hunk_header(s: &str) -> Option<(usize, usize)> {
+    // Trim leading '@' and whitespace
+    let s = s.trim_start_matches('@').trim();
+    let mut parts = s.splitn(4, ' ');
+    let old_part = parts.next()?.trim_start_matches('-');
+    let new_part = parts.next()?.trim_start_matches('+');
+    let old_start: usize = old_part.split(',').next()?.parse().ok()?;
+    let new_start: usize = new_part.split(',').next()?.parse().ok()?;
+    Some((old_start, new_start))
+}
+
+fn add_gutter_numbers(lines: &[DiffLine]) -> Vec<GutteredLine<'_>> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut old_line: usize = 0;
+    let mut new_line: usize = 0;
+
+    for line in lines {
+        let anchor_id = diff_git_file_id(&line.content);
+        let (old_num, new_num) = match line.kind {
+            DiffLineKind::Hunk => {
+                if let Some((old_start, new_start)) = parse_hunk_header(&line.content) {
+                    old_line = old_start.saturating_sub(1);
+                    new_line = new_start.saturating_sub(1);
+                }
+                (None, None)
+            }
+            DiffLineKind::Header => (None, None),
+            DiffLineKind::Addition => {
+                new_line += 1;
+                (None, Some(new_line))
+            }
+            DiffLineKind::Deletion => {
+                old_line += 1;
+                (Some(old_line), None)
+            }
+            DiffLineKind::Context => {
+                old_line += 1;
+                new_line += 1;
+                (Some(old_line), Some(new_line))
+            }
+        };
+        result.push(GutteredLine {
+            old_num,
+            new_num,
+            line,
+            anchor_id,
+        });
+    }
+    result
+}
+
+fn render_guttered_line(g: &GutteredLine<'_>) -> Markup {
+    let cls = match g.line.kind {
+        DiffLineKind::Addition => "diff-line diff-add",
+        DiffLineKind::Deletion => "diff-line diff-del",
+        DiffLineKind::Hunk => "diff-line diff-hunk",
+        DiffLineKind::Header => "diff-line diff-header",
+        DiffLineKind::Context => "diff-line",
+    };
+    let old_str = g.old_num.map(|n| n.to_string()).unwrap_or_default();
+    let new_str = g.new_num.map(|n| n.to_string()).unwrap_or_default();
+
+    if let Some(id) = &g.anchor_id {
+        html! {
+            div class=(cls) id=(format!("diff-file-{id}")) {
+                span .diff-gutter-old { (old_str) }
+                span .diff-gutter-new { (new_str) }
+                span .diff-text { (g.line.content) }
+            }
+        }
+    } else {
+        html! {
+            div class=(cls) {
+                span .diff-gutter-old { (old_str) }
+                span .diff-gutter-new { (new_str) }
+                span .diff-text { (g.line.content) }
+            }
+        }
+    }
+}
+
+// ── Topology strip renderer ───────────────────────────────────────────────────
+
+fn render_topo_cells(cells: &[TopologyCell], is_current_branch: bool) -> Markup {
+    html! {
+        @for cell in cells {
+            div .topo-cell {
+                // Vertical top rail segment
+                @if cell.top {
+                    div class=(format!("tc-rail tc-top lane-{}", cell.lane % 3)) {}
+                }
+                // Vertical bottom rail segment
+                @if cell.bottom {
+                    div class=(format!("tc-rail tc-bottom lane-{}", cell.lane % 3)) {}
+                }
+                // Horizontal connectors
+                @if cell.left  { div .tc-h.tc-left  {} }
+                @if cell.right { div .tc-h.tc-right {} }
+                // Branch node marker
+                @if let Some(node) = cell.node {
+                    @let is_current = matches!(node, TopologyNode::Current) || is_current_branch;
+                    div class=(if is_current { "tc-node current".to_string() } else { format!("tc-node lane-{}", cell.lane % 3) }) {}
+                }
+            }
+        }
+    }
+}
+
+// ── Page shell ────────────────────────────────────────────────────────────────
 
 pub fn workspace_page(
     session: &WebSession,
@@ -45,15 +165,15 @@ pub fn workspace_page(
             }
             body {
                 div .workspace {
-                    // Toolbar
-                    (toolbar(session, snapshot, interaction, &base))
-
-                    // Banner area (operation results)
+                    // Banner area (OOB landing zone for operation results)
                     div #banner {}
 
-                    // Three-pane workspace
-                    div .pane-area {
-                        // Stack pane
+                    // Top bar
+                    (topbar(session, snapshot, interaction, &base))
+
+                    // Three-column stage
+                    div .stage {
+                        // Stack pane (left)
                         div
                             class={
                                 "pane pane-stack"
@@ -61,13 +181,12 @@ pub fn workspace_page(
                             }
                             #pane-stack
                             {
-                            div .pane-header { "Graph" }
                             div .pane-body #stack-pane {
                                 (stack_pane_inner(session, snapshot, interaction, &base, row_meta))
                             }
                         }
 
-                        // Changes pane
+                        // Review workspace (centre)
                         div
                             class={
                                 "pane pane-changes"
@@ -75,7 +194,15 @@ pub fn workspace_page(
                             }
                             #pane-changes
                             {
-                            div .pane-header { "Changes" }
+                            // Review header — updated via OOB from diff responses
+                            div #review-header .review-header {
+                                @if let Some(branch) = selected {
+                                    span .review-branch-name title=(branch) { (branch) }
+                                } @else {
+                                    span .text-muted { "Select a branch to review" }
+                                }
+                            }
+                            // Changes body — HTMX target
                             div .pane-body #changes-pane
                                 style="display:flex;flex-direction:column;flex:1;min-height:0;padding:0;"
                                 hx-get=(format!("{base}/diff"))
@@ -85,7 +212,7 @@ pub fn workspace_page(
                             }
                         }
 
-                        // Inspector pane
+                        // Branch inspector (right)
                         div
                             class={
                                 "pane pane-inspector"
@@ -93,7 +220,6 @@ pub fn workspace_page(
                             }
                             #pane-inspector
                             {
-                            div .pane-header { "Details" }
                             div .pane-body #inspector-pane
                                 hx-get=(format!("{base}/details"))
                                 hx-trigger="load"
@@ -103,6 +229,7 @@ pub fn workspace_page(
                         }
                     }
 
+                    // Status line
                     (status_bar(session, snapshot, row_meta))
                 }
             }
@@ -110,7 +237,9 @@ pub fn workspace_page(
     }
 }
 
-fn toolbar(
+// ── Top bar ───────────────────────────────────────────────────────────────────
+
+fn topbar(
     session: &WebSession,
     _snapshot: &RepositorySnapshot,
     interaction: &InteractionState,
@@ -119,88 +248,67 @@ fn toolbar(
     let csrf = &session.csrf_token;
 
     html! {
-        div .toolbar {
-            div .toolbar-left {
-                // Project switcher
-                form .project-form
-                    hx-post=(format!("{base}/project"))
-                    hx-target="body"
-                    hx-swap="outerHTML"
+        header .topbar {
+            // Logo
+            div .topbar-logo {
+                span .logo-mark { "S" }
+                span .logo-name { "stax" }
+            }
+
+            div .topbar-sep {}
+
+            // Project switcher
+            form .topbar-project
+                hx-post=(format!("{base}/project"))
+                hx-target="body"
+                hx-swap="outerHTML"
+                {
+                (csrf_input(csrf))
+                select .project-select name="path"
+                    onchange="this.form.requestSubmit()"
+                    title="Switch repository"
                     {
-                    (csrf_input(csrf))
-                    select .project-select name="path"
-                        onchange="this.form.requestSubmit()"
-                        title="Switch repository"
-                        {
-                        @for project in &session.recent_projects {
-                            @let name = project.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                            @let path_str = project.display().to_string();
-                            @let is_current = *project == session.repository_root;
-                            option value=(path_str) selected[is_current] {
-                                (name)
-                                @if is_current { " (current)" }
-                            }
+                    @for project in &session.recent_projects {
+                        @let name = project.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                        @let path_str = project.display().to_string();
+                        @let is_current = *project == session.repository_root;
+                        option value=(path_str) selected[is_current] {
+                            (name)
+                            @if is_current { " (current)" }
                         }
                     }
-                    input .project-add type="text" name="add_path" placeholder="Add path…"
-                        title="Type an absolute path and press Enter to open another repository"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault();const v=this.value.trim();if(v){this.form.path.value=v;this.form.requestSubmit();}}"
-                        {}
                 }
-
-                input #search-input .search-input
-                    type="text"
-                    placeholder="/ to search branches"
-                    name="query"
-                    value=(session.search_query)
-                    autocomplete="off"
-                    hx-post=(format!("{base}/search"))
-                    hx-trigger="input changed delay:200ms"
-                    hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                input .project-add type="text" name="add_path" placeholder="Add path…"
+                    title="Type an absolute path and press Enter to open another repository"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();const v=this.value.trim();if(v){this.form.path.value=v;this.form.requestSubmit();}}"
                     {}
             }
 
-            div .toolbar-sep {}
+            div .topbar-sep {}
 
-            div .toolbar-group {
-                @if interaction.restack.enabled {
-                    button .btn.mutating-btn
-                        hx-post=(format!("{base}/op/restack"))
-                        hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
-                        title="Restack current branch"
-                        { "Restack" }
-                } @else {
-                    button .btn disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "Restack" }
-                }
+            // Branch search
+            input #search-input .topbar-search
+                type="text"
+                placeholder="/ Search branches, files, commits"
+                name="query"
+                value=(session.search_query)
+                autocomplete="off"
+                hx-post=(format!("{base}/search"))
+                hx-trigger="input changed delay:200ms"
+                hx-target="#stack-pane"
+                hx-include="[name='csrf']"
+                {}
 
-                @if interaction.submit.enabled {
-                    button .btn.btn-primary.mutating-btn
-                        hx-post=(format!("{base}/op/submit"))
-                        hx-target="#banner"
-                        hx-include="[name='csrf']"
-                        hx-confirm="Submit the current stack as Draft PRs?"
-                        title="Submit stack (draft PRs)"
-                        { "Submit" }
-                } @else {
-                    button .btn.btn-primary disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit" }
-                }
-            }
+            div .spacer {}
 
-            div .toolbar-sep {}
-
-            div .toolbar-group {
-                @if interaction.open_pr.enabled {
-                    a .btn
-                        href=(format!("{base}/op/open-pr"))
-                        target="_blank"
-                        rel="noopener"
-                        title="Open PR for selected branch"
-                        { "Open PR" }
-                } @else {
-                    button .btn disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR" }
-                }
+            // Utility buttons
+            div .topbar-group {
+                button .btn.btn-icon.mutating-btn
+                    hx-post=(format!("{base}/refresh"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    title="Refresh repository"
+                    { "↺" }
 
                 @if interaction.undo.enabled {
                     button .btn.btn-icon.mutating-btn
@@ -210,7 +318,7 @@ fn toolbar(
                         title="Undo last local operation"
                         { "↶" }
                 } @else {
-                    button .btn.btn-icon disabled title=(interaction.undo.reason.as_deref().unwrap_or("")) { "↶" }
+                    button .btn.btn-icon disabled title=(interaction.undo.reason.as_deref().unwrap_or("Nothing to undo")) { "↶" }
                 }
 
                 @if interaction.redo.enabled {
@@ -221,20 +329,9 @@ fn toolbar(
                         title="Redo last local operation"
                         { "↷" }
                 } @else {
-                    button .btn.btn-icon disabled title=(interaction.redo.reason.as_deref().unwrap_or("")) { "↷" }
+                    button .btn.btn-icon disabled title=(interaction.redo.reason.as_deref().unwrap_or("Nothing to redo")) { "↷" }
                 }
 
-                button .btn.btn-icon
-                    hx-post=(format!("{base}/refresh"))
-                    hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
-                    title="Refresh repository"
-                    { "↺" }
-            }
-
-            div .spacer {}
-
-            div .toolbar-group {
                 select #theme-select .theme-select
                     name="theme"
                     title="Appearance"
@@ -245,8 +342,8 @@ fn toolbar(
                     onchange="document.documentElement.setAttribute('data-theme', this.value)"
                     {
                     option value="system" selected[session.theme == ThemePreference::System] { "System" }
-                    option value="light" selected[session.theme == ThemePreference::Light] { "Light" }
-                    option value="dark" selected[session.theme == ThemePreference::Dark] { "Dark" }
+                    option value="light"  selected[session.theme == ThemePreference::Light]  { "Light" }
+                    option value="dark"   selected[session.theme == ThemePreference::Dark]   { "Dark" }
                 }
 
                 button .btn.btn-icon
@@ -255,6 +352,11 @@ fn toolbar(
                     { "?" }
             }
 
+            div .topbar-sep {}
+
+            // Primary actions (also updated via OOB after mutations)
+            (topbar_actions_inner(interaction, base))
+
             input type="hidden" name="csrf" value=(csrf) {}
             template #help-template {
                 (help_fragment())
@@ -262,6 +364,49 @@ fn toolbar(
         }
     }
 }
+
+/// Inner content for the topbar action group, extracted so it can be OOB-updated.
+fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
+    html! {
+        div #topbar-actions .topbar-actions {
+            @if interaction.restack.enabled {
+                button .btn.mutating-btn
+                    hx-post=(format!("{base}/op/restack"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    title="Restack current branch"
+                    { "⟳ Restack" }
+            } @else {
+                button .btn disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "⟳ Restack" }
+            }
+
+            @if interaction.open_pr.enabled {
+                a .btn
+                    href=(format!("{base}/op/open-pr"))
+                    target="_blank"
+                    rel="noopener"
+                    title="Open PR for selected branch"
+                    { "Open PR ↗" }
+            } @else {
+                button .btn disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR ↗" }
+            }
+
+            @if interaction.submit.enabled {
+                button .btn.btn-primary.mutating-btn
+                    hx-post=(format!("{base}/op/submit"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    hx-confirm="Submit the current stack as Draft PRs?"
+                    title="Submit stack (draft PRs)"
+                    { "Submit stack" }
+            } @else {
+                button .btn.btn-primary disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit stack" }
+            }
+        }
+    }
+}
+
+// ── Stack pane ────────────────────────────────────────────────────────────────
 
 pub fn stack_pane_fragment(
     session: &WebSession,
@@ -272,7 +417,48 @@ pub fn stack_pane_fragment(
 ) -> Markup {
     html! {
         (status_bar_oob(session, snapshot, row_meta))
+        (topbar_actions_oob(interaction, base))
         (stack_pane_inner(session, snapshot, interaction, base, row_meta))
+    }
+}
+
+fn topbar_actions_oob(interaction: &InteractionState, base: &str) -> Markup {
+    html! {
+        div #topbar-actions hx-swap-oob="true" class="topbar-actions" {
+            @if interaction.restack.enabled {
+                button .btn.mutating-btn
+                    hx-post=(format!("{base}/op/restack"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    title="Restack current branch"
+                    { "⟳ Restack" }
+            } @else {
+                button .btn disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "⟳ Restack" }
+            }
+
+            @if interaction.open_pr.enabled {
+                a .btn
+                    href=(format!("{base}/op/open-pr"))
+                    target="_blank"
+                    rel="noopener"
+                    title="Open PR for selected branch"
+                    { "Open PR ↗" }
+            } @else {
+                button .btn disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR ↗" }
+            }
+
+            @if interaction.submit.enabled {
+                button .btn.btn-primary.mutating-btn
+                    hx-post=(format!("{base}/op/submit"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    hx-confirm="Submit the current stack as Draft PRs?"
+                    title="Submit stack (draft PRs)"
+                    { "Submit stack" }
+            } @else {
+                button .btn.btn-primary disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit stack" }
+            }
+        }
     }
 }
 
@@ -283,7 +469,7 @@ pub fn status_bar(
 ) -> Markup {
     let selected_name = session.selected_branch.as_deref();
     let selected_branch =
-        selected_name.and_then(|name| snapshot.branches.iter().find(|branch| branch.name == name));
+        selected_name.and_then(|name| snapshot.branches.iter().find(|b| b.name == name));
 
     html! {
         footer #status-bar.status-bar {
@@ -327,7 +513,7 @@ fn status_bar_oob(
 ) -> Markup {
     let selected_name = session.selected_branch.as_deref();
     let selected_branch =
-        selected_name.and_then(|name| snapshot.branches.iter().find(|branch| branch.name == name));
+        selected_name.and_then(|name| snapshot.branches.iter().find(|b| b.name == name));
 
     html! {
         footer #status-bar hx-swap-oob="true" class="status-bar" {
@@ -387,16 +573,45 @@ pub fn stack_pane_inner(
         })
         .collect();
 
+    // Summary counts for the stack header
+    let branch_count = visible_rows.iter().filter(|(b, _)| !b.is_trunk).count();
+    let pr_count = visible_rows
+        .iter()
+        .filter(|(b, _)| b.pr_number.is_some())
+        .count();
+
+    let csrf = &session.csrf_token;
+    let create_parent = session
+        .selected_branch
+        .as_deref()
+        .unwrap_or(snapshot.trunk.as_str());
+
     html! {
-        div .stack-table {
-            div .stack-table-header {
-                span .col-graph { "" }
-                span .col-branch { "Branch" }
-                span .col-meta { "Status" }
+        div .stack-rail {
+            // Header
+            div .stack-header {
+                div .stack-header-labels {
+                    span .stack-header-label { "STACK" }
+                    span .stack-trunk-badge { (snapshot.trunk) }
+                }
+                div .stack-title-row {
+                    h2 .stack-title { "Current stack" }
+                    @if branch_count > 0 {
+                        span .stack-meta {
+                            (branch_count)
+                            @if branch_count == 1 { " branch" } @else { " branches" }
+                            @if pr_count > 0 {
+                                " · " (pr_count) " PR" @if pr_count != 1 { "s" }
+                            }
+                        }
+                    }
+                }
             }
-            div .stack-table-body {
+
+            // Branch cards
+            div .branch-cards {
                 @for (branch, cells) in &visible_rows {
-                    (branch_row(session, branch, cells, interaction, base, row_meta))
+                    (branch_card(session, branch, cells, interaction, base, row_meta))
                 }
                 @if visible_rows.is_empty() {
                     div .stack-empty {
@@ -410,11 +625,92 @@ pub fn stack_pane_inner(
                     }
                 }
             }
+
+            // Quick actions
+            div .quick-actions {
+                div .quick-actions-label { "QUICK ACTIONS" }
+
+                @if interaction.create.enabled {
+                    button .quick-action.qa-new-branch
+                        onclick=(format!(
+                            "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                            create_overlay_escaped(create_parent, base, csrf)
+                        ))
+                        title=(format!("New branch stacked on {create_parent}"))
+                        {
+                        span .qa-icon { "□" }
+                        span .qa-label { "New branch" }
+                        span .qa-key { "N" }
+                    }
+                } @else {
+                    button .quick-action disabled {
+                        span .qa-icon { "□" }
+                        span .qa-label { "New branch" }
+                        span .qa-key { "N" }
+                    }
+                }
+
+                @if interaction.restack.enabled {
+                    button .quick-action.qa-restack.mutating-btn
+                        hx-post=(format!("{base}/op/restack"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        title="Restack current branch onto its parent"
+                        {
+                        span .qa-icon { "⟳" }
+                        span .qa-label { "Restack stack" }
+                        span .qa-key { "R" }
+                    }
+                } @else {
+                    button .quick-action disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) {
+                        span .qa-icon { "⟳" }
+                        span .qa-label { "Restack stack" }
+                        span .qa-key { "R" }
+                    }
+                }
+
+                @if interaction.submit.enabled {
+                    button .quick-action.qa-submit.mutating-btn
+                        hx-post=(format!("{base}/op/submit"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        hx-confirm="Submit the current stack as Draft PRs?"
+                        {
+                        span .qa-icon { "↑" }
+                        span .qa-label { "Submit stack" }
+                        span .qa-key { "S" }
+                    }
+                } @else {
+                    button .quick-action disabled {
+                        span .qa-icon { "↑" }
+                        span .qa-label { "Submit stack" }
+                        span .qa-key { "S" }
+                    }
+                }
+
+                @if interaction.undo.enabled {
+                    button .quick-action.qa-undo.mutating-btn
+                        hx-post=(format!("{base}/op/undo"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        {
+                        span .qa-icon { "↩" }
+                        span .qa-label { "Undo" }
+                        span .qa-key { "⌘Z" }
+                    }
+                } @else {
+                    button .quick-action disabled {
+                        span .qa-icon { "↩" }
+                        span .qa-label { "Undo" }
+                        span .qa-key { "⌘Z" }
+                    }
+                }
+            }
         }
     }
 }
 
-fn branch_row(
+fn branch_card(
     session: &WebSession,
     branch: &BranchSummary,
     cells: &[TopologyCell],
@@ -425,17 +721,20 @@ fn branch_row(
     let selected = session.selected_branch.as_deref() == Some(&branch.name);
     let csrf = &session.csrf_token;
 
-    let mut row_class = String::from("branch-row stack-table-row");
+    let mut card_class = String::from("branch-card");
     if selected {
-        row_class.push_str(" selected");
+        card_class.push_str(" selected");
     }
     if branch.is_current {
-        row_class.push_str(" is-current");
+        card_class.push_str(" is-current");
+    }
+    if branch.is_trunk {
+        card_class.push_str(" is-trunk");
     }
 
     html! {
         div
-            class=(row_class)
+            class=(card_class)
             hx-post=(format!("{base}/select"))
             hx-target="#stack-pane"
             hx-swap="innerHTML"
@@ -443,86 +742,74 @@ fn branch_row(
             hx-trigger="click"
             hx-on--after-request="htmx.trigger('#inspector-pane','load'); htmx.trigger('#changes-pane','load');"
             {
-            div .col-graph {
-                div .topo-grid {
-                    @for cell in cells {
-                        (topo_cell(cell, branch))
-                    }
-                }
+            // Topology strip
+            div .card-topo {
+                (render_topo_cells(cells, branch.is_current))
             }
 
-            div .col-branch {
-                span .branch-name title=(branch.name) { (branch.name) }
-                @if !branch.is_current && !branch.is_trunk && interaction.checkout.enabled {
-                    button .btn.btn-icon.btn-checkout.mutating-btn
-                        hx-post=(format!("{base}/op/checkout"))
-                        hx-target="#stack-pane"
-                        hx-swap="innerHTML"
-                        hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
-                        hx-trigger="click[!event.defaultPrevented]"
-                        onclick="event.stopPropagation()"
-                        title=(format!("Check out {}", branch.name))
-                        { "co" }
-                }
-            }
-
-            div .col-meta {
-                @if branch.is_trunk {
-                    span .meta-chip.chip-trunk { "trunk" }
-                }
-                @if branch.is_current && !branch.is_trunk {
-                    span .meta-chip.chip-head { "HEAD" }
-                }
-                @if let Some((ahead, behind)) = row_meta.get(&branch.name) {
-                    @if *ahead > 0 || *behind > 0 {
-                        span .meta-chip.chip-diverge title="Ahead / behind parent" {
-                            (ahead) "↑ " (behind) "↓"
+            // Card content
+            div .card-inner {
+                div .card-top {
+                    span .card-name title=(branch.name) { (branch.name) }
+                    div .card-chips {
+                        @if branch.is_trunk {
+                            span .meta-chip.chip-trunk { "trunk" }
+                        }
+                        @if branch.is_current && !branch.is_trunk {
+                            span .meta-chip.chip-head { "HEAD" }
+                        }
+                        @if !branch.needs_restack && !branch.is_trunk {
+                            span .meta-chip.chip-clean { "clean" }
+                        }
+                        @if branch.needs_restack {
+                            span .meta-chip.chip-warning { "restack" }
+                        }
+                        @if let Some(pr_num) = branch.pr_number {
+                            span .meta-chip.chip-pr { "#" (pr_num) }
                         }
                     }
                 }
-                @if branch.needs_restack {
-                    span .meta-chip.chip-warning title="Needs restack" { "restack" }
+
+                @let has_bottom_row = branch.ci_state.is_some()
+                    || row_meta.get(&branch.name).map(|(a,b)| *a > 0 || *b > 0).unwrap_or(false);
+                @if has_bottom_row {
+                    div .card-bottom {
+                        @if let Some(ci) = &branch.ci_state {
+                            @let ci_cls = if ci.to_lowercase().contains("pass") || ci.to_lowercase().contains("success") {
+                                "card-ci ci-pass"
+                            } else if ci.to_lowercase().contains("fail") || ci.to_lowercase().contains("error") {
+                                "card-ci ci-fail"
+                            } else {
+                                "card-ci ci-pending"
+                            };
+                            span class=(ci_cls) { "● " (ci) }
+                        }
+                        @if let Some((ahead, behind)) = row_meta.get(&branch.name) {
+                            @if *ahead > 0 || *behind > 0 {
+                                span .card-diverge { (ahead) "↑ " (behind) "↓" }
+                            }
+                        }
+                    }
                 }
-                @if let Some(pr_num) = branch.pr_number {
-                    span .meta-chip.chip-pr { "#" (pr_num) }
-                }
+            }
+
+            // Checkout button (non-current, non-trunk branches only)
+            @if !branch.is_current && !branch.is_trunk && interaction.checkout.enabled {
+                button .btn.btn-icon.btn-checkout.mutating-btn
+                    hx-post=(format!("{base}/op/checkout"))
+                    hx-target="#stack-pane"
+                    hx-swap="innerHTML"
+                    hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
+                    hx-trigger="click[!event.defaultPrevented]"
+                    onclick="event.stopPropagation()"
+                    title=(format!("Check out {}", branch.name))
+                    { "co" }
             }
         }
     }
 }
 
-fn topo_cell(cell: &TopologyCell, _branch: &BranchSummary) -> Markup {
-    html! {
-        div .topo-cell {
-            @if cell.top && cell.bottom {
-                div .topo-connector-v {}
-            } @else if cell.top {
-                div .topo-connector-v style="bottom:50%" {}
-            } @else if cell.bottom {
-                div .topo-connector-v style="top:50%" {}
-            }
-            @if cell.left {
-                div .topo-connector-h-left {}
-            }
-            @if cell.right {
-                div .topo-connector-h-right {}
-            }
-            @if let Some(node) = cell.node {
-                @let is_current = matches!(node, TopologyNode::Current);
-                @let lane_class = match cell.lane % 3 {
-                    1 => "lane-1",
-                    2 => "lane-2",
-                    _ => "lane-0",
-                };
-                @if is_current {
-                    div class=(format!("topo-node current {lane_class}")) {}
-                } @else {
-                    div class=(format!("topo-node {lane_class}")) {}
-                }
-            }
-        }
-    }
-}
+// ── Changes pane ──────────────────────────────────────────────────────────────
 
 pub fn changes_pane_placeholder(selected: Option<&str>) -> Markup {
     match selected {
@@ -542,18 +829,61 @@ pub fn changes_pane_placeholder(selected: Option<&str>) -> Markup {
     }
 }
 
-pub fn diff_view(diff: &BranchDiff) -> Markup {
+/// OOB review header update emitted by diff responses.
+fn review_header_oob(
+    branch_name: &str,
+    file_count: usize,
+    total_add: usize,
+    total_del: usize,
+) -> Markup {
+    html! {
+        div #review-header hx-swap-oob="true" class="review-header" {
+            span .review-branch-name title=(branch_name) { (branch_name) }
+            @if file_count > 0 {
+                span .review-stat {
+                    (file_count) " file" @if file_count != 1 { "s" }
+                }
+                span .stat-add { "+" (total_add) }
+                span .stat-del { "−" (total_del) }
+            }
+        }
+    }
+}
+
+pub fn diff_view(diff: &BranchDiff, branch_name: &str) -> Markup {
+    let file_count = diff.stat.len();
+    let total_add: usize = diff.stat.iter().map(|s| s.additions).sum();
+    let total_del: usize = diff.stat.iter().map(|s| s.deletions).sum();
+
     if diff.stat.is_empty() && diff.lines.is_empty() {
-        return diff_empty();
+        return html! {
+            (review_header_oob(branch_name, 0, 0, 0))
+            (diff_empty())
+        };
     }
 
+    let guttered = add_gutter_numbers(&diff.lines);
+
     html! {
+        // OOB update for the review header
+        (review_header_oob(branch_name, file_count, total_add, total_del))
+
+        // Side-by-side: file navigator + diff pane
         div .changes-panel {
-            div .file-list {
+            // File navigator (narrow left)
+            div .file-nav {
+                div .file-nav-header {
+                    span { "Changed files" }
+                    span .file-count { (file_count) }
+                }
                 @for stat in &diff.stat {
                     @let fid = file_diff_id(&stat.file);
-                    button type="button" class="file-row" data-diff-file=(fid) {
-                        span .file-name title=(stat.file) { (stat.file) }
+                    button type="button" class="file-row"
+                        data-diff-file=(fid)
+                        data-file-name=(stat.file)
+                        title=(stat.file)
+                        {
+                        span .file-name { (shorten_path(&stat.file, 28)) }
                         span .file-stats {
                             span .stat-add { "+" (stat.additions) }
                             span .stat-del { "−" (stat.deletions) }
@@ -561,20 +891,15 @@ pub fn diff_view(diff: &BranchDiff) -> Markup {
                     }
                 }
             }
-            div .diff-patch {
-                @for line in &diff.lines {
-                    @let file_id = diff_git_file_id(&line.content);
-                    @let cls = match line.kind {
-                        DiffLineKind::Addition => "diff-line diff-add",
-                        DiffLineKind::Deletion => "diff-line diff-del",
-                        DiffLineKind::Hunk     => "diff-line diff-hunk",
-                        DiffLineKind::Header   => "diff-line diff-header",
-                        DiffLineKind::Context  => "diff-line",
-                    };
-                    @if let Some(id) = file_id {
-                        div class=(cls) id=(format!("diff-file-{id}")) { (line.content) }
-                    } @else {
-                        div class=(cls) { (line.content) }
+
+            // Diff pane (wide right)
+            div .diff-pane {
+                div #diff-file-header .diff-file-header {
+                    span #diff-file-path .diff-file-path { "" }
+                }
+                div .diff-content {
+                    @for gline in &guttered {
+                        (render_guttered_line(gline))
                     }
                 }
             }
@@ -593,6 +918,20 @@ pub fn diff_empty() -> Markup {
     }
 }
 
+/// Shortens a file path for display in narrow columns.
+/// Returns the path unchanged when it fits within `max_chars` Unicode scalar values.
+/// Longer paths are trimmed to a tail of `max_chars - 1` chars prefixed with "…",
+/// so the overall visible length is always ≤ `max_chars`.
+fn shorten_path(path: &str, max_chars: usize) -> String {
+    let char_count = path.chars().count();
+    if char_count <= max_chars {
+        return path.to_owned();
+    }
+    let skip = char_count - (max_chars - 1);
+    let tail: String = path.chars().skip(skip).collect();
+    format!("…{tail}")
+}
+
 fn file_diff_id(file: &str) -> String {
     file.chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
@@ -607,6 +946,8 @@ fn diff_git_file_id(content: &str) -> Option<String> {
     Some(file_diff_id(path.trim_start_matches("b/")))
 }
 
+// ── Inspector ─────────────────────────────────────────────────────────────────
+
 pub fn inspector_placeholder(selected: Option<&str>) -> Markup {
     match selected {
         None => html! {
@@ -617,6 +958,7 @@ pub fn inspector_placeholder(selected: Option<&str>) -> Markup {
         Some(_) => html! {
             div .skeleton style="margin:16px 12px;width:60%" {}
             div .skeleton style="margin:8px 12px;width:80%" {}
+            div .skeleton style="margin:8px 12px;width:40%" {}
         },
     }
 }
@@ -631,121 +973,216 @@ pub fn inspector_details(
     reorder_order: Option<&[String]>,
 ) -> Markup {
     html! {
-        div .inspector-section {
-            div .inspector-label { "Branch" }
-            div .inspector-row {
-                span .inspector-key { "Name" }
-                span .inspector-value { (branch.name) }
-            }
-            @if let Some(parent) = &branch.parent {
-                div .inspector-row {
-                    span .inspector-key { "Parent" }
-                    span .inspector-value { (parent) }
-                }
-            }
-            @if let Some(pr) = branch.pr_number {
-                div .inspector-row {
-                    span .inspector-key { "PR" }
-                    span .inspector-value { "#" (pr) }
-                }
-            }
-        }
-        div .inspector-section {
-            div .inspector-label { "Divergence" }
-            div .inspector-row {
-                span .inspector-key { "Ahead / behind" }
-                span .inspector-value { (details.ahead) " / " (details.behind) }
-            }
-            div .inspector-row {
-                span .inspector-key { "Unpushed / unpulled" }
-                span .inspector-value { (details.unpushed) " / " (details.unpulled) }
-            }
-            @if details.has_remote {
-                div .inspector-row {
-                    span .inspector-key { "Remote" }
-                    span .inspector-value { "tracked" }
-                }
-            }
-        }
-        @if !details.commits.is_empty() {
+        div .inspector-pane-inner {
+            // ── Branch identity ─────────────────────────────────────────────
             div .inspector-section {
-                div .inspector-label { "Commits" }
-                @for commit in &details.commits {
-                    div .inspector-row {
-                        span .inspector-value style="font-family:var(--mono);font-size:11px" { (commit) }
+                div .inspector-label { "BRANCH" }
+                div .inspector-branch-name { (branch.name) }
+                div .inspector-badges {
+                    @if branch.is_current {
+                        span .meta-chip.chip-head { "HEAD" }
+                    }
+                    @if !branch.needs_restack && !branch.is_trunk {
+                        span .meta-chip.chip-clean { "clean" }
+                    }
+                    @if branch.needs_restack {
+                        span .meta-chip.chip-warning { "needs restack" }
                     }
                 }
             }
-        }
-        div .inspector-section {
-            div .inspector-label { "Actions" }
-            div style="display:flex;flex-wrap:wrap;gap:6px;padding:4px 0" {
-                @if interaction.create.enabled {
-                    button .btn
-                        onclick=(format!(
-                            "document.body.insertAdjacentHTML('beforeend', `{}`)",
-                            create_overlay_escaped(&branch.name, base, csrf)
-                        ))
-                        { "Create" }
+
+            // ── Identity / parent ────────────────────────────────────────────
+            div .inspector-section {
+                @if let Some(parent) = &branch.parent {
+                    div .inspector-row {
+                        span .inspector-key { "Parent" }
+                        span .inspector-value { (parent) }
+                    }
                 }
-                @if interaction.rename.enabled {
-                    button .btn
-                        onclick=(format!(
-                            "document.body.insertAdjacentHTML('beforeend', `{}`)",
-                            rename_overlay_escaped(&branch.name, base, csrf)
-                        ))
-                        { "Rename" }
+                div .inspector-row {
+                    span .inspector-key { "Ahead / behind" }
+                    span .inspector-value { (details.ahead) " / " (details.behind) }
                 }
-                @if interaction.delete.enabled {
-                    button .btn.mutating-btn
-                        hx-post=(format!("{base}/op/delete"))
-                        hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
-                        hx-vals=(format!(r#"{{"branch":"{}"}}"#, branch.name.replace('"', "\\\"")))
-                        hx-confirm=(format!("Delete branch {}?", branch.name))
-                        { "Delete" }
+                div .inspector-row {
+                    span .inspector-key { "Unpushed / unpulled" }
+                    span .inspector-value { (details.unpushed) " / " (details.unpulled) }
                 }
-                @if interaction.move_subtree.enabled && !move_candidates.is_empty() {
-                    form style="display:flex;gap:4px;align-items:center"
-                        hx-post=(format!("{base}/op/move"))
-                        hx-target="#stack-pane"
-                        hx-confirm="Move this subtree to the selected parent?"
-                    {
-                        (csrf_input(csrf))
-                        input type="hidden" name="source" value=(branch.name) {}
-                        select name="new_parent" style="font-size:11px;max-width:120px" {
-                            @for candidate in move_candidates {
-                                option value=(candidate) { (candidate) }
+                @if details.has_remote {
+                    div .inspector-row {
+                        span .inspector-key { "Remote" }
+                        span .inspector-value { "tracked" }
+                    }
+                }
+            }
+
+            // ── Pull request ─────────────────────────────────────────────────
+            @if let Some(pr_num) = branch.pr_number {
+                div .inspector-section {
+                    div .inspector-label { "PULL REQUEST" }
+                    div .inspector-row {
+                        span .inspector-key { "Number" }
+                        span .inspector-value { "#" (pr_num) }
+                    }
+                    @if let Some(ci) = &branch.ci_state {
+                        div .inspector-row {
+                            span .inspector-key { "CI" }
+                            @let ci_cls = if ci.to_lowercase().contains("pass") || ci.to_lowercase().contains("success") {
+                                "inspector-value text-success"
+                            } else if ci.to_lowercase().contains("fail") {
+                                "inspector-value text-danger"
+                            } else {
+                                "inspector-value text-warning"
+                            };
+                            span class=(ci_cls) { "● " (ci) }
+                        }
+                    }
+                    @if let Some(state) = &branch.pr_state {
+                        div .inspector-row {
+                            span .inspector-key { "Draft" }
+                            span .inspector-value {
+                                @if state.to_uppercase() == "DRAFT" { "Yes" } @else { "No" }
                             }
                         }
-                        button .btn.mutating-btn type="submit" { "Move" }
                     }
                 }
-                @if interaction.reorder.enabled {
-                    @if let Some(order) = reorder_order {
-                        form
-                            hx-post=(format!("{base}/op/reorder"))
-                            hx-target="#stack-pane"
-                            hx-confirm="Apply the current linear stack order (no changes) — use CLI for custom reorder, or reverse below."
-                        {
-                            (csrf_input(csrf))
-                            input type="hidden" name="original_order" value=(order.join(",")) {}
-                            input type="hidden" name="proposed_order" value=(order.iter().rev().cloned().collect::<Vec<_>>().join(",")) {}
-                            button .btn.mutating-btn type="submit" title="Reverse the linear stack order" { "Reorder ↕" }
+            }
+
+            // ── Commits ──────────────────────────────────────────────────────
+            @if !details.commits.is_empty() {
+                div .inspector-section {
+                    div .inspector-label { "COMMITS" }
+                    @for commit in &details.commits {
+                        @let (sha, msg) = split_commit(commit);
+                        div .inspector-commit {
+                            span .commit-sha { (sha) }
+                            span .commit-msg title=(commit) { (msg) }
                         }
                     }
                 }
-                @if interaction.restack.enabled {
-                    button .btn.mutating-btn
-                        hx-post=(format!("{base}/op/restack"))
+            }
+
+            // ── Branch operations ────────────────────────────────────────────
+            div .inspector-section {
+                div .inspector-label { "Actions" }
+                div .inspector-actions {
+                    @if interaction.create.enabled {
+                        button .btn
+                            onclick=(format!(
+                                "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                                create_overlay_escaped(&branch.name, base, csrf)
+                            ))
+                            { "Create" }
+                    }
+                    @if interaction.rename.enabled {
+                        button .btn
+                            onclick=(format!(
+                                "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                                rename_overlay_escaped(&branch.name, base, csrf)
+                            ))
+                            { "Rename" }
+                    }
+                    @if interaction.delete.enabled {
+                        button .btn.btn-danger.mutating-btn
+                            hx-post=(format!("{base}/op/delete"))
+                            hx-target="#stack-pane"
+                            hx-include="[name='csrf']"
+                            hx-vals=(format!(r#"{{"branch":"{}"}}"#, branch.name.replace('"', "\\\"")))
+                            hx-confirm=(format!("Delete branch {}?", branch.name))
+                            { "Delete" }
+                    }
+                    @if interaction.move_subtree.enabled && !move_candidates.is_empty() {
+                        form .move-form
+                            hx-post=(format!("{base}/op/move"))
+                            hx-target="#stack-pane"
+                            hx-confirm="Move this subtree to the selected parent?"
+                        {
+                            (csrf_input(csrf))
+                            input type="hidden" name="source" value=(branch.name) {}
+                            select name="new_parent" style="font-size:11px;max-width:120px" {
+                                @for candidate in move_candidates {
+                                    option value=(candidate) { (candidate) }
+                                }
+                            }
+                            button .btn.mutating-btn type="submit" { "Move" }
+                        }
+                    }
+                    @if interaction.reorder.enabled {
+                        @if let Some(order) = reorder_order {
+                            form .reorder-form
+                                hx-post=(format!("{base}/op/reorder"))
+                                hx-target="#stack-pane"
+                                hx-confirm="Apply the current linear stack order (no changes) — use CLI for custom reorder, or reverse below."
+                            {
+                                (csrf_input(csrf))
+                                input type="hidden" name="original_order" value=(order.join(",")) {}
+                                input type="hidden" name="proposed_order" value=(order.iter().rev().cloned().collect::<Vec<_>>().join(",")) {}
+                                button .btn.mutating-btn type="submit" title="Reverse the linear stack order" { "Reorder ↕" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Spacer pushes the CTA to the bottom ─────────────────────────
+            div .inspector-spacer {}
+
+            // ── Bottom CTA ───────────────────────────────────────────────────
+            div .inspector-cta {
+                // Dominant: Submit stack
+                @if interaction.submit.enabled {
+                    button .btn.btn-primary.btn-full.mutating-btn
+                        hx-post=(format!("{base}/op/submit"))
                         hx-target="#stack-pane"
                         hx-include="[name='csrf']"
-                        { "Restack" }
+                        hx-confirm="Submit the current stack as Draft PRs?"
+                        title="Submit stack (draft PRs)"
+                        { "Submit stack" }
+                } @else {
+                    button .btn.btn-primary.btn-full disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit stack" }
+                }
+
+                // Secondary: Restack + Open PR
+                div .inspector-cta-secondary {
+                    @if interaction.restack.enabled {
+                        button .btn.mutating-btn style="flex:1"
+                            hx-post=(format!("{base}/op/restack"))
+                            hx-target="#stack-pane"
+                            hx-include="[name='csrf']"
+                            { "⟳ Restack" }
+                    } @else {
+                        button .btn style="flex:1" disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "⟳ Restack" }
+                    }
+
+                    @if interaction.open_pr.enabled {
+                        a .btn style="flex:1;justify-content:center"
+                            href=(format!("{base}/op/open-pr"))
+                            target="_blank"
+                            rel="noopener"
+                            title="Open PR for selected branch"
+                            { "Open PR ↗" }
+                    } @else {
+                        button .btn style="flex:1" disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR ↗" }
+                    }
                 }
             }
         }
     }
 }
+
+/// Split a commit string "sha message" into (sha_prefix, message).
+fn split_commit(commit: &str) -> (&str, &str) {
+    let trimmed = commit.trim();
+    // Commits may be "sha message" or just message lines
+    let (sha, msg) = if trimmed.len() >= 7 && trimmed[..7].chars().all(|c| c.is_ascii_hexdigit()) {
+        let space = trimmed.find(' ').unwrap_or(trimmed.len());
+        (&trimmed[..space.min(7)], trimmed[space..].trim())
+    } else {
+        ("", trimmed)
+    };
+    (sha, if msg.is_empty() { trimmed } else { msg })
+}
+
+// ── Overlays ──────────────────────────────────────────────────────────────────
 
 fn create_overlay_escaped(parent: &str, base: &str, csrf: &str) -> String {
     create_overlay(parent, base, csrf)
@@ -769,11 +1206,7 @@ pub fn operation_banner(message: &str, success: bool) -> Markup {
     } else {
         "banner banner-error"
     };
-    html! {
-        div class=(cls) {
-            (message)
-        }
-    }
+    html! { div id="banner" hx-swap-oob="true" class=(cls) { (message) } }
 }
 
 pub fn op_result_with_stack(
@@ -875,8 +1308,116 @@ pub fn create_overlay(parent_name: &str, base: &str, csrf: &str) -> Markup {
 }
 
 pub fn error_fragment(message: &str) -> Markup {
-    html! {
-        div .banner.banner-error { (message) }
+    html! { div .banner.banner-error { (message) } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::{DiffLine, DiffLineKind};
+
+    #[test]
+    fn parse_hunk_header_standard() {
+        assert_eq!(parse_hunk_header("@@ -1,4 +1,6 @@ fn foo()"), Some((1, 1)));
+        assert_eq!(parse_hunk_header("@@ -42,3 +45,7 @@"), Some((42, 45)));
+    }
+
+    #[test]
+    fn parse_hunk_header_single_line_no_count() {
+        assert_eq!(parse_hunk_header("@@ -1 +1 @@"), Some((1, 1)));
+    }
+
+    #[test]
+    fn parse_hunk_header_invalid_returns_none() {
+        assert_eq!(parse_hunk_header("not a hunk"), None);
+        assert_eq!(parse_hunk_header(""), None);
+    }
+
+    #[test]
+    fn add_gutter_numbers_assigns_correct_line_numbers() {
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Hunk,
+                content: "@@ -1,2 +1,3 @@ fn foo".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                content: " context".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Deletion,
+                content: "-old".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Addition,
+                content: "+new".to_string(),
+            },
+        ];
+        let guttered = add_gutter_numbers(&lines);
+        // Hunk header has no line numbers
+        assert_eq!(guttered[0].old_num, None);
+        assert_eq!(guttered[0].new_num, None);
+        // Context line gets both numbers (starts at 1)
+        assert_eq!(guttered[1].old_num, Some(1));
+        assert_eq!(guttered[1].new_num, Some(1));
+        // Deletion gets old number only
+        assert_eq!(guttered[2].old_num, Some(2));
+        assert_eq!(guttered[2].new_num, None);
+        // Addition gets new number only
+        assert_eq!(guttered[3].old_num, None);
+        assert_eq!(guttered[3].new_num, Some(2));
+    }
+
+    #[test]
+    fn file_diff_id_sanitizes_special_characters() {
+        assert_eq!(file_diff_id("src/foo.rs"), "src-foo-rs");
+        assert_eq!(file_diff_id("path/to/file.txt"), "path-to-file-txt");
+        assert_eq!(file_diff_id("simple"), "simple");
+        assert_eq!(file_diff_id("a b"), "a-b");
+    }
+
+    #[test]
+    fn diff_git_file_id_extracts_b_path() {
+        let content = "diff --git a/src/main.rs b/src/main.rs";
+        assert_eq!(diff_git_file_id(content), Some("src-main-rs".to_string()));
+    }
+
+    #[test]
+    fn diff_git_file_id_ignores_non_diff_lines() {
+        assert_eq!(diff_git_file_id("+++ b/src/main.rs"), None);
+        assert_eq!(diff_git_file_id("--- a/src/main.rs"), None);
+        assert_eq!(diff_git_file_id(""), None);
+    }
+
+    #[test]
+    fn shorten_path_unchanged_when_short() {
+        let path = "src/lib.rs";
+        assert_eq!(shorten_path(path, 28), path);
+    }
+
+    #[test]
+    fn shorten_path_truncates_long_path() {
+        let path = "some/very/deeply/nested/directory/structure/my_file.rs";
+        let result = shorten_path(path, 28);
+        assert!(
+            result.starts_with('…'),
+            "long path should start with ellipsis: {result}"
+        );
+        assert_eq!(
+            result.chars().count(),
+            28,
+            "shortened path should be exactly max_chars wide: {result}"
+        );
+    }
+
+    #[test]
+    fn shorten_path_preserves_tail() {
+        let path = "some/very/deeply/nested/directory/my_file.rs";
+        let result = shorten_path(path, 28);
+        assert!(
+            result.ends_with("my_file.rs"),
+            "shortened path should end with the file tail: {result}"
+        );
     }
 }
 
@@ -886,12 +1427,16 @@ pub fn help_fragment() -> Markup {
             div .overlay-card {
                 div .overlay-title { "Keyboard shortcuts" }
                 table style="width:100%;border-collapse:collapse;font-size:12px" {
-                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "/" } } td { "Focus search" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "/" } }   td { "Focus search" } }
                     tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "Esc" } } td { "Dismiss overlay / blur search" } }
-                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "1" } } td { "Toggle stack pane" } }
-                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "2" } } td { "Toggle changes pane" } }
-                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "3" } } td { "Toggle inspector pane" } }
-                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "?" } } td { "Show this help" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "1" } }   td { "Toggle stack pane" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "2" } }   td { "Toggle changes pane" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "3" } }   td { "Toggle inspector pane" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "N" } }   td { "New branch (quick action)" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "R" } }   td { "Restack stack (quick action)" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "S" } }   td { "Submit stack (quick action)" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "⌘Z" } }  td { "Undo (quick action)" } }
+                    tr { td style="padding:3px 8px 3px 0;color:var(--text-muted)" { code { "?" } }   td { "Show this help" } }
                 }
                 p style="font-size:11px;color:var(--text-muted);margin-top:12px" {
                     "Mutations (checkout, create, rename, delete, move, reorder, restack, submit, undo/redo) use the same "

@@ -1,6 +1,6 @@
 # st web — Localhost Web Workspace
 
-`st web` starts a fast, secure, browser-based workspace for stax on `127.0.0.1`. The layout is inspired by GitKraken Desktop: a grouped toolbar, stack graph as the hero pane, a file-list + patch Changes panel, branch Details inspector, and a status bar — all powered by [HTMX](https://htmx.org/) for partial-page updates without a heavy JavaScript framework.
+`st web` starts a fast, secure, browser-based workspace for stax on `127.0.0.1`. The layout uses a three-column reference design: a connected stack rail on the left, a review workspace in the centre, and a branch inspector on the right — all powered by [HTMX](https://htmx.org/) for partial-page updates without a JavaScript framework.
 
 ## Quick start
 
@@ -22,38 +22,49 @@ st web /path/to/repo  # open a specific repository
 ## Layout
 
 ```
-┌─ Toolbar: repo · search │ Restack Submit │ Open PR ↶ ↷ ↺ │ theme ? ─────────────┐
-├──────────────┬──────────────────────────────┬─────────────────────────────────┤
-│ Graph   [1]  │ Changes                 [2]  │ Details                     [3] │
-│ topology│branch│Δ│PR│  file list (stat)    │ Branch / divergence / actions   │
-│  ● main      │  foo.rs  +12 −3            │                                 │
-│  ○ feat/x    │  ─────────────────         │                                 │
-│              │  patch hunks below         │                                 │
-├──────────────┴──────────────────────────────┴─────────────────────────────────┤
-│ Status: HEAD main · Selected feat/x · Δ parent 3↑ 0↓ · PR #42                   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌─ Top bar: [S stax] repo ▾ │ / search ⌘K │ ↺ ↶ ↷ theme ? │ Restack  Open PR ↗  Submit stack ─┐
+├─────────────────┬──────────────────────────────┬────────────────────────────────────────────┤
+│ STACK      main │ feat/branch   2 commits …    │ BRANCH                                     │
+│ Current stack   │ [Changes]                    │ feat/branch [HEAD] [clean]                 │
+│ 3 branches·2PRs │ ─ Changed files ─────────── │                                            │
+│ ● feat/branch   │  foo.rs  +12  │ 1  context  │ Parent   main                              │
+│ ○ web-foundation│  bar.rs   +3  │ 2  context  │ A/B      2 / 0                             │
+│ ● main          │               │ 3 -old line │ Remote   tracked                           │
+│                 │               │ 3 +new line │                                            │
+│ QUICK ACTIONS   │               │             │ FULL REQUEST                               │
+│ □ New branch  N │               │             │ #742  ● passing                            │
+│ ⟳ Restack    R  │               │             │ Draft  No                                  │
+│ ↑ Submit     S  │               │             │                                            │
+│ ↩ Undo      ⌘Z  │               │             │ COMMITS                                    │
+│                 │               │             │ a1b2c3d  feat: add feature                 │
+│                 │               │             │ ─────────────────────────────              │
+│                 │               │             │      [     Submit stack     ]              │
+│                 │               │             │      [ ⟳ Restack ] [Open PR ↗]            │
+├─────────────────┴──────────────────────────────┴────────────────────────────────────────────┤
+│ Status: HEAD main · Selected feat/branch · Δ parent 3↑ 0↓ · PR #42                        │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Press `1`, `2`, `3` to toggle each pane.
 
-### Panes
+### Panels
 
-| Pane | Role |
-|------|------|
-| **Graph** | Stack topology table: lane graph, branch name, meta chips (HEAD, ahead/behind vs parent, restack, PR). Selecting a row does **not** check out — use the `co` button. |
-| **Changes** | GitKraken-style commit panel: clickable file list from diffstat on top, patch below. Empty state shows “No changes vs parent” instead of a blank pane. |
-| **Details** | Branch metadata, divergence, commits, and actions (create, rename, delete, move, reorder, restack). |
+| Panel | Role |
+|-------|------|
+| **Stack rail** | Connected branch cards with topology connectors, stack summary, and compact quick actions. Selecting a card does **not** check out — use the `co` button. |
+| **Review workspace** | Selected branch header (branch name, file count, +/- totals) followed by a narrow changed-file navigator beside a large diff pane with old/new line numbers. Only the **Changes** view is rendered; Commits and Stack preview are intentionally omitted. |
+| **Branch inspector** | Branch identity, divergence, remote state, pull-request details, and commit list with a dominant **Submit stack** CTA at the bottom. |
 | **Status bar** | Current HEAD, selected branch, ahead/behind vs parent, restack/PR badges. Refreshes with the stack. |
 
 ## Appearance
 
-The toolbar **System / Light / Dark** control sets the workspace theme:
+The top-bar **System / Light / Dark** control sets the workspace theme:
 
-| Mode | Behavior |
-|------|----------|
+| Mode | Behaviour |
+|------|-----------|
 | **System** (default) | Follows the OS `prefers-color-scheme` setting |
-| **Light** | Forces the light palette (Stax.app light tokens) |
-| **Dark** | Forces the dark palette (Stax.app dark tokens) |
+| **Light** | Forces the light palette |
+| **Dark** | Forces the dark palette (off-black surfaces, restrained violet accent) |
 
 The preference is stored per repository in `.git/stax/web-state.json`.
 
@@ -65,19 +76,23 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 | `1` | Toggle stack pane |
 | `2` | Toggle changes pane |
 | `3` | Toggle inspector pane |
+| `N` | New branch (quick action; guarded outside inputs/overlays) |
+| `R` | Restack stack (quick action) |
+| `S` | Submit stack (quick action) |
 | `Esc` | Dismiss overlay / blur search |
+| `?` | Show keyboard-shortcut help |
 
-## Available operations (via toolbar / branch row)
+## Available operations (via top bar, branch cards, inspector, or quick actions)
 
-- **Checkout** — click a branch row's `co` button to check it out
+- **Checkout** — click a branch card's `co` button
 - **Restack** — restack the selected branch onto its parent
 - **Submit** — push the stack and create/update PRs (draft mode)
-- **Undo / Redo** — restore local transaction state
-- **Refresh** — reload the repository snapshot (also rehydrates Changes + Details)
-- **Rename** — rename the current branch (overlay)
-- **Create** — create a new branch stacked on the selected one (overlay)
-- **Delete** — delete a non-current branch (overlay with confirmation)
-- **Move** — reparent a branch subtree (POST `/op/move`)
+- **Undo / Redo** — restore local transaction state (top-bar utility buttons)
+- **Refresh** — reload the repository snapshot (top-bar `↺` button)
+- **Rename** — rename a branch (inspector Actions → Rename overlay)
+- **Create** — create a new branch stacked on the selected one (inspector or quick action `N`)
+- **Delete** — delete a non-current branch (inspector Actions)
+- **Move** — reparent a branch subtree (inspector Actions → Move form)
 
 ## Security model
 
@@ -94,12 +109,12 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 |--------|------|-------------|
 | `GET` | `/assets/app.css` | Embedded CSS (light, dark, and system themes) |
 | `GET` | `/assets/htmx.min.js` | Embedded htmx 2.x |
-| `GET` | `/assets/app.js` | Keyboard shortcuts, pane rehydration, file-list navigation |
+| `GET` | `/assets/app.js` | Keyboard shortcuts, pane rehydration, file-nav interaction |
 | `GET` | `/s/:token/` | Full workspace page |
-| `GET` | `/s/:token/stack?branch=` | Stack pane partial (+ status bar OOB swap) |
+| `GET` | `/s/:token/stack?branch=` | Stack pane partial (+ status bar + topbar-actions OOB swaps) |
 | `POST` | `/s/:token/select` | Update selected branch |
 | `GET` | `/s/:token/details` | Inspector hydration |
-| `GET` | `/s/:token/diff` | Diff view (file list + patch, or empty state) |
+| `GET` | `/s/:token/diff` | Diff view (file navigator + diff pane with gutters, or empty state) |
 | `GET` | `/s/:token/ci` | CI summary |
 | `POST` | `/s/:token/search` | Filter branches |
 | `POST` | `/s/:token/panes` | Toggle pane visibility |
@@ -124,7 +139,7 @@ src/web/
   server.rs       — Axum server bind logic
   session.rs      — WebSession shared state (Arc<Mutex<…>>)
   routes.rs       — all Axum handlers; CSRF + host guards
-  templates.rs    — maud HTML templates
+  templates.rs    — maud HTML templates (workspace, diff, inspector)
   static_assets.rs — embedded CSS/JS via include_str!
   assets/
     htmx.min.js   — htmx 2.x (embedded at compile time)

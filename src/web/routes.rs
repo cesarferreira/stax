@@ -347,6 +347,9 @@ async fn branch_diff(
         return Html(changes_pane_placeholder(None).into_string()).into_response();
     };
 
+    // Keep a copy for the template (branch_name is moved into the closure).
+    let branch_display = branch_name.clone();
+
     let result = tokio::task::spawn_blocking(move || {
         let repo_session = crate::application::RepositorySession::open(&repo_root)?;
         let snapshot = repo_session.snapshot()?;
@@ -362,7 +365,7 @@ async fn branch_diff(
     .await;
 
     match result {
-        Ok(Ok(diff)) => Html(diff_view(&diff).into_string()).into_response(),
+        Ok(Ok(diff)) => Html(diff_view(&diff, &branch_display).into_string()).into_response(),
         Ok(Err(e)) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
         Err(e) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
     }

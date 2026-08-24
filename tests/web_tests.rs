@@ -242,21 +242,122 @@ fn web_server_workspace_shows_trunk_branch_after_stax_init() {
             "workspace HTML should reference stax"
         );
 
-        // GitKraken-inspired chrome
+        // Reference-faithful three-column workspace chrome
         assert!(
             body.contains("status-bar"),
             "workspace should include status bar"
         );
         assert!(
-            body.contains("stack-table"),
-            "workspace should include stack graph table"
+            body.contains(r#"class="stage""#),
+            "workspace should include stage grid (class=\"stage\")"
         );
         assert!(
-            body.contains("toolbar-group"),
-            "workspace should include grouped toolbar actions"
+            body.contains("topbar-actions"),
+            "workspace should include topbar action group"
+        );
+        assert!(
+            body.contains("branch-cards"),
+            "workspace should include branch cards"
+        );
+        assert!(
+            body.contains("review-header"),
+            "workspace should include review header"
+        );
+        assert!(
+            body.contains("quick-actions"),
+            "workspace should include quick actions"
+        );
+
+        // Changes is the only active tab — no Commits or Stack preview tab elements
+        assert!(
+            !body.contains(r#"<li>Commits</li>"#) && !body.contains(r#"<li>Stack preview</li>"#),
+            "workspace should not render inactive Commits or Stack preview tabs"
+        );
+
+        // Theme options must be present
+        assert!(
+            body.contains(r#"value="system""#),
+            "System theme option should be present"
+        );
+        assert!(
+            body.contains(r#"value="light""#),
+            "Light theme option should be present"
+        );
+        assert!(
+            body.contains(r#"value="dark""#),
+            "Dark theme option should be present"
         );
 
         // Keep repo alive until assertions complete.
+        drop(repo);
+    });
+}
+
+#[test]
+fn web_diff_shows_file_nav_and_gutter_for_committed_change() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(
+            init_out.status.success(),
+            "stax init failed: {}",
+            common::TestRepo::stderr(&init_out)
+        );
+
+        // Create a feature branch (bc creates and checks out)
+        let create_out = repo.run_stax(&["bc", "feat/real-change"]);
+        assert!(
+            create_out.status.success(),
+            "branch create failed: {}",
+            common::TestRepo::stderr(&create_out)
+        );
+
+        // Add a file and commit on the feature branch
+        repo.create_file("added.txt", "line one\nline two\nline three\n");
+        repo.commit("add added.txt");
+
+        // The server auto-selects the current branch (feat/real-change)
+        let repo_path = repo.path().to_path_buf();
+        let server = stax::web::start_test_server(repo_path)
+            .await
+            .expect("server should start");
+
+        let parts: Vec<&str> = server.base_url.split('/').collect();
+        let host = parts.get(2).copied().unwrap_or("127.0.0.1");
+        let token = parts.get(4).copied().unwrap_or("unknown");
+
+        let client = reqwest::Client::new();
+        let diff_url = format!("http://{host}/s/{token}/diff");
+        let diff_resp = client.get(&diff_url).send().await.unwrap();
+        assert_eq!(
+            diff_resp.status().as_u16(),
+            200,
+            "diff endpoint should return 200"
+        );
+        let diff_body = diff_resp.text().await.unwrap();
+
+        assert!(
+            diff_body.contains("file-nav"),
+            "diff should include file-nav: {diff_body}"
+        );
+        assert!(
+            diff_body.contains("diff-gutter"),
+            "diff should include diff-gutter: {diff_body}"
+        );
+        assert!(
+            diff_body.contains("data-file-name"),
+            "diff should include data-file-name: {diff_body}"
+        );
+        assert!(
+            diff_body.contains("review-header"),
+            "diff should include review-header OOB: {diff_body}"
+        );
+        assert!(
+            diff_body.contains("hx-swap-oob"),
+            "diff should include OOB swap for review-header: {diff_body}"
+        );
+
         drop(repo);
     });
 }
