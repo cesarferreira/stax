@@ -34,6 +34,18 @@ st web /path/to/repo  # open a specific repository
 
 Press `1`, `2`, `3` to toggle each pane.
 
+## Appearance
+
+The toolbar **System / Light / Dark** control sets the workspace theme:
+
+| Mode | Behavior |
+|------|----------|
+| **System** (default) | Follows the OS `prefers-color-scheme` setting |
+| **Light** | Forces the light palette (Stax.app light tokens) |
+| **Dark** | Forces the dark palette (Stax.app dark tokens) |
+
+The preference is stored per repository in `.git/stax/web-state.json`.
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -69,7 +81,7 @@ Press `1`, `2`, `3` to toggle each pane.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/assets/app.css` | Embedded CSS (light + dark theme) |
+| `GET` | `/assets/app.css` | Embedded CSS (light, dark, and system themes) |
 | `GET` | `/assets/htmx.min.js` | Embedded htmx 2.x |
 | `GET` | `/assets/app.js` | Inline keyboard shortcut script |
 | `GET` | `/s/:token/` | Full workspace page |
@@ -80,6 +92,7 @@ Press `1`, `2`, `3` to toggle each pane.
 | `GET` | `/s/:token/ci` | CI summary |
 | `POST` | `/s/:token/search` | Filter branches |
 | `POST` | `/s/:token/panes` | Toggle pane visibility |
+| `POST` | `/s/:token/theme` | Set appearance (`system` / `light` / `dark`) |
 | `POST` | `/s/:token/refresh` | Reload snapshot |
 | `POST` | `/s/:token/op/checkout` | Check out a branch |
 | `POST` | `/s/:token/op/create` | Create a branch |

@@ -5,6 +5,38 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// Appearance preference for the web workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemePreference {
+    /// Follow `prefers-color-scheme`.
+    #[default]
+    System,
+    /// Force the light palette.
+    Light,
+    /// Force the dark palette.
+    Dark,
+}
+
+impl ThemePreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "system" => Some(Self::System),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
 /// Persisted pane preferences stored in `.git/stax/web-state.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WebPrefs {
@@ -14,6 +46,8 @@ struct WebPrefs {
     show_changes: bool,
     #[serde(default = "default_true")]
     show_inspector: bool,
+    #[serde(default)]
+    theme: ThemePreference,
     #[serde(default)]
     recent_projects: Vec<PathBuf>,
 }
@@ -28,6 +62,7 @@ impl Default for WebPrefs {
             show_stack: true,
             show_changes: true,
             show_inspector: true,
+            theme: ThemePreference::System,
             recent_projects: Vec::new(),
         }
     }
@@ -48,6 +83,8 @@ pub struct WebSession {
     pub show_changes: bool,
     /// Whether the inspector pane is visible.
     pub show_inspector: bool,
+    /// Light / dark / system appearance.
+    pub theme: ThemePreference,
     /// Last completed operation receipt (for undo/redo state).
     pub last_receipt: Option<OperationReceipt>,
     /// Whether a mutation is currently in flight.
@@ -85,6 +122,7 @@ impl WebSession {
             show_stack: prefs.show_stack,
             show_changes: prefs.show_changes,
             show_inspector: prefs.show_inspector,
+            theme: prefs.theme,
             last_receipt: None,
             active_operation: false,
             recent_projects: recent,
@@ -93,7 +131,7 @@ impl WebSession {
         }
     }
 
-    /// Persist current pane visibility and recent-projects list to disk.
+    /// Persist current pane visibility, theme, and recent-projects list to disk.
     pub fn save_prefs(&self) {
         let Some(ref path) = self.prefs_path else {
             return;
@@ -102,6 +140,7 @@ impl WebSession {
             show_stack: self.show_stack,
             show_changes: self.show_changes,
             show_inspector: self.show_inspector,
+            theme: self.theme,
             recent_projects: self.recent_projects.clone(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&prefs) {
@@ -125,6 +164,7 @@ impl WebSession {
             self.show_stack = prefs.show_stack;
             self.show_changes = prefs.show_changes;
             self.show_inspector = prefs.show_inspector;
+            self.theme = prefs.theme;
         }
         self.recent_projects.retain(|p| p != &root);
         self.recent_projects.insert(0, root);
@@ -162,4 +202,24 @@ pub fn generate_token() -> String {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThemePreference;
+
+    #[test]
+    fn theme_preference_round_trips() {
+        assert_eq!(
+            ThemePreference::parse("system"),
+            Some(ThemePreference::System)
+        );
+        assert_eq!(
+            ThemePreference::parse("Light"),
+            Some(ThemePreference::Light)
+        );
+        assert_eq!(ThemePreference::parse("DARK"), Some(ThemePreference::Dark));
+        assert_eq!(ThemePreference::parse("nope"), None);
+        assert_eq!(ThemePreference::System.as_str(), "system");
+    }
 }

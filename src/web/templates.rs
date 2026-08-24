@@ -4,7 +4,7 @@ use crate::application::{
     BranchDetails, BranchDiff, BranchSummary, DiffLineKind, InteractionState, RepositorySnapshot,
     TopologyCell, TopologyNode, topology_layout,
 };
-use crate::web::session::WebSession;
+use crate::web::session::{ThemePreference, WebSession};
 use maud::{DOCTYPE, Markup, html};
 
 fn csrf_input(csrf: &str) -> Markup {
@@ -24,12 +24,15 @@ pub fn workspace_page(
         .and_then(|n| n.to_str())
         .unwrap_or("repository");
 
+    let theme = session.theme.as_str();
+
     html! {
         (DOCTYPE)
-        html lang="en" {
+        html lang="en" data-theme=(theme) {
             head {
                 meta charset="utf-8" {}
                 meta name="viewport" content="width=device-width, initial-scale=1" {}
+                meta name="color-scheme" content="light dark" {}
                 title { (repo_name) " — stax web" }
                 link rel="stylesheet" href="/assets/app.css" {}
                 script src="/assets/htmx.min.js" {}
@@ -217,6 +220,20 @@ fn toolbar(
                 hx-include="[name='csrf']"
                 title="Refresh repository"
                 { "↺" }
+
+            select #theme-select .theme-select
+                name="theme"
+                title="Appearance"
+                hx-post=(format!("{base}/theme"))
+                hx-trigger="change"
+                hx-include="[name='csrf']"
+                hx-swap="none"
+                onchange="document.documentElement.setAttribute('data-theme', this.value)"
+                {
+                option value="system" selected[session.theme == ThemePreference::System] { "System" }
+                option value="light" selected[session.theme == ThemePreference::Light] { "Light" }
+                option value="dark" selected[session.theme == ThemePreference::Dark] { "Dark" }
+            }
 
             button .btn
                 onclick="document.getElementById('help-overlay')?.remove();document.body.insertAdjacentHTML('beforeend', document.getElementById('help-template').innerHTML)"

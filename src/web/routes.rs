@@ -6,7 +6,7 @@ use crate::application::{
     NoopOperationReporter, OperationOutcome, OperationRequest, PullRequestMode, RestackScope,
     execute_repository_operation, interaction_state,
 };
-use crate::web::session::SharedSession;
+use crate::web::session::{SharedSession, ThemePreference};
 use crate::web::static_assets::{APP_CSS, APP_JS, HTMX_JS};
 use crate::web::templates::{
     self, changes_pane_placeholder, diff_view, error_fragment, inspector_details,
@@ -37,6 +37,7 @@ pub fn build_router(session: SharedSession) -> Router {
         .route("/s/{token}/ci", get(ci_summary))
         .route("/s/{token}/search", post(search_branches))
         .route("/s/{token}/panes", post(toggle_panes))
+        .route("/s/{token}/theme", post(set_theme))
         .route("/s/{token}/refresh", post(refresh_handler))
         .route("/s/{token}/op/checkout", post(op_checkout))
         .route("/s/{token}/op/create", post(op_create))
@@ -429,6 +430,43 @@ async fn toggle_panes(
     }
 
     Html("").into_response()
+}
+
+// ── Theme preference ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ThemeForm {
+    theme: String,
+    csrf: String,
+}
+
+async fn set_theme(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ThemeForm>,
+) -> impl IntoResponse {
+    if let Some(r) = check_local_host(&headers) {
+        return r;
+    }
+    if let Some(r) = check_token(&state, &token) {
+        return r;
+    }
+    if let Some(r) = check_csrf(&state, &form.csrf) {
+        return r;
+    }
+
+    let Some(theme) = ThemePreference::parse(&form.theme) else {
+        return (StatusCode::BAD_REQUEST, Html("<h1>Invalid theme</h1>")).into_response();
+    };
+
+    {
+        let mut s = state.lock().unwrap();
+        s.theme = theme;
+        s.save_prefs();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // ── Refresh ───────────────────────────────────────────────────────────────────

@@ -4,7 +4,10 @@ pub const HTMX_JS: &str = include_str!("assets/htmx.min.js");
 
 pub const APP_CSS: &str = r#"
 /* stax web workspace — theme aligned with crates/stax-gui/src/theme.rs */
-:root {
+
+/* Light palette (default + forced light) */
+:root,
+[data-theme="light"] {
   --window:           #f3f3f4;
   --sidebar:          #ebebee;
   --surface:          #f9f9fa;
@@ -32,10 +35,43 @@ pub const APP_CSS: &str = r#"
   --radius:           6px;
   --shadow-sm:        0 1px 3px rgba(0,0,0,.08);
   --shadow-md:        0 2px 8px rgba(0,0,0,.12);
+  color-scheme: light;
 }
 
+/* Forced dark */
+[data-theme="dark"] {
+  --window:           #1c1c2b;
+  --sidebar:          #3a3a46;
+  --surface:          #242433;
+  --surface-raised:   #303040;
+  --surface-hover:    #41414e;
+  --surface-selected: #4a4a58;
+  --border:           #3a3a4a;
+  --border-strong:    #515164;
+  --text:             #dedeea;
+  --text-muted:       #bfc0d2;
+  --accent:           #aeb7ff;
+  --accent-text:      #171724;
+  --focus:            #94a0ff;
+  --success:          #8bd5a1;
+  --warning:          #e5c07b;
+  --danger:           #ffb3c2;
+  --diff-add:         #8bd5a1;
+  --diff-del:         #ffb3c2;
+  --diff-hunk:        #b8a7ff;
+  --disabled-surface: #343442;
+  --disabled-text:    #77778a;
+  --lane-0:           #46bff7;
+  --lane-1:           #4ddd9a;
+  --lane-2:           #a3e635;
+  --shadow-sm:        0 1px 3px rgba(0,0,0,.35);
+  --shadow-md:        0 2px 8px rgba(0,0,0,.45);
+  color-scheme: dark;
+}
+
+/* System follows OS preference */
 @media (prefers-color-scheme: dark) {
-  :root {
+  [data-theme="system"] {
     --window:           #1c1c2b;
     --sidebar:          #3a3a46;
     --surface:          #242433;
@@ -60,6 +96,15 @@ pub const APP_CSS: &str = r#"
     --lane-0:           #46bff7;
     --lane-1:           #4ddd9a;
     --lane-2:           #a3e635;
+    --shadow-sm:        0 1px 3px rgba(0,0,0,.35);
+    --shadow-md:        0 2px 8px rgba(0,0,0,.45);
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  [data-theme="system"] {
+    color-scheme: light;
   }
 }
 
@@ -308,7 +353,8 @@ html, body {
 .text-warning { color: var(--warning); }
 .spacer { flex: 1; }
 .project-form { display: flex; align-items: center; gap: 6px; }
-.project-select {
+.project-select,
+.theme-select {
   max-width: 180px;
   padding: 4px 8px;
   border-radius: var(--radius);
@@ -317,6 +363,7 @@ html, body {
   color: var(--text);
   font-size: 12px;
 }
+.theme-select { max-width: 110px; }
 .project-add {
   width: 140px;
   padding: 4px 8px;
