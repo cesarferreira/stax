@@ -38,7 +38,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st draft --stack` | Convert every PR in the current stack to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
 | `st undraft --stack` | Mark every PR in the current stack as ready for review |
-| `st ready` | Interactive PR readiness dashboard — CI, review approval, and merge state for all tracked branches; auto-refreshes every 15s and stays open until you quit (`q`) |
+| `st ready` | Interactive PR readiness dashboard — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s, drops remotely merged PRs, and stays open until you quit (`q`) |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
@@ -107,4 +107,4 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
-`st ready` and `st pr list --ready` open an interactive TUI showing CI status, review approval (e.g. "1 approval", "missing review"), and recommended next action for each tracked PR. The TUI auto-refreshes every 15s and stays open after CI passes — press `q` to quit. Use `--current` or `--stack` to limit to the current stack. Use `--plain` for a single static table (safe for capture/pipes) and `--json` for the machine-readable readiness schema. Use `--interval <secs>` to change the auto-refresh interval.
+`st ready` and `st pr list --ready` open an interactive TUI showing CI status, review approval (e.g. "1 approval", "missing review"), and recommended next action for each unmerged tracked PR. The TUI auto-refreshes every 15s and stays open after CI passes — press `q` to quit. A PR confirmed remotely merged disappears on initial load or the next refresh; this only updates readiness and cached PR state, and does not delete or reparent local branches (use `st sync` for cleanup). Closed but unmerged PRs remain visible as fix candidates. Use `--current` or `--stack` to limit to the current stack. Use `--plain` for a single static table (safe for capture/pipes) and `--json` for the machine-readable readiness schema. Use `--interval <secs>` to change the auto-refresh interval.

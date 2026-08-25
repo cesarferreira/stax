@@ -62,7 +62,7 @@ stax redo [op-id]              # Redo last/specific undone operation
 stax pr                        # Open current branch PR
 stax pr body                   # Print current PR description
 stax pr body --edit            # Edit current PR description in $EDITOR
-stax ready                     # Interactive PR readiness TUI (CI + review approval); auto-refreshes, stays open until q
+stax ready                     # Interactive unmerged-PR readiness TUI; refresh drops remotely merged PRs without local cleanup
 stax ready --current           # PR readiness TUI scoped to current stack only
 stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
@@ -433,7 +433,7 @@ stax range-diff                    # Range-diff branches needing restack
 
 stax pr body                       # Print current PR description
 stax pr body --edit                # Edit current PR description in $EDITOR
-stax ready                         # Interactive PR readiness TUI (CI + review approval); auto-refreshes, stays open until q
+stax ready                         # Interactive unmerged-PR readiness TUI; refresh drops remotely merged PRs without local cleanup
 stax ready --current               # PR readiness TUI scoped to current stack only
 stax ready --plain                 # Static readiness table: action · PR · branch · reviews · CI · title
 stax ready --all                   # Explicit all tracked branches (default)
