@@ -584,7 +584,7 @@ mod tests {
         row.review_summary = String::new();
         row.review_decision = None;
         row.approvals = 0;
-        app.apply_update(ReadyTuiUpdate::Loaded { index: 0, row });
+        app.apply_update(ReadyTuiUpdate::Loaded { row });
 
         terminal.draw(|f| render(f, &app)).expect("draw");
         let rendered = format!("{:?}", terminal.backend().buffer());
@@ -604,10 +604,7 @@ mod tests {
                 pr_number: Some(10),
             }],
         );
-        app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
-            row: loaded_row(),
-        });
+        app.apply_update(ReadyTuiUpdate::Loaded { row: loaded_row() });
 
         terminal.draw(|f| render(f, &app)).expect("draw");
         let rendered = format!("{:?}", terminal.backend().buffer());

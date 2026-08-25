@@ -4,13 +4,14 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub enum ReadyTuiUpdate {
     Loaded {
-        index: usize,
         row: crate::commands::ready::PrReadinessRow,
     },
     Unavailable {
-        index: usize,
         branch: ReadyBranch,
         message: String,
+    },
+    Merged {
+        branch: String,
     },
     Done,
 }
@@ -71,27 +72,24 @@ impl ReadyTuiApp {
 
     pub fn apply_update(&mut self, update: ReadyTuiUpdate) {
         match update {
-            ReadyTuiUpdate::Loaded { index, row } => {
-                if let Some(slot) = self.row_slot_mut(index, &row.branch) {
+            ReadyTuiUpdate::Loaded { row } => {
+                if let Some(slot) = self.row_slot_mut(&row.branch) {
                     *slot = ReadyRowState::Loaded(row);
                 }
                 if self.should_resort_rows() {
                     self.sort_rows_by_updated_at();
                 }
             }
-            ReadyTuiUpdate::Unavailable {
-                index,
-                branch,
-                message,
-            } => {
+            ReadyTuiUpdate::Unavailable { branch, message } => {
                 let branch_name = branch.name.clone();
-                if let Some(slot) = self.row_slot_mut(index, &branch_name) {
+                if let Some(slot) = self.row_slot_mut(&branch_name) {
                     *slot = ReadyRowState::Unavailable { branch, message };
                 }
                 if self.should_resort_rows() {
                     self.sort_rows_by_updated_at();
                 }
             }
+            ReadyTuiUpdate::Merged { branch } => self.remove_row(&branch),
             ReadyTuiUpdate::Done => {
                 self.loading = false;
                 self.sort_rows_by_updated_at();
@@ -107,13 +105,24 @@ impl ReadyTuiApp {
                 .all(|row| matches!(row, ReadyRowState::Loading { .. }))
     }
 
-    fn row_slot_mut(&mut self, fallback_index: usize, branch: &str) -> Option<&mut ReadyRowState> {
-        let index = self
+    fn row_slot_mut(&mut self, branch: &str) -> Option<&mut ReadyRowState> {
+        self.rows.iter_mut().find(|row| row.branch() == branch)
+    }
+
+    fn remove_row(&mut self, branch: &str) {
+        let selected_branch = self
             .rows
-            .iter()
-            .position(|row| row.branch() == branch)
-            .unwrap_or(fallback_index);
-        self.rows.get_mut(index)
+            .get(self.selected_index)
+            .map(|row| row.branch().to_string());
+        let Some(index) = self.rows.iter().position(|row| row.branch() == branch) else {
+            return;
+        };
+
+        self.rows.remove(index);
+        self.selected_index = selected_branch
+            .filter(|selected| selected != branch)
+            .and_then(|selected| self.rows.iter().position(|row| row.branch() == selected))
+            .unwrap_or(index.min(self.rows.len().saturating_sub(1)));
     }
 
     fn sort_rows_by_updated_at(&mut self) {
@@ -296,7 +305,6 @@ mod tests {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
 
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 1,
             row: loaded_row("feature/b", 11),
         });
 
@@ -319,14 +327,8 @@ mod tests {
         let mut newer = loaded_row("feature/b", 11);
         newer.updated_at = Some("2026-06-02T10:00:00Z".to_string());
 
-        app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
-            row: older,
-        });
-        app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 1,
-            row: newer,
-        });
+        app.apply_update(ReadyTuiUpdate::Loaded { row: older });
+        app.apply_update(ReadyTuiUpdate::Loaded { row: newer });
         app.apply_update(ReadyTuiUpdate::Done);
 
         assert_eq!(app.rows[0].branch(), "feature/b");
@@ -337,7 +339,6 @@ mod tests {
     fn ready_tui_selected_pr_url_comes_from_selected_loaded_row() {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
             row: loaded_row("feature/a", 10),
         });
 
@@ -354,7 +355,6 @@ mod tests {
         assert_eq!(app.selected_draft_target(), None);
 
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
             row: loaded_row("feature/a", 10),
         });
 
@@ -368,7 +368,6 @@ mod tests {
     fn ready_tui_reconcile_scope_drops_removed_branch_and_keeps_loaded_row() {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
             row: loaded_row("feature/a", 10),
         });
 
@@ -389,7 +388,6 @@ mod tests {
     fn ready_tui_reconcile_scope_inserts_loading_row_for_new_branch() {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
             row: loaded_row("feature/a", 10),
         });
 
@@ -416,7 +414,6 @@ mod tests {
     fn ready_tui_refresh_keeps_loaded_rows_visible() {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
         app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
             row: loaded_row("feature/a", 10),
         });
         app.loading = false;
@@ -425,5 +422,88 @@ mod tests {
 
         assert!(app.loading);
         assert!(matches!(app.rows[0], ReadyRowState::Loaded(_)));
+    }
+
+    #[test]
+    fn ready_tui_removes_initial_loading_placeholder_for_merged_pr() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+
+        app.apply_update(ReadyTuiUpdate::Merged {
+            branch: "feature/a".to_string(),
+        });
+
+        assert_eq!(app.rows.len(), 1);
+        assert_eq!(app.rows[0].branch(), "feature/b");
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn ready_tui_refresh_removes_previously_loaded_merged_pr() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            row: loaded_row("feature/a", 10),
+        });
+        app.apply_update(ReadyTuiUpdate::Done);
+        app.begin_refresh();
+
+        app.apply_update(ReadyTuiUpdate::Merged {
+            branch: "feature/a".to_string(),
+        });
+        app.apply_update(ReadyTuiUpdate::Done);
+
+        assert_eq!(app.rows.len(), 1);
+        assert_eq!(app.rows[0].branch(), "feature/b");
+        assert!(!app.loading);
+    }
+
+    #[test]
+    fn ready_tui_out_of_order_updates_use_branch_identity_after_removal() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+
+        app.apply_update(ReadyTuiUpdate::Merged {
+            branch: "feature/a".to_string(),
+        });
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            row: loaded_row("feature/b", 11),
+        });
+
+        assert_eq!(app.rows.len(), 1);
+        assert!(matches!(
+            &app.rows[0],
+            ReadyRowState::Loaded(row) if row.branch == "feature/b"
+        ));
+    }
+
+    #[test]
+    fn ready_tui_removal_preserves_other_selection_and_clamps_selected_last_row() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+        app.selected_index = 1;
+
+        app.apply_update(ReadyTuiUpdate::Merged {
+            branch: "feature/a".to_string(),
+        });
+        assert_eq!(app.selected_index, 0);
+        assert_eq!(app.rows[0].branch(), "feature/b");
+
+        app.apply_update(ReadyTuiUpdate::Merged {
+            branch: "feature/b".to_string(),
+        });
+        assert!(app.rows.is_empty());
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn ready_tui_unavailable_update_remains_visible() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+
+        app.apply_update(ReadyTuiUpdate::Unavailable {
+            branch: branches()[0].clone(),
+            message: "forge unavailable".to_string(),
+        });
+
+        assert!(matches!(
+            &app.rows[0],
+            ReadyRowState::Unavailable { message, .. } if message == "forge unavailable"
+        ));
     }
 }

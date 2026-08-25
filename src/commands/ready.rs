@@ -211,6 +211,13 @@ pub struct ReadyScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReadyFetchOutcome {
+    Row(Box<PrReadinessRow>),
+    NoPr,
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadyRowState {
     Loading {
         branch: ReadyBranch,
@@ -345,15 +352,20 @@ pub(crate) async fn fetch_row_for_branch(
     remote: &RemoteInfo,
     stack: &Stack,
     branch: &ReadyBranch,
-) -> Result<Option<PrReadinessRow>> {
+) -> Result<ReadyFetchOutcome> {
     let Some(pr_number) = resolve_branch_pr(client, stack, branch).await? else {
-        return Ok(None);
+        return Ok(ReadyFetchOutcome::NoPr);
     };
 
     let status = client
         .get_pr_merge_status(pr_number)
         .await
         .with_context(|| format!("Failed to fetch live readiness for PR #{}", pr_number))?;
+
+    if is_merged_pr_status(&status) {
+        let _ = warm_pr_state_for_ready_status(repo, &branch.name, &status);
+        return Ok(ReadyFetchOutcome::Merged);
+    }
 
     let ci_revision = status.head_sha.clone();
     let check_runs = client
@@ -365,7 +377,11 @@ pub(crate) async fn fetch_row_for_branch(
     let mut row = PrReadinessRow::from_status(&branch.name, status, ci_summary);
     row.pr_url = Some(remote.pr_url(pr_number));
     let _ = warm_caches_for_ready_row(repo, &row, &ci_revision);
-    Ok(Some(row))
+    Ok(ReadyFetchOutcome::Row(Box::new(row)))
+}
+
+fn is_merged_pr_status(status: &PrMergeStatus) -> bool {
+    status.state.eq_ignore_ascii_case("merged")
 }
 
 pub(crate) fn warm_caches_for_ready_row(
@@ -388,15 +404,60 @@ pub(crate) fn warm_caches_for_ready_row(
     }
 
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), &row.branch)? {
-        meta.pr_info = Some(PrInfo {
-            number: row.pr_number,
-            state: row.pr_state.clone(),
-            is_draft: Some(row.is_draft),
-        });
-        meta.write(repo.inner(), &row.branch)?;
+        update_ready_pr_metadata(
+            repo,
+            &row.branch,
+            &mut meta,
+            row.pr_number,
+            &row.pr_state,
+            row.is_draft,
+        )?;
     }
 
     Ok(())
+}
+
+fn warm_pr_state_for_ready_status(
+    repo: &GitRepo,
+    branch: &str,
+    status: &PrMergeStatus,
+) -> Result<()> {
+    let cache_dir = repo.common_git_dir()?;
+    let pr_state = if status.is_draft {
+        "draft".to_string()
+    } else {
+        status.state.clone()
+    };
+    CiCache::update_branch_pr(&cache_dir, branch, Some(pr_state))?;
+
+    if let Some(mut meta) = BranchMetadata::read(repo.inner(), branch)? {
+        update_ready_pr_metadata(
+            repo,
+            branch,
+            &mut meta,
+            status.number,
+            &status.state,
+            status.is_draft,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn update_ready_pr_metadata(
+    repo: &GitRepo,
+    branch: &str,
+    meta: &mut BranchMetadata,
+    number: u64,
+    state: &str,
+    is_draft: bool,
+) -> Result<()> {
+    meta.pr_info = Some(PrInfo {
+        number,
+        state: state.to_string(),
+        is_draft: Some(is_draft),
+    });
+    meta.write(repo.inner(), branch)
 }
 
 fn ready_row_pr_cache_state(row: &PrReadinessRow) -> String {
@@ -428,8 +489,8 @@ async fn fetch_readiness_rows(
 
     while let Some(result) = pending.next().await {
         match result? {
-            Some(row) => rows.push(row),
-            None => skipped += 1,
+            ReadyFetchOutcome::Row(row) => rows.push(*row),
+            ReadyFetchOutcome::NoPr | ReadyFetchOutcome::Merged => skipped += 1,
         }
     }
 
@@ -724,6 +785,19 @@ mod tests {
     }
 
     #[test]
+    fn identifies_only_merged_pr_states_as_merged_outcomes() {
+        assert!(is_merged_pr_status(&status(|s| {
+            s.state = "MeRgEd".to_string()
+        })));
+        assert!(!is_merged_pr_status(&status(|s| {
+            s.state = "OPEN".to_string()
+        })));
+        assert!(!is_merged_pr_status(&status(|s| {
+            s.state = "CLOSED".to_string()
+        })));
+    }
+
+    #[test]
     fn classifies_review_required_pr_as_ping() {
         let row = PrReadinessRow::from_status(
             "feature",
@@ -994,6 +1068,35 @@ mod tests {
         assert_eq!(pr.number, 123);
         assert_eq!(pr.state, "open");
         assert_eq!(pr.is_draft, Some(true));
+    }
+
+    #[test]
+    fn merged_ready_status_warms_pr_cache_and_branch_metadata() {
+        let (_temp, repo) = temp_repo();
+        let branch = "feature/cache-ready";
+        let meta = BranchMetadata {
+            pr_info: None,
+            ..BranchMetadata::new("main", "abc123")
+        };
+        meta.write(repo.inner(), branch).expect("write metadata");
+        let merged = status(|s| {
+            s.number = 123;
+            s.state = "merged".to_string();
+        });
+
+        warm_pr_state_for_ready_status(&repo, branch, &merged).expect("warm merged PR state");
+
+        let cache = CiCache::load(&repo.common_git_dir().expect("common git dir"));
+        let entry = cache.branches.get(branch).expect("cache entry");
+        assert_eq!(entry.pr_state.as_deref(), Some("merged"));
+
+        let updated = BranchMetadata::read(repo.inner(), branch)
+            .expect("read metadata")
+            .expect("metadata");
+        let pr = updated.pr_info.expect("pr info");
+        assert_eq!(pr.number, 123);
+        assert_eq!(pr.state, "merged");
+        assert_eq!(pr.is_draft, Some(false));
     }
 
     #[test]

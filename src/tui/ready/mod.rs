@@ -16,7 +16,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::commands::open::open_url_in_browser;
-use crate::commands::ready::{ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope};
+use crate::commands::ready::{
+    ReadyFetchOutcome, ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope,
+};
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
@@ -319,38 +321,37 @@ fn spawn_loader(scope: ReadyScope) -> Receiver<ReadyTuiUpdate> {
         };
 
         runtime.block_on(async {
-            let mut pending =
-                stream::iter(scope.branches.iter().enumerate().map(|(index, branch)| {
-                    let repo = &repo;
-                    let client = &client;
-                    let remote = &scope.remote;
-                    let stack = &stack;
-                    let branch = branch.clone();
-                    async move {
-                        (
-                            index,
-                            branch.clone(),
-                            fetch_row_for_branch(repo, client, remote, stack, &branch).await,
-                        )
-                    }
-                }))
-                .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT);
+            let mut pending = stream::iter(scope.branches.iter().map(|branch| {
+                let repo = &repo;
+                let client = &client;
+                let remote = &scope.remote;
+                let stack = &stack;
+                let branch = branch.clone();
+                async move {
+                    let result = fetch_row_for_branch(repo, client, remote, stack, &branch).await;
+                    (branch, result)
+                }
+            }))
+            .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT);
 
-            while let Some((index, branch, result)) = pending.next().await {
+            while let Some((branch, result)) = pending.next().await {
                 match result {
-                    Ok(Some(row)) => {
-                        let _ = sender.send(ReadyTuiUpdate::Loaded { index, row });
+                    Ok(ReadyFetchOutcome::Row(row)) => {
+                        let _ = sender.send(ReadyTuiUpdate::Loaded { row: *row });
                     }
-                    Ok(None) => {
+                    Ok(ReadyFetchOutcome::NoPr) => {
                         let _ = sender.send(ReadyTuiUpdate::Unavailable {
-                            index,
                             branch,
                             message: "No PR found for branch".to_string(),
                         });
                     }
+                    Ok(ReadyFetchOutcome::Merged) => {
+                        let _ = sender.send(ReadyTuiUpdate::Merged {
+                            branch: branch.name,
+                        });
+                    }
                     Err(error) => {
                         let _ = sender.send(ReadyTuiUpdate::Unavailable {
-                            index,
                             branch,
                             message: error.to_string(),
                         });
@@ -417,9 +418,8 @@ fn send_all_unavailable(
     scope: &ReadyScope,
     message: String,
 ) {
-    for (index, branch) in scope.branches.iter().enumerate() {
+    for branch in &scope.branches {
         let _ = sender.send(ReadyTuiUpdate::Unavailable {
-            index,
             branch: branch.clone(),
             message: message.clone(),
         });
