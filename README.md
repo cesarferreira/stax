@@ -329,6 +329,7 @@ st config --set-ai
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |
+| `st watch --iterations <N>` | Run exactly `N` total refreshes (`1` renders exactly once; `0` is invalid), then exit without sleeping; for `N > 1`, use `--interval <seconds>` to set the delay between refreshes |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |

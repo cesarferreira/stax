@@ -461,9 +461,14 @@ stax ci --refresh                  # Force refresh (bypass cache)
 stax ci --json                     # Machine-readable output
 stax ci --verbose                  # Compact summary cards (grouped failed/running/passed per branch)
 
+stax watch --iterations 1          # Render exactly one refresh, then exit
+stax watch --iterations N --interval <seconds>  # Run N total refreshes with a delay between them
+
 # Oneline roll-up: status icon · branch · #PR · draft/ready · title · check-count + timing.
 # Single branch shows the full per-check table; any multi-branch view defaults to oneline;
 # --verbose forces the grouped cards. --oneline conflicts with --verbose.
+
+`--iterations` counts total refreshes: `1` renders exactly once, `0` is invalid, and a bounded run never sleeps after its final refresh. For `N > 1`, use `--interval <seconds>` to set the delay between refreshes.
 
 # ~/.config/stax/config.toml
 [ci]
