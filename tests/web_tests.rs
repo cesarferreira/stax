@@ -23,6 +23,23 @@ fn web_command(cwd: &Path) -> Command {
     command
 }
 
+fn session_origin(base_url: &str) -> String {
+    base_url
+        .split("/s/")
+        .next()
+        .expect("test server URL should contain a session path")
+        .to_owned()
+}
+
+fn csrf_from_workspace(html: &str) -> String {
+    html.split(r#"id="workspace-csrf""#)
+        .nth(1)
+        .and_then(|s| s.split(r#"value=""#).nth(1))
+        .and_then(|s| s.split('"').next())
+        .expect("csrf token in workspace HTML")
+        .to_owned()
+}
+
 // ── CLI shape tests ──────────────────────────────────────────────────────────
 
 #[test]
@@ -201,6 +218,257 @@ fn web_server_serves_static_assets() {
             .await
             .unwrap();
         assert_eq!(js.status().as_u16(), 200, "htmx.min.js should return 200");
+    });
+}
+
+#[test]
+fn web_token_routes_allow_absent_and_exact_bound_origin() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+        let origin = session_origin(&server.base_url);
+
+        let absent_origin = client
+            .get(format!("{}stack", server.base_url))
+            .send()
+            .await
+            .expect("originless token route should respond");
+        assert_eq!(absent_origin.status(), 200);
+
+        let exact_origin = client
+            .get(format!("{}stack", server.base_url))
+            .header("origin", &origin)
+            .send()
+            .await
+            .expect("exact-origin token route should respond");
+        assert_eq!(exact_origin.status(), 200);
+    });
+}
+
+#[test]
+fn web_token_routes_reject_cross_site_origin_before_every_handler() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+
+        // Removing the shared token-route Origin guard must make every one of
+        // these requests reach a handler instead of returning 403.
+        for (method, path) in [
+            ("GET", ""),
+            ("GET", "stack"),
+            ("POST", "select"),
+            ("GET", "details"),
+            ("GET", "diff"),
+            ("GET", "ci"),
+            ("POST", "search"),
+            ("POST", "panes"),
+            ("POST", "theme"),
+            ("POST", "refresh"),
+            ("POST", "op/checkout"),
+            ("POST", "op/create"),
+            ("POST", "op/rename"),
+            ("POST", "op/delete"),
+            ("POST", "op/restack"),
+            ("POST", "op/submit"),
+            ("POST", "op/undo"),
+            ("POST", "op/redo"),
+            ("POST", "op/move"),
+            ("POST", "op/reorder"),
+            ("GET", "op/open-pr"),
+            ("POST", "project"),
+        ] {
+            let request = match method {
+                "GET" => client.get(format!("{}{}", server.base_url, path)),
+                "POST" => client
+                    .post(format!("{}{}", server.base_url, path))
+                    .header("content-type", "application/x-www-form-urlencoded"),
+                _ => unreachable!("test route method"),
+            };
+            let response = request
+                .header("origin", "https://attacker.example")
+                .send()
+                .await
+                .expect("cross-site request should receive a response");
+            assert_eq!(
+                response.status(),
+                403,
+                "{method} /s/{{token}}/{path} must reject a cross-site Origin before its handler"
+            );
+        }
+    });
+}
+
+#[test]
+fn web_token_routes_reject_malformed_duplicate_and_wrong_port_origins() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+        let origin = session_origin(&server.base_url);
+        let port = origin
+            .rsplit_once(':')
+            .expect("bound origin should include a port")
+            .1
+            .parse::<u16>()
+            .expect("bound origin port should be numeric");
+        let wrong_port = format!("http://127.0.0.1:{}", port.saturating_add(1));
+        let wrong_scheme = origin.replacen("http://", "https://", 1);
+        let wrong_host = format!("http://localhost:{port}");
+
+        for malformed in [
+            "null",
+            "not an origin",
+            "http://127.0.0.1:1/path",
+            "http://127.0.0.1:1, https://attacker.example",
+            &wrong_port,
+        ] {
+            let response = client
+                .get(format!("{}stack", server.base_url))
+                .header("origin", malformed)
+                .send()
+                .await
+                .expect("malformed Origin should receive a response");
+            assert_eq!(
+                response.status(),
+                403,
+                "Origin {malformed:?} must be rejected"
+            );
+        }
+
+        for (description, invalid_origin) in [
+            ("wrong scheme with the actual host and port", wrong_scheme),
+            ("wrong host with the actual scheme and port", wrong_host),
+        ] {
+            let response = client
+                .get(format!("{}stack", server.base_url))
+                .header("origin", invalid_origin)
+                .send()
+                .await
+                .expect("wrong canonical Origin component should receive a response");
+            assert_eq!(response.status(), 403, "{description} must be rejected");
+        }
+
+        let non_utf8 = reqwest::header::HeaderValue::from_bytes(b"http://127.0.0.1:\xff")
+            .expect("non-UTF-8 Origin bytes should form an HTTP header value");
+        let non_utf8_response = client
+            .get(format!("{}stack", server.base_url))
+            .header("origin", non_utf8)
+            .send()
+            .await
+            .expect("non-UTF-8 Origin should receive a response");
+        assert_eq!(
+            non_utf8_response.status(),
+            403,
+            "non-UTF-8 Origin bytes must be rejected"
+        );
+
+        let duplicate = client
+            .get(format!("{}stack", server.base_url))
+            .header("origin", &origin)
+            .header("origin", &origin)
+            .send()
+            .await
+            .expect("duplicate Origin should receive a response");
+        assert_eq!(
+            duplicate.status(),
+            403,
+            "duplicate Origin headers must be rejected"
+        );
+    });
+}
+
+#[test]
+fn web_origin_guard_preserves_host_csrf_and_static_asset_defenses() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+        let origin = session_origin(&server.base_url);
+
+        let non_local_host = client
+            .get(format!("{}stack", server.base_url))
+            .header("host", "attacker.example")
+            .send()
+            .await
+            .expect("non-local Host should receive a response");
+        assert_eq!(non_local_host.status(), 403);
+
+        let invalid_csrf = client
+            .post(format!("{}select", server.base_url))
+            .header("origin", &origin)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body("branch=main&csrf=wrong")
+            .send()
+            .await
+            .expect("invalid CSRF should receive a response");
+        assert_eq!(invalid_csrf.status(), 403);
+
+        let asset = client
+            .get(format!("{origin}/assets/app.css"))
+            .header("origin", "https://attacker.example")
+            .send()
+            .await
+            .expect("public asset should receive a response");
+        assert_eq!(
+            asset.status(),
+            200,
+            "assets must remain outside token guard"
+        );
+    });
+}
+
+#[test]
+fn web_exact_origin_and_valid_csrf_allow_select_branch() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let client = reqwest::Client::new();
+        let origin = session_origin(&server.base_url);
+        let workspace = client
+            .get(&server.base_url)
+            .send()
+            .await
+            .expect("workspace should respond")
+            .text()
+            .await
+            .expect("workspace HTML should be readable");
+        let csrf = csrf_from_workspace(&workspace);
+
+        let response = client
+            .post(format!("{}select", server.base_url))
+            .header("origin", &origin)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(format!("branch=main&csrf={csrf}"))
+            .send()
+            .await
+            .expect("valid CSRF request should respond");
+        assert_eq!(response.status(), 200);
     });
 }
 
@@ -526,12 +794,24 @@ fn web_server_bind_falls_back_when_requested_port_is_busy() {
         assert_ne!(bound.addr.port(), busy_port);
         assert_ne!(bound.addr.port(), 0);
 
-        let response = reqwest::Client::new()
+        let client = reqwest::Client::new();
+        let actual_origin = session_origin(&bound.url);
+        let response = client
             .get(&bound.url)
+            .header("origin", &actual_origin)
             .send()
             .await
             .expect("fallback server should be reachable");
         assert_eq!(response.status().as_u16(), 200);
+
+        let requested_port_origin = format!("http://127.0.0.1:{busy_port}");
+        let wrong_port = client
+            .get(&bound.url)
+            .header("origin", requested_port_origin)
+            .send()
+            .await
+            .expect("wrong-port Origin should receive a response");
+        assert_eq!(wrong_port.status(), 403);
 
         bound.join_handle.abort();
         drop(busy_listener);
@@ -556,6 +836,14 @@ fn web_server_bind_reports_no_fallback_for_ephemeral_port() {
         assert_eq!(bound.requested_port, 0);
         assert!(!bound.fell_back);
         assert_ne!(bound.addr.port(), 0);
+
+        let requested_ephemeral_origin = reqwest::Client::new()
+            .get(&bound.url)
+            .header("origin", "http://127.0.0.1:0")
+            .send()
+            .await
+            .expect("requested ephemeral-port Origin should receive a response");
+        assert_eq!(requested_ephemeral_origin.status(), 403);
 
         bound.join_handle.abort();
     });

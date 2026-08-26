@@ -101,7 +101,7 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 - Binds **127.0.0.1 only** — not accessible on the network.
 - Every URL contains an **unguessable 48-hex session token**: `/s/<token>/…`.
 - Every mutating POST requires a matching **CSRF token** (`csrf` form field). Requests with wrong CSRF return `403 Forbidden`.
-- Non-local `Host` / `Origin` headers are rejected with `403 Forbidden`.
+- `Host` must be `127.0.0.1` or `localhost`. An absent `Origin` is allowed for navigation and non-browser clients; when present, exactly one `Origin` header must equal `http://127.0.0.1:<actual-bound-port>`. Cross-site, malformed, duplicate, and wrong-port Origins return `403 Forbidden`.
 - Only **one mutation at a time** — mutating controls are disabled while an operation is in flight.
 - `--host` flag is intentionally absent — you cannot expose this server to the network.
 

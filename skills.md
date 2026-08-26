@@ -172,7 +172,7 @@ Key properties:
 - Binds **127.0.0.1 only** — never reachable from the network; no `--host` flag
 - Unguessable 48-hex session token in every URL: `/s/<token>/…`
 - CSRF token required on all mutating POSTs; wrong token → 403
-- Non-local `Host`/`Origin` headers → 403
+- `Host` must be local. Originless requests are allowed; if sending `Origin`, use exactly `http://127.0.0.1:<actual-bound-port>` from the printed URL. Cross-site, malformed, duplicate, and wrong-port Origins → 403; this does not replace the session token or CSRF requirement.
 - One mutation at a time; mutating controls disabled while op is in flight
 - Session state is in-memory; server restart generates a new URL
 

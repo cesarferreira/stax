@@ -32,10 +32,10 @@ pub struct BoundServer {
 /// the returned `BoundServer`. All other bind failures are returned as errors.
 pub async fn bind(port: u16, session: SharedSession) -> Result<BoundServer> {
     let token = session.lock().unwrap().session_token.clone();
-    let router = build_router(session);
-
     let (listener, fell_back) = bind_listener(port).await?;
     let bound_addr = listener.local_addr()?;
+    let allowed_origin = format!("http://127.0.0.1:{}", bound_addr.port());
+    let router = build_router(session, allowed_origin);
     let url = format!("http://127.0.0.1:{}/s/{}/", bound_addr.port(), token);
 
     let join_handle = tokio::spawn(async move {

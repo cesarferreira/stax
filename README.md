@@ -294,7 +294,7 @@ st web --port 0   # ephemeral port
 st web --no-open  # start without opening browser; prints URL
 ```
 
-Binds 127.0.0.1 only with an unguessable session token in the URL, CSRF protection on every mutating POST, and one-mutation-at-a-time enforcement. No `--host` flag — it cannot be exposed to the network.
+Binds 127.0.0.1 only with an unguessable session token in the URL, CSRF protection on every mutating POST, and one-mutation-at-a-time enforcement. Requests without an `Origin` remain supported; when present, `Origin` must exactly match `http://127.0.0.1:<actual-bound-port>`. No `--host` flag — it cannot be exposed to the network.
 
 → [Web workspace guide](docs/interface/web.md)
 
