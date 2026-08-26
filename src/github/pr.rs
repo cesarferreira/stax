@@ -1013,7 +1013,8 @@ impl GitHubClient {
         let data: PrReviewData = self
             .graphql_data(serde_json::json!({ "query": query }))
             .await
-            .context("Failed to query PR reviews")?;
+            .context("Failed to query PR reviews")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         let repository = data
             .repository
@@ -1124,7 +1125,8 @@ impl GitHubClient {
             .octocrab
             .get(&url, None::<&()>)
             .await
-            .context("Failed to list issue comments")?;
+            .context("Failed to list issue comments")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         Ok(comments
             .into_iter()
@@ -1161,7 +1163,8 @@ impl GitHubClient {
             .octocrab
             .get(&url, None::<&()>)
             .await
-            .context("Failed to list review comments")?;
+            .context("Failed to list review comments")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         Ok(comments
             .into_iter()
@@ -2170,6 +2173,117 @@ mod tests {
             .unwrap();
 
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    fn assert_auth_hint(err: anyhow::Error, operation: &str) {
+        let msg = format!("{:#}", err);
+        assert!(msg.contains(operation), "missing operation context: {msg}");
+        assert!(msg.contains("Not Found"), "missing GitHub error: {msg}");
+        assert!(
+            msg.contains("token is expired"),
+            "missing token hint: {msg}"
+        );
+        assert!(
+            msg.contains("stax auth --from-gh"),
+            "missing remediation: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_review_decision_enriches_not_found_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_pr_review_decision(11)
+            .await
+            .expect_err("404 review query should fail");
+        assert_auth_hint(err, "Failed to query PR reviews");
+    }
+
+    #[tokio::test]
+    async fn list_issue_comments_enriches_not_found_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues/11/comments"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .list_issue_comments(11)
+            .await
+            .expect_err("404 issue comments should fail");
+        assert_auth_hint(err, "Failed to list issue comments");
+    }
+
+    #[tokio::test]
+    async fn list_review_comments_enriches_not_found_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11/comments"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .list_review_comments(11)
+            .await
+            .expect_err("404 review comments should fail");
+        assert_auth_hint(err, "Failed to list review comments");
+    }
+
+    #[tokio::test]
+    async fn direct_get_pr_not_found_does_not_gain_auth_hint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client.get_pr(11).await.expect_err("missing PR should fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("Failed to get PR"), "{msg}");
+        assert!(msg.contains("Not Found"), "{msg}");
+        assert!(!msg.contains("stax auth --from-gh"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn merge_pr_not_found_does_not_gain_auth_hint() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-owner/test-repo/pulls/11/merge"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .merge_pr(11, MergeMethod::Squash, None, None, None)
+            .await
+            .expect_err("missing merge target should fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("Not Found"), "{msg}");
+        assert!(!msg.contains("stax auth --from-gh"), "{msg}");
     }
 
     fn issue_comment_fixture(id: u64, body: &str) -> serde_json::Value {

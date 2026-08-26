@@ -376,7 +376,12 @@ impl GitHubClient {
             self.owner, self.repo, username
         );
 
-        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to get recently merged PRs")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         let merged: Vec<PrActivity> = response
             .items
@@ -413,7 +418,12 @@ impl GitHubClient {
             self.owner, self.repo, username
         );
 
-        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to get recently opened PRs")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         let opened: Vec<PrActivity> = response
             .items
@@ -445,7 +455,12 @@ impl GitHubClient {
             self.owner, self.repo, username
         );
         self.record_api_call("search.issues");
-        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to search PRs for received reviews")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         let mut reviews = Vec::new();
 
@@ -513,7 +528,8 @@ impl GitHubClient {
             .octocrab
             .get(&url, None::<&()>)
             .await
-            .context("Failed to search PRs")?;
+            .context("Failed to search PRs")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         // For each PR from search, we need to get the branch info
         // Search API doesn't include head/base branch refs, so we fetch each PR
@@ -684,6 +700,125 @@ mod tests {
             .unwrap();
 
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    fn assert_auth_hint(err: anyhow::Error, operation: &str, github_error: &str) {
+        let msg = format!("{:#}", err);
+        assert!(msg.contains(operation), "missing operation context: {msg}");
+        assert!(
+            msg.contains(github_error),
+            "missing original GitHub error: {msg}"
+        );
+        assert!(
+            msg.contains("token is expired"),
+            "missing token hint: {msg}"
+        );
+        assert!(
+            msg.contains("stax auth --from-gh"),
+            "missing remediation: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_merged_prs_enriches_unauthorized_search_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "Bad credentials"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_recent_merged_prs(24, "alice")
+            .await
+            .expect_err("401 search should fail");
+        assert_auth_hint(err, "Failed to get recently merged PRs", "Bad credentials");
+    }
+
+    #[tokio::test]
+    async fn recent_opened_prs_enriches_not_found_search_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_recent_opened_prs(24, "alice")
+            .await
+            .expect_err("404 search should fail");
+        assert_auth_hint(err, "Failed to get recently opened PRs", "Not Found");
+    }
+
+    #[tokio::test]
+    async fn reviews_received_enriches_unauthorized_initial_search_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "Bad credentials"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_reviews_received(24, "alice")
+            .await
+            .expect_err("401 search should fail");
+        assert_auth_hint(
+            err,
+            "Failed to search PRs for received reviews",
+            "Bad credentials",
+        );
+    }
+
+    #[tokio::test]
+    async fn user_open_prs_enriches_not_found_initial_search_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_user_open_prs("alice")
+            .await
+            .expect_err("404 search should fail");
+        assert_auth_hint(err, "Failed to search PRs", "Not Found");
+    }
+
+    #[tokio::test]
+    async fn recent_merged_prs_does_not_mislabel_server_error_as_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "message": "temporary failure"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = create_test_client(&server).await;
+        let err = client
+            .get_recent_merged_prs(24, "alice")
+            .await
+            .expect_err("500 search should fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("Failed to get recently merged PRs"), "{msg}");
+        assert!(msg.contains("temporary failure"), "{msg}");
+        assert!(!msg.contains("stax auth --from-gh"), "{msg}");
     }
 
     /// `get_user_open_prs` reads `number`, `head.ref` and `base.ref` off each

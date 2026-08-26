@@ -564,6 +564,13 @@ stax skills update                 # Download latest skills from GitHub and upda
 stax skills update --dry-run       # Preview what would be updated without writing
 ```
 
+GitHub `401`/`404` errors on repository searches or already-resolved
+review/comment reads can mean the token is expired or lacks private-repository
+access. Follow stax's auth hint: run `stax auth --from-gh`, then verify token
+scopes and repository access. Do not treat every 404 as an auth failure: direct
+missing-PR lookups and mutations deliberately retain their resource-level
+errors.
+
 ## Common Workflows
 
 ### Start a New Feature Stack

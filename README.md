@@ -136,6 +136,13 @@ export STAX_GITHUB_TOKEN="ghp_xxxx"
 
 By default stax ignores ambient `GITHUB_TOKEN`. Opt in with `auth.allow_github_token_env = true`.
 
+GitHub may report `401 Unauthorized` or `404 Not Found` when a token is expired
+or cannot access a private repository. For repository searches and
+already-resolved review/comment reads, stax adds an auth hint; refresh with
+`st auth --from-gh` or check the token's repository access and scopes. The hint
+is intentionally not attached to every missing PR or failed mutation, where a
+404 can be the expected resource-level error.
+
 </details>
 
 Now ship a two-branch stack end-to-end:
