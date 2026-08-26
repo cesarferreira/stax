@@ -29,6 +29,17 @@ struct QueueBranchInfo {
     original_base: String,
 }
 
+fn duration_from_seconds(seconds: u64) -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(milliseconds_per_second) = std::env::var_os("STAX_TEST_MILLIS_PER_SECOND")
+        .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
+    {
+        return Duration::from_millis(seconds.saturating_mul(milliseconds_per_second));
+    }
+
+    Duration::from_secs(seconds)
+}
+
 pub fn run(
     all: bool,
     timeout: u64,
@@ -385,24 +396,35 @@ pub fn run(
         println!();
     }
 
-    let timeout_duration = Duration::from_secs(timeout * 60);
-    let poll_interval = Duration::from_secs(interval);
+    let timeout_duration = duration_from_seconds(timeout * 60);
+    let poll_interval = duration_from_seconds(interval);
     let start = Instant::now();
     let mut pending: Vec<(String, u64)> =
         enqueued.iter().map(|(b, pr, _)| (b.clone(), *pr)).collect();
     let mut timed_out = false;
 
-    while !pending.is_empty() {
-        std::thread::sleep(poll_interval);
+    'pending: while !pending.is_empty() {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout_duration {
+            timed_out = true;
+            break;
+        }
+
+        std::thread::sleep(poll_interval.min(timeout_duration - elapsed));
 
         let elapsed = start.elapsed();
-        if elapsed > timeout_duration {
+        if elapsed >= timeout_duration {
             timed_out = true;
             break;
         }
 
         let mut still_pending = Vec::new();
         for (branch, pr) in &pending {
+            if start.elapsed() >= timeout_duration {
+                timed_out = true;
+                break 'pending;
+            }
+
             match rt.block_on(async { client.is_pr_merged(*pr).await }) {
                 Ok(true) => {
                     if !quiet {

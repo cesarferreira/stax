@@ -313,12 +313,15 @@ stax merge --stack --when-ready    # Wait only for selected tip PR/MR readiness 
 stax merge --when-ready            # Wait for CI + approval before each merge
 stax merge --remote                # Merge via GitHub API only — no local checkout/rebase/push
 stax merge --remote --all          # Include full stack (GitHub only)
-stax merge --interval 30           # Poll interval in seconds for --when-ready / --remote / --stack --when-ready
+stax merge --interval 30           # Positive poll seconds for --when-ready / --remote / --queue / --stack --when-ready
 stax merge --no-wait               # Fail fast if CI is pending
-stax merge --timeout 60            # Max wait minutes per PR
+stax merge --timeout 60            # Positive max-wait minutes (default 30; zero is rejected)
 stax merge --no-delete             # Keep branches after merge
 stax merge --no-sync               # Skip post-merge sync
 stax merge-when-ready              # Backward-compatible alias
+
+# For merge --queue, timeout is a hard polling deadline: cap the final sleep to
+# the remaining budget and never poll the forge at or after the deadline.
 
 stax rs                            # Sync trunk + clean merged branches
 stax rs --restack                  # Sync then restack
