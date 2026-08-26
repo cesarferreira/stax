@@ -230,6 +230,10 @@ pub struct AiFeatureConfig {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -256,7 +260,7 @@ pub struct AiConfig {
 
 impl AiFeatureConfig {
     pub fn is_empty(&self) -> bool {
-        self.agent.is_none() && self.model.is_none()
+        self.agent.is_none() && self.model.is_none() && self.title.is_none() && self.body.is_none()
     }
 }
 
@@ -573,6 +577,11 @@ impl Config {
         }
     }
 
+    /// Load only the global config, without applying a repository overlay.
+    pub(crate) fn load_global() -> Result<Self> {
+        Self::load_path_or_default(&Self::path()?)
+    }
+
     /// Load global config with the selected repository's `stax.toml` overlay.
     ///
     /// `STAX_CONFIG_DIR` intentionally keeps its existing test-isolation
@@ -696,17 +705,50 @@ impl Config {
     pub fn clear_ai_defaults(&mut self) -> bool {
         let had_saved_defaults = self.ai.agent.is_some()
             || self.ai.model.is_some()
-            || !self.ai.generate.is_empty()
-            || !self.ai.standup.is_empty()
-            || !self.ai.resolve.is_empty()
-            || !self.ai.lane.is_empty();
+            || self.ai.generate.agent.is_some()
+            || self.ai.generate.model.is_some()
+            || self.ai.standup.agent.is_some()
+            || self.ai.standup.model.is_some()
+            || self.ai.resolve.agent.is_some()
+            || self.ai.resolve.model.is_some()
+            || self.ai.lane.agent.is_some()
+            || self.ai.lane.model.is_some();
         self.ai.agent = None;
         self.ai.model = None;
-        self.ai.generate = AiFeatureConfig::default();
-        self.ai.standup = AiFeatureConfig::default();
-        self.ai.resolve = AiFeatureConfig::default();
-        self.ai.lane = AiFeatureConfig::default();
+        self.ai.generate.agent = None;
+        self.ai.generate.model = None;
+        self.ai.standup.agent = None;
+        self.ai.standup.model = None;
+        self.ai.resolve.agent = None;
+        self.ai.resolve.model = None;
+        self.ai.lane.agent = None;
+        self.ai.lane.model = None;
         had_saved_defaults
+    }
+
+    /// Update the effective config for immediate use while persisting only the
+    /// selected agent/model keys to the global config.
+    pub(crate) fn persist_ai_selection(
+        &mut self,
+        feature: &str,
+        agent: &str,
+        model: Option<String>,
+    ) -> Result<()> {
+        Self::set_ai_selection(self, feature, agent, model.clone());
+
+        let mut global = Self::load_global()?;
+        Self::set_ai_selection(&mut global, feature, agent, model);
+        global.save()
+    }
+
+    fn set_ai_selection(config: &mut Self, feature: &str, agent: &str, model: Option<String>) {
+        if let Some(feature_config) = config.ai.feature_config_mut(feature) {
+            feature_config.agent = Some(agent.to_string());
+            feature_config.model = model;
+        } else {
+            config.ai.agent = Some(agent.to_string());
+            config.ai.model = model;
+        }
     }
 
     /// Get GitHub token (from env var, credentials file, or gh cli)

@@ -91,7 +91,7 @@ fn set_ai_interactive() -> Result<()> {
         .interact()?;
 
     let (feature, _) = FEATURES[selection];
-    let mut config = Config::load()?;
+    let mut config = Config::load_global()?;
     generate::prompt_for_feature_ai(&mut config, feature)?;
 
     Ok(())
@@ -99,7 +99,7 @@ fn set_ai_interactive() -> Result<()> {
 
 fn reset_ai_defaults(no_prompt: bool, yes: bool) -> Result<()> {
     let path = Config::path()?;
-    let mut config = Config::load()?;
+    let mut config = Config::load_global()?;
 
     if !yes && std::io::stdin().is_terminal() {
         let confirmed = Confirm::with_theme(&ColorfulTheme::default())

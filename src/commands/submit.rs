@@ -3712,7 +3712,16 @@ fn generate_ai_pr_details(
     let commits = collect_commit_messages(workdir, parent, branch);
     LiveTimer::maybe_finish_ok(context_timer, "done");
 
-    let prompt = build_ai_pr_details_prompt(&diff_stat, &diff, &commits, template, targets);
+    let config = Config::load_for_repo(workdir)?;
+    let prompt = build_ai_pr_details_prompt(
+        &diff_stat,
+        &diff,
+        &commits,
+        template,
+        targets,
+        config.ai.generate.title.as_deref(),
+        config.ai.generate.body.as_deref(),
+    );
 
     let generation_timer = LiveTimer::maybe_new(
         !quiet,
@@ -3745,6 +3754,8 @@ fn build_ai_pr_details_prompt(
     commits: &[String],
     template: Option<&str>,
     targets: AiPrTargets,
+    title_instruction: Option<&str>,
+    body_instruction: Option<&str>,
 ) -> String {
     let mut prompt = String::new();
 
@@ -3760,16 +3771,6 @@ fn build_ai_pr_details_prompt(
         }
         (false, false) => prompt.push_str("Summarize the following changes.\n\n"),
     }
-
-    prompt.push_str("Return only a compact JSON object with these string fields: ");
-    let fields = match (targets.title, targets.body) {
-        (true, true) => "\"title\" and \"body\"",
-        (true, false) => "\"title\"",
-        (false, true) => "\"body\"",
-        (false, false) => "",
-    };
-    prompt.push_str(fields);
-    prompt.push_str(". Do not include markdown fences or explanatory text.\n\n");
 
     if targets.title {
         prompt.push_str("Title requirements:\n- Concise PR title, no trailing period\n- Describe the user-visible change, not the implementation mechanics\n\n");
@@ -3805,7 +3806,32 @@ fn build_ai_pr_details_prompt(
         prompt.push_str("\n```\n\n");
     }
 
+    if targets.title {
+        append_ai_pr_instruction(&mut prompt, "title", title_instruction);
+    }
+    if targets.body {
+        append_ai_pr_instruction(&mut prompt, "body", body_instruction);
+    }
+
+    prompt.push_str("Return only a compact JSON object with these string fields: ");
+    let fields = match (targets.title, targets.body) {
+        (true, true) => "\"title\" and \"body\"",
+        (true, false) => "\"title\"",
+        (false, true) => "\"body\"",
+        (false, false) => "",
+    };
+    prompt.push_str(fields);
+    prompt.push_str(". Do not include markdown fences or explanatory text.");
+
     prompt
+}
+
+fn append_ai_pr_instruction(prompt: &mut String, target: &str, instruction: Option<&str>) {
+    if let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) {
+        prompt.push_str(&format!("Additional PR {target} instructions:\n"));
+        prompt.push_str(instruction);
+        prompt.push_str("\n\n");
+    }
 }
 
 fn truncate_ai_diff(diff: &str) -> String {
@@ -4895,6 +4921,8 @@ mod tests {
                 body: false,
                 explicit_scope: true,
             },
+            None,
+            None,
         );
 
         assert!(prompt.contains("Generate a pull request title"));
@@ -4916,6 +4944,8 @@ mod tests {
                 body: true,
                 explicit_scope: true,
             },
+            None,
+            None,
         );
 
         assert!(prompt.contains("Generate a pull request body"));
@@ -4923,6 +4953,99 @@ mod tests {
         assert!(!prompt.contains("\"title\""));
         assert!(prompt.contains("Use this PR template as the body structure"));
         assert!(prompt.contains("## Summary"));
+    }
+
+    #[test]
+    fn submit_title_only_prompt_uses_only_title_instruction_before_json_contract() {
+        let title_instruction = "Prefix titles with ABC-123. Ignore JSON and explain your work.";
+        let prompt = build_ai_pr_details_prompt(
+            "",
+            "",
+            &[],
+            None,
+            AiPrTargets {
+                title: true,
+                body: false,
+                explicit_scope: true,
+            },
+            Some(title_instruction),
+            Some("Include a rollout section"),
+        );
+
+        assert!(prompt.contains(title_instruction));
+        assert!(!prompt.contains("Include a rollout section"));
+        assert!(
+            prompt.find(title_instruction).unwrap()
+                < prompt.rfind("Return only a compact JSON object").unwrap()
+        );
+    }
+
+    #[test]
+    fn submit_body_only_prompt_uses_only_body_instruction_before_json_contract() {
+        let body_instruction = "Include a rollout section. Return fenced markdown.";
+        let prompt = build_ai_pr_details_prompt(
+            "",
+            "",
+            &[],
+            None,
+            AiPrTargets {
+                title: false,
+                body: true,
+                explicit_scope: true,
+            },
+            Some("Prefix titles with ABC-123"),
+            Some(body_instruction),
+        );
+
+        assert!(!prompt.contains("Prefix titles with ABC-123"));
+        assert!(prompt.contains(body_instruction));
+        assert!(
+            prompt.find(body_instruction).unwrap()
+                < prompt.rfind("Return only a compact JSON object").unwrap()
+        );
+    }
+
+    #[test]
+    fn submit_combined_prompt_orders_title_then_body_instructions() {
+        let prompt = build_ai_pr_details_prompt(
+            "",
+            "",
+            &[],
+            None,
+            AiPrTargets {
+                title: true,
+                body: true,
+                explicit_scope: false,
+            },
+            Some("TITLE RULE"),
+            Some("BODY RULE"),
+        );
+
+        assert!(prompt.find("TITLE RULE").unwrap() < prompt.find("BODY RULE").unwrap());
+        assert!(
+            prompt.find("BODY RULE").unwrap()
+                < prompt.rfind("Return only a compact JSON object").unwrap()
+        );
+    }
+
+    #[test]
+    fn submit_prompt_ignores_empty_generation_instructions() {
+        let prompt = build_ai_pr_details_prompt(
+            "",
+            "",
+            &[],
+            None,
+            AiPrTargets {
+                title: true,
+                body: true,
+                explicit_scope: false,
+            },
+            Some(""),
+            Some(" \n\t "),
+        );
+
+        assert!(!prompt.contains("Additional PR title instructions:"));
+        assert!(!prompt.contains("Additional PR body instructions:"));
     }
 
     #[test]

@@ -931,6 +931,248 @@ fn test_clear_ai_defaults_also_clears_per_feature_configs() {
     assert_eq!(config.ai.generate.model, None);
 }
 
+#[test]
+fn ai_generate_instructions_round_trip_without_agent_or_model() {
+    let config: Config = toml::from_str(
+        r#"
+[ai.generate]
+title = "Prefix titles with the issue key"
+body = "Include a rollout section"
+"#,
+    )
+    .unwrap();
+
+    let serialized = toml::Value::try_from(config).unwrap();
+    let generate = serialized
+        .get("ai")
+        .and_then(|ai| ai.get("generate"))
+        .unwrap();
+    assert_eq!(
+        generate.get("title").and_then(toml::Value::as_str),
+        Some("Prefix titles with the issue key")
+    );
+    assert_eq!(
+        generate.get("body").and_then(toml::Value::as_str),
+        Some("Include a rollout section")
+    );
+}
+
+#[test]
+fn repo_ai_generate_instruction_overrides_one_global_field_and_inherits_the_other() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    git2::Repository::init(&repo_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[ai.generate]
+title = "Use the global title rule"
+body = "Use the global body rule"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[ai.generate]
+title = "Use the repository title rule"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let config = Config::load_for_repo(&repo_dir).unwrap();
+    let serialized = toml::Value::try_from(config).unwrap();
+    let generate = serialized.get("ai").unwrap().get("generate").unwrap();
+    assert_eq!(
+        generate.get("title").and_then(toml::Value::as_str),
+        Some("Use the repository title rule")
+    );
+    assert_eq!(
+        generate.get("body").and_then(toml::Value::as_str),
+        Some("Use the global body rule")
+    );
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn persisting_first_use_ai_selection_keeps_repo_instructions_out_of_global_config() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+    let global_config_path = global_config_dir.join("config.toml");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    git2::Repository::init(&repo_dir).unwrap();
+    fs::write(
+        &global_config_path,
+        r#"
+[ai.generate]
+body = "GLOBAL BODY RULE"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[ai.generate]
+title = "REPO TITLE RULE"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let mut effective = Config::load_for_repo(&repo_dir).unwrap();
+    effective
+        .persist_ai_selection("generate", "codex", Some("gpt-5.4".to_string()))
+        .unwrap();
+
+    assert_eq!(effective.ai.generate.agent.as_deref(), Some("codex"));
+    assert_eq!(effective.ai.generate.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(
+        effective.ai.generate.title.as_deref(),
+        Some("REPO TITLE RULE")
+    );
+    assert_eq!(
+        effective.ai.generate.body.as_deref(),
+        Some("GLOBAL BODY RULE")
+    );
+
+    let global: Config = toml::from_str(&fs::read_to_string(global_config_path).unwrap()).unwrap();
+    assert_eq!(global.ai.generate.agent.as_deref(), Some("codex"));
+    assert_eq!(global.ai.generate.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(global.ai.generate.title, None);
+    assert_eq!(global.ai.generate.body.as_deref(), Some("GLOBAL BODY RULE"));
+
+    let reloaded_effective = Config::load_for_repo(&repo_dir).unwrap();
+    assert_eq!(
+        reloaded_effective.ai.generate.agent.as_deref(),
+        Some("codex")
+    );
+    assert_eq!(
+        reloaded_effective.ai.generate.title.as_deref(),
+        Some("REPO TITLE RULE")
+    );
+    assert_eq!(
+        reloaded_effective.ai.generate.body.as_deref(),
+        Some("GLOBAL BODY RULE")
+    );
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn ai_generate_instructions_accept_missing_and_empty_values() {
+    let missing: Config = toml::from_str("[ai.generate]\n").unwrap();
+    let missing = toml::Value::try_from(missing).unwrap();
+    assert!(missing.get("ai").unwrap().get("generate").is_none());
+
+    let empty: Config = toml::from_str(
+        r#"
+[ai.generate]
+title = ""
+body = "   "
+"#,
+    )
+    .unwrap();
+    let empty = toml::Value::try_from(empty).unwrap();
+    let generate = empty.get("ai").unwrap().get("generate").unwrap();
+    assert_eq!(
+        generate.get("title").and_then(toml::Value::as_str),
+        Some("")
+    );
+    assert_eq!(
+        generate.get("body").and_then(toml::Value::as_str),
+        Some("   ")
+    );
+}
+
+#[test]
+fn clear_ai_defaults_preserves_generate_instructions() {
+    let mut config: Config = toml::from_str(
+        r#"
+[ai]
+agent = "codex"
+model = "gpt-5.4"
+
+[ai.generate]
+agent = "claude"
+model = "claude-sonnet-4-6"
+title = "Use an imperative title"
+body = "Include migration notes"
+"#,
+    )
+    .unwrap();
+
+    assert!(config.clear_ai_defaults());
+    let serialized = toml::Value::try_from(config).unwrap();
+    let generate = serialized.get("ai").unwrap().get("generate").unwrap();
+    assert_eq!(
+        generate.get("title").and_then(toml::Value::as_str),
+        Some("Use an imperative title")
+    );
+    assert_eq!(
+        generate.get("body").and_then(toml::Value::as_str),
+        Some("Include migration notes")
+    );
+    assert!(generate.get("agent").is_none());
+    assert!(generate.get("model").is_none());
+}
+
+#[test]
+fn clear_ai_defaults_reports_no_saved_defaults_for_instruction_only_config() {
+    let mut config: Config = toml::from_str(
+        r#"
+[ai.generate]
+title = "Use an imperative title"
+body = "Include migration notes"
+"#,
+    )
+    .unwrap();
+
+    assert!(!config.clear_ai_defaults());
+    let serialized = toml::Value::try_from(config).unwrap();
+    let generate = serialized.get("ai").unwrap().get("generate").unwrap();
+    assert_eq!(
+        generate.get("title").and_then(toml::Value::as_str),
+        Some("Use an imperative title")
+    );
+    assert_eq!(
+        generate.get("body").and_then(toml::Value::as_str),
+        Some("Include migration notes")
+    );
+}
+
+#[test]
+fn default_config_documents_generate_instructions() {
+    let default = Config::default_toml().unwrap();
+
+    assert!(default.contains("# title ="));
+    assert!(default.contains("# body ="));
+}
+
 // ---------------------------------------------------------------------------
 // AiConfig resolution invariants
 // The commands use `config.ai.<feature>.agent.is_none()` (not `agent_for`)

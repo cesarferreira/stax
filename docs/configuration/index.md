@@ -85,6 +85,8 @@ single_stack = "on"    # "on" | "off"
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai
 # agent = "codex"
 # model = "o4-mini"
+# title = "Prefix PR titles with the issue key"
+# body = "Include testing and rollout sections"
 
 [ai.standup]    # st standup --ai
 # agent = "gemini"
@@ -157,6 +159,23 @@ For AI-powered commands, agent and model are resolved in this order:
 
 > **Note:** `[ai.lane]` intentionally does not fall back to `[ai].model`. Interactive coding agents are a different workload from one-shot generation; a cheap model set for `st generate` should not silently apply to a long-running `st lane` session.
 
+### PR title and body instructions
+
+`[ai.generate]` accepts optional `title` and `body` instruction strings for repository writing conventions:
+
+```toml
+[ai.generate]
+title = "Prefix titles with the issue key and use imperative mood"
+body = """
+Include a Testing section.
+Call out migrations and rollout risk when applicable.
+"""
+```
+
+Set these in `~/.config/stax/config.toml` for global defaults or in a repo-root `stax.toml` for project rules. Repository values overlay matching global values one field at a time, so a repository can override `title` while inheriting the global `body` instruction. Missing, empty, and whitespace-only values add no instructions to prompts.
+
+The `title` instruction applies to `st generate --pr-title` and title generation in `st submit --ai`. The `body` instruction applies to `st generate --pr-body` and body generation in `st submit --ai`. They do not affect `st generate --commit-msg`, branch names, or other AI features. Stax appends its built-in JSON-only or markdown-only output rule after custom instructions, so that output contract remains authoritative.
+
 ### "Using …" confirmation
 
 When stax invokes an AI agent it prints a confirmation line to stderr:
@@ -172,6 +191,8 @@ When stax invokes an AI agent it prints a confirmation line to stderr:
 st config --reset-ai              # clear + re-prompt
 st config --reset-ai --no-prompt  # clear only
 ```
+
+Reset clears saved global and per-feature agent/model choices. It preserves `title` and `body` instructions.
 
 ## CI watch alerts
 

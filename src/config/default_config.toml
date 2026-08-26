@@ -57,6 +57,8 @@
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai
 # agent = "codex"
 # model = "o4-mini"
+# title = "Prefix PR titles with the issue key"
+# body = "Include testing and rollout sections"
 
 [ai.standup]    # st standup --ai
 # agent = "gemini"

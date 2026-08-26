@@ -1567,6 +1567,57 @@ fn test_config_reset_ai_no_prompt_clears_saved_defaults() {
 }
 
 #[test]
+fn test_config_reset_ai_from_repo_does_not_promote_repo_instructions_to_global_config() {
+    let temp_dir = tempdir().unwrap();
+    let home_dir = temp_dir.path().join("home");
+    let repo_dir = temp_dir.path().join("repo");
+    let config_dir = home_dir.join(".config").join("stax");
+    let global_config_path = config_dir.join("config.toml");
+    let repo_config_path = repo_dir.join("stax.toml");
+
+    fs::create_dir_all(&config_dir).unwrap();
+    git2::Repository::init(&repo_dir).unwrap();
+    fs::write(
+        &global_config_path,
+        r#"
+[ai]
+agent = "codex"
+
+[ai.generate]
+body = "GLOBAL BODY RULE"
+"#,
+    )
+    .unwrap();
+    let repo_config = r#"
+[ai.generate]
+title = "REPO TITLE RULE"
+"#;
+    fs::write(&repo_config_path, repo_config).unwrap();
+
+    let output = Command::new(stax_bin())
+        .args(["config", "--reset-ai", "--no-prompt", "--yes"])
+        .current_dir(&repo_dir)
+        .env("HOME", &home_dir)
+        .env_remove("STAX_CONFIG_DIR")
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+
+    let global: toml::Value =
+        toml::from_str(&fs::read_to_string(&global_config_path).unwrap()).unwrap();
+    let global_ai = global.get("ai").unwrap();
+    let global_generate = global_ai.get("generate").unwrap();
+    assert!(global_ai.get("agent").is_none());
+    assert_eq!(
+        global_generate.get("body").and_then(toml::Value::as_str),
+        Some("GLOBAL BODY RULE")
+    );
+    assert!(global_generate.get("title").is_none());
+    assert_eq!(fs::read_to_string(&repo_config_path).unwrap(), repo_config);
+}
+
+#[test]
 fn test_init_help_includes_trunk_flag() {
     let output = stax(&["init", "--help"]);
     assert!(output.status.success());
