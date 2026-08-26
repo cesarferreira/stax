@@ -728,7 +728,7 @@ pub fn push_error_indicates_no_write_access(msg: &str) -> bool {
 /// fork/upstream branch has diverged from what we last saw.
 pub fn push_error_indicates_stale_lease(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
-    lower.contains("stale info") || lower.contains("(stale info)")
+    lower.contains("stale info")
 }
 
 fn execute_prepared_submit_inner(

@@ -312,9 +312,10 @@ fork_remote = "fork"      # optional: reuse an existing git remote you added you
 Or use `stax branch submit --fork` for a one-off. When enabled:
 
 - stax reuses a pushable fork under your GitHub login, or creates one via the GitHub API when none exists.
-- the branch is pushed with `--force-with-lease` (no bare `--force`); a diverged fork branch fails actionably rather than silently overwriting it.
-- the PR is opened with head `<fork_owner>:<branch>` and `maintainer_can_modify = true`.
-- an existing git remote named `fork` is never silently repointed; the run fails if its URL conflicts.
+- the branch is pushed with `--force-with-lease` (never a bare `--force`); the first time stax publishes a branch to your fork it refuses to overwrite an existing fork branch whose tip is not already contained in your local branch. stax records what it published in `refs/stax/fork-published/<remote>/<branch>` so later restacks still force-push cleanly.
+- the PR is opened with head `<fork_owner>:<branch>`; `maintainer_can_modify` is set on fork PRs only.
+- an existing fork remote (`fork`, or your `remote.fork_remote` name) is never silently repointed; the run fails before any fork is created on GitHub.
+- when stax creates the fork for you, it waits for GitHub to finish creating the repo (fork creation is asynchronous) before pushing, up to ~2 minutes.
 
 Supported forges: GitHub only. Fork fallback rejects GitLab/Gitea cleanly.
 Scope: single branch only. A multi-branch stack cannot be submitted from a fork because a stacked child PR's base branch cannot live in the upstream repo.

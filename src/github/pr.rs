@@ -520,7 +520,10 @@ impl GitHubClient {
             .create(title, branch, base)
             .body(body)
             .draft(Some(draft))
-            .maintainer_can_modify(true)
+            // Only fork PRs need this: `branch` is `<owner>:<branch>` for a fork head and
+            // never contains ':' for a same-repo head. Org-owned forks 422 when this is set
+            // on a same-repo PR, so gate it to the fork case.
+            .maintainer_can_modify(branch.contains(':'))
             .send()
             .await
             .context("Failed to create PR")?;

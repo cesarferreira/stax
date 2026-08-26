@@ -50,6 +50,45 @@ mod unix {
             .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
                 "message": "Not Found",
             })))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(mock_server)
+            .await;
+    }
+
+    /// Before either guard under test runs, submit always calls
+    /// `find_open_pr_by_head`, which hits `GET .../pulls`. Without this
+    /// mount, wiremock returns an empty body and serde fails on EOF before
+    /// the guard code is ever reached.
+    async fn mock_no_existing_prs(mock_server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(mock_server)
+            .await;
+    }
+
+    /// After a fresh `create_fork()`, stax polls the same lookup until the
+    /// fork is reachable. Respond success on that follow-up GET so the
+    /// readiness poll succeeds immediately instead of waiting out the
+    /// full budget.
+    async fn mock_fork_ready(
+        mock_server: &MockServer,
+        login: &str,
+        ssh_url: &str,
+        https_url: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{login}/test-repo")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "fork": true,
+                "owner": { "login": login },
+                "ssh_url": ssh_url,
+                "clone_url": https_url,
+                "parent": { "full_name": "test-owner/test-repo" },
+                "permissions": { "push": true }
+            })))
+            .with_priority(2)
             .mount(mock_server)
             .await;
     }
@@ -87,6 +126,7 @@ mod unix {
         let fork_ssh_url = "git@github.com:contributor/test-repo.git";
         hermetic_git_init_bare(fork_bare.path());
         mock_create_fork(&mock_server, "contributor", fork_ssh_url, fork_https_url).await;
+        mock_fork_ready(&mock_server, "contributor", fork_ssh_url, fork_https_url).await;
         mount_pr_create_and_refresh(
             &mock_server,
             "test-owner",
@@ -161,6 +201,7 @@ mod unix {
             "PR head should be qualified with the fork owner, not the upstream owner: {pr_payload}"
         );
         assert_eq!(pr_payload["base"], "main");
+        assert_eq!(pr_payload["maintainer_can_modify"], true);
     }
 
     #[test]
@@ -219,13 +260,18 @@ mod unix {
         );
     }
 
-    #[test]
-    fn branch_submit_fork_conflicting_existing_fork_remote_fails() {
+    #[tokio::test]
+    async fn branch_submit_fork_conflicting_existing_fork_remote_fails() {
+        let mock_server = MockServer::start().await;
+        mount_current_user(&mock_server, "contributor").await;
+        mock_no_existing_fork(&mock_server, "contributor").await;
+        mock_no_existing_prs(&mock_server).await;
+        // No `POST /repos/test-owner/test-repo/forks` mock at all: the
+        // conflict check must fire before any mutating call is made.
+
         let repo = TestRepo::new_with_remote();
         let home = repo.clean_home();
-        // No live wiremock server needed — the conflict check fires before
-        // any API call.
-        write_stax_config(Path::new(&home), "http://127.0.0.1:1", "");
+        write_stax_config(Path::new(&home), &mock_server.uri(), "");
         repo.configure_github_like_submit_remote();
         // Pre-existing `fork` remote pointing at an unrelated URL that should
         // NOT be silently overwritten.
@@ -244,11 +290,11 @@ mod unix {
         repo.create_file("conflict.txt", "content");
         repo.commit("Commit for conflicting-fork-branch");
 
-        // No `remote.fork_remote` set → stax will try to auto-detect and hit
-        // the `find_pushable_fork` API. Without a live server that fails, but
-        // the point of this test is that the pre-existing `fork` remote's URL
-        // is still what it was.
-        let _ = repo.run_stax_with_env(
+        // No `remote.fork_remote` set → stax auto-detects and hits
+        // `find_pushable_fork`, which reports no existing fork, then must
+        // refuse to proceed because the pre-existing `fork` remote points
+        // somewhere unrelated.
+        repo.run_stax_with_env(
             &[
                 "branch",
                 "submit",
@@ -259,7 +305,10 @@ mod unix {
                 "--no-template",
             ],
             &[("STAX_GITHUB_TOKEN", "test-token")],
-        );
+        )
+        .assert_failure()
+        .assert_stderr_contains("someone-else/unrelated")
+        .assert_stderr_contains("already exists and points at");
 
         let after = repo.git(&["config", "--local", "--get", "remote.fork.url"]);
         after.assert_success();
@@ -267,6 +316,73 @@ mod unix {
             TestRepo::stdout(&after).trim(),
             "https://github.com/someone-else/unrelated.git",
             "stax must not silently repoint a pre-existing `fork` remote"
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.method.as_str() == "POST"
+                    && request.url.path() == "/repos/test-owner/test-repo/forks"),
+            "conflict check must run before any mutating fork-creation call"
+        );
+    }
+
+    #[tokio::test]
+    async fn branch_submit_fork_refuses_to_overwrite_unrelated_fork_branch() {
+        let mock_server = MockServer::start().await;
+        mount_current_user(&mock_server, "contributor").await;
+        mock_no_existing_fork(&mock_server, "contributor").await;
+        mock_no_existing_prs(&mock_server).await;
+
+        let fork_bare = tempfile::tempdir().expect("fork bare tempdir");
+        let fork_https_url = "https://github.com/contributor/test-repo.git";
+        let fork_ssh_url = "git@github.com:contributor/test-repo.git";
+        hermetic_git_init_bare(fork_bare.path());
+        mock_create_fork(&mock_server, "contributor", fork_ssh_url, fork_https_url).await;
+        mock_fork_ready(&mock_server, "contributor", fork_ssh_url, fork_https_url).await;
+
+        let repo = TestRepo::new_with_remote();
+        let home = repo.clean_home();
+        write_stax_config(Path::new(&home), &mock_server.uri(), "");
+        repo.configure_github_like_submit_remote();
+        configure_fork_insteadof(&repo, fork_bare.path(), fork_https_url);
+
+        let remote_path = repo.remote_path().expect("origin bare path");
+        install_permission_denying_pre_receive_hook(&remote_path);
+
+        repo.run_stax(&["bc", "fork-fallback-branch"])
+            .assert_success();
+        repo.create_file("fork-fallback.txt", "content");
+        repo.commit("Commit for fork-fallback-branch");
+        let branch = repo.current_branch();
+
+        // Seed the fork with an unrelated commit on a branch of the same
+        // name, from a scratch clone, so stax's first-ever publish must
+        // refuse to clobber it.
+        seed_unrelated_fork_branch(fork_bare.path(), &branch);
+        let tip_before = hermetic_git_branch_tip(fork_bare.path(), &branch);
+
+        repo.run_stax_with_env(
+            &[
+                "branch",
+                "submit",
+                "--fork",
+                "--yes",
+                "--no-prompt",
+                "--publish",
+                "--no-template",
+            ],
+            &[("STAX_GITHUB_TOKEN", "test-token")],
+        )
+        .assert_failure()
+        .assert_stderr_contains(&branch)
+        .assert_stderr_contains("delete");
+
+        let tip_after = hermetic_git_branch_tip(fork_bare.path(), &branch);
+        assert_eq!(
+            tip_before, tip_after,
+            "fork branch tip must be unchanged after a refused overwrite"
         );
     }
 }
@@ -291,4 +407,83 @@ fn hermetic_git_list_branches(bare_path: &Path) -> Vec<String> {
         .lines()
         .map(|s| s.to_string())
         .collect()
+}
+
+fn hermetic_git_branch_tip(bare_path: &Path, branch: &str) -> String {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", branch])
+        .current_dir(bare_path)
+        .output()
+        .expect("git rev-parse branch");
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// Seed `bare_path` with a branch named `branch` holding a commit unrelated
+/// to anything stax knows about, so a first-ever fork publish of that branch
+/// name must be refused rather than silently overwritten.
+fn seed_unrelated_fork_branch(bare_path: &Path, branch: &str) {
+    let scratch = tempfile::tempdir().expect("scratch clone tempdir");
+
+    let clone = std::process::Command::new("git")
+        .args(["clone", &bare_path.to_string_lossy(), "."])
+        .current_dir(scratch.path())
+        .output()
+        .expect("git clone fork bare repo");
+    assert!(
+        clone.status.success(),
+        "{}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+
+    let checkout = std::process::Command::new("git")
+        .args(["checkout", "--orphan", branch])
+        .current_dir(scratch.path())
+        .output()
+        .expect("git checkout --orphan");
+    assert!(
+        checkout.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkout.stderr)
+    );
+
+    std::fs::write(scratch.path().join("unrelated.txt"), "unrelated\n")
+        .expect("write unrelated file");
+
+    let add = std::process::Command::new("git")
+        .args(["add", "unrelated.txt"])
+        .current_dir(scratch.path())
+        .output()
+        .expect("git add");
+    assert!(add.status.success());
+
+    let commit = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.email=fork@example.com",
+            "-c",
+            "user.name=Fork Bot",
+            "commit",
+            "-m",
+            "unrelated commit",
+        ])
+        .current_dir(scratch.path())
+        .output()
+        .expect("git commit");
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    let push = std::process::Command::new("git")
+        .args(["push", "origin", branch])
+        .current_dir(scratch.path())
+        .output()
+        .expect("git push unrelated branch");
+    assert!(
+        push.status.success(),
+        "{}",
+        String::from_utf8_lossy(&push.stderr)
+    );
 }

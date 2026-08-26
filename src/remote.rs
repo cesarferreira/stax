@@ -405,6 +405,16 @@ pub fn fetch_remote_refs(workdir: &Path, remote: &str, branches: &[String]) -> R
     );
 }
 
+/// Predict the fork clone URL by replacing only the owner path segment of `origin_url`,
+/// preserving scheme/host/repo-name.
+pub(crate) fn fork_url_for_owner(origin_url: &str, login: &str) -> Result<String> {
+    let (prefix, repo_part) = origin_url
+        .rsplit_once('/')
+        .context("Unsupported remote URL format")?;
+    let cut = prefix.rfind(['/', ':']).map(|i| i + 1).unwrap_or(0);
+    Ok(format!("{}{login}/{repo_part}", &prefix[..cut]))
+}
+
 pub(crate) fn parse_remote_url(url: &str) -> Result<(String, String)> {
     if url.contains("://") {
         let parsed = reqwest::Url::parse(url).context("Invalid remote URL")?;
@@ -733,6 +743,20 @@ mod tests {
     fn test_parse_unsupported_url_format() {
         let result = parse_remote_url("ftp://example.com/repo");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fork_url_for_owner_https() {
+        let url = fork_url_for_owner("https://github.com/test-owner/test-repo.git", "contributor")
+            .unwrap();
+        assert_eq!(url, "https://github.com/contributor/test-repo.git");
+    }
+
+    #[test]
+    fn test_fork_url_for_owner_scp_like() {
+        let url =
+            fork_url_for_owner("git@github.com:test-owner/test-repo.git", "contributor").unwrap();
+        assert_eq!(url, "git@github.com:contributor/test-repo.git");
     }
 
     #[test]
