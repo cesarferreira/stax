@@ -34,6 +34,8 @@ st gen --pr-title --agent pi
 st gen --commit-msg --agent pi
 ```
 
+pi has no built-in model list in stax, but its picker still offers `Default` followed by `Edit config file to use another model`. Choose the edit entry to set a provider-qualified model ID such as `anthropic/claude-opus-4-8` in `[ai]` for the global default or in the exact feature section, such as `[ai.generate]`.
+
 ## 4. AI worktree lanes
 
 ```bash

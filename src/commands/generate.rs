@@ -754,20 +754,46 @@ pub(crate) fn resolve_model(
     Ok(None)
 }
 
-fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
-    let models = available_models_for(agent);
-    if models.is_empty() {
-        return Ok(None);
-    }
+const EDIT_CONFIG_MODEL_ITEM: &str = "Edit config file to use another model";
 
-    // "Default" is always item 0 — selecting it saves model=None so the agent
-    // picks its own default rather than pinning a specific version.
+fn model_picker_items(models: &[ModelOption]) -> Vec<String> {
     let mut items = vec!["Default — let the agent decide".to_string()];
     items.extend(
         models
             .iter()
             .map(|m| format!("{} — {}", m.id, m.description)),
     );
+    items.push(EDIT_CONFIG_MODEL_ITEM.to_string());
+    items
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ModelPickerSelection {
+    Default,
+    Known(String),
+    EditConfig,
+}
+
+fn model_picker_selection(models: &[ModelOption], selection: usize) -> ModelPickerSelection {
+    if selection == 0 {
+        ModelPickerSelection::Default
+    } else if selection == models.len() + 1 {
+        ModelPickerSelection::EditConfig
+    } else {
+        ModelPickerSelection::Known(models[selection - 1].id.clone())
+    }
+}
+
+fn pick_model_interactive(
+    agent: &str,
+    config: &mut Config,
+    feature: &str,
+) -> Result<Option<String>> {
+    let models = available_models_for(agent);
+
+    // "Default" is always item 0 — selecting it saves model=None so the agent
+    // picks its own default rather than pinning a specific version.
+    let items = model_picker_items(&models);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select model for {}", agent))
@@ -775,11 +801,126 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
         .default(0)
         .interact()?;
 
-    if selection == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(models[selection - 1].id.clone()))
+    match model_picker_selection(&models, selection) {
+        ModelPickerSelection::Default => Ok(None),
+        ModelPickerSelection::Known(model) => Ok(Some(model)),
+        ModelPickerSelection::EditConfig => {
+            edit_config_for_custom_model(config, feature)?;
+            Ok(model_from_config(config, feature))
+        }
     }
+}
+
+fn edit_config_for_custom_model(config: &mut Config, feature: &str) -> Result<()> {
+    let path = Config::path()?;
+    edit_config_for_custom_model_with(config, feature, &path, open_config_in_editor)
+}
+
+fn edit_config_for_custom_model_with(
+    config: &mut Config,
+    feature: &str,
+    path: &Path,
+    edit: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    ensure_user_config_file(path)?;
+    println!(
+        "  {} Edit {} and set `{}` to the model id you want.",
+        "Tip:".dimmed(),
+        path.display(),
+        model_config_key(feature)
+    );
+    edit(path)?;
+    *config = load_user_config_file(path)?;
+    Ok(())
+}
+
+fn model_config_key(feature: &str) -> String {
+    if feature == "global" {
+        "[ai].model".to_string()
+    } else {
+        format!("[ai.{}].model", feature)
+    }
+}
+
+fn ensure_user_config_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+    }
+    let content = toml::to_string_pretty(&Config::default())?;
+    std::fs::write(path, content)
+        .with_context(|| format!("Failed to initialize user config {}", path.display()))
+}
+
+fn load_user_config_file(path: &Path) -> Result<Config> {
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read edited config {}", path.display()))?;
+    toml::from_str(&content)
+        .with_context(|| format!("Failed to parse edited config {}", path.display()))
+}
+
+fn model_from_config(config: &Config, feature: &str) -> Option<String> {
+    match feature {
+        "generate" => config.ai.generate.model.clone(),
+        "standup" => config.ai.standup.model.clone(),
+        "resolve" => config.ai.resolve.model.clone(),
+        "lane" => config.ai.lane.model.clone(),
+        _ => config.ai.model.clone(),
+    }
+}
+
+fn open_config_in_editor(path: &Path) -> Result<()> {
+    let editor =
+        configured_editor_from(std::env::var("EDITOR").ok(), std::env::var("VISUAL").ok())?;
+    open_config_in_editor_with(path, &editor)
+}
+
+fn configured_editor_from(editor: Option<String>, visual: Option<String>) -> Result<String> {
+    let (name, editor) = match editor {
+        Some(editor) => ("$EDITOR", editor),
+        None => match visual {
+            Some(visual) => ("$VISUAL", visual),
+            None => {
+                bail!("$EDITOR or $VISUAL is not set; configure one to edit the stax config file")
+            }
+        },
+    };
+    if editor.trim().is_empty() {
+        bail!(
+            "{} is empty; configure it to edit the stax config file",
+            name
+        );
+    }
+    Ok(editor)
+}
+
+fn open_config_in_editor_with(path: &Path, editor: &str) -> Result<()> {
+    let status = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/C", &format!("{} \"{}\"", editor, path.display())])
+            .status()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} \"$1\"", editor))
+            .arg("stax-config-editor")
+            .arg(path)
+            .status()
+    }
+    .context("Failed to launch editor")?;
+
+    if !status.success() {
+        bail!("editor exited with status {}", status);
+    }
+
+    Ok(())
 }
 
 fn validate_model_soft(agent: &str, model: &str) {
@@ -836,7 +977,7 @@ pub(crate) fn prompt_for_agent_and_model(
                 "Detected AI agent:".dimmed(),
                 agent.cyan().bold()
             );
-            let model = pick_model_interactive(&agent)?;
+            let model = pick_model_interactive(&agent, config, "global")?;
             persist_prompt_selection(config, &agent, model.clone(), confirm_before_save)?;
             Ok((agent, model))
         }
@@ -860,7 +1001,7 @@ pub(crate) fn prompt_for_agent_and_model(
                 .interact()?;
 
             let agent = available[selection].clone();
-            let model = pick_model_interactive(&agent)?;
+            let model = pick_model_interactive(&agent, config, "global")?;
             persist_prompt_selection(config, &agent, model.clone(), confirm_before_save)?;
             Ok((agent, model))
         }
@@ -883,9 +1024,7 @@ fn persist_prompt_selection(
     };
 
     if should_save {
-        config.ai.agent = Some(agent.to_string());
-        config.ai.model = model.clone();
-        config.save()?;
+        persist_ai_selection_with(config, "global", agent, model.clone(), Config::save)?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -896,6 +1035,23 @@ fn persist_prompt_selection(
     }
 
     Ok(())
+}
+
+fn persist_ai_selection_with(
+    config: &mut Config,
+    feature: &str,
+    agent: &str,
+    model: Option<String>,
+    save: impl FnOnce(&Config) -> Result<()>,
+) -> Result<()> {
+    if let Some(feature_config) = config.ai.feature_config_mut(feature) {
+        feature_config.agent = Some(agent.to_string());
+        feature_config.model = model;
+    } else {
+        config.ai.agent = Some(agent.to_string());
+        config.ai.model = model;
+    }
+    save(config)
 }
 
 /// Interactively pick agent+model for a specific feature and persist to `[ai.<feature>]`.
@@ -940,13 +1096,12 @@ pub(crate) fn prompt_for_feature_ai(
         }
     };
 
-    let model = pick_model_interactive(&agent)?;
+    let model = pick_model_interactive(&agent, config, feature)?;
 
     // Persist to feature-specific config, or global if feature is "global"/unknown.
-    if let Some(feat_cfg) = config.ai.feature_config_mut(feature) {
-        feat_cfg.agent = Some(agent.clone());
-        feat_cfg.model = model.clone();
-        config.save()?;
+    let feature_specific = matches!(feature, "generate" | "standup" | "resolve" | "lane");
+    persist_ai_selection_with(config, feature, &agent, model.clone(), Config::save)?;
+    if feature_specific {
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved [ai.{}] agent = \"{}\", model = \"{}\"",
@@ -956,10 +1111,6 @@ pub(crate) fn prompt_for_feature_ai(
             model_display
         );
     } else {
-        // "global" or unknown feature — write to top-level [ai]
-        config.ai.agent = Some(agent.clone());
-        config.ai.model = model.clone();
-        config.save()?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -1484,6 +1635,237 @@ mod tests {
         assert_eq!(
             filtered[0].description,
             "Claude Opus 4.8 · live via Anthropic Models API"
+        );
+    }
+
+    #[test]
+    fn model_picker_includes_config_edit_entry_after_known_models() {
+        let models = vec![ModelOption {
+            id: "opencode/gpt-5.5-fast".to_string(),
+            description: "fast default".to_string(),
+        }];
+
+        let items = model_picker_items(&models);
+
+        assert_eq!(items[0], "Default — let the agent decide");
+        assert_eq!(items[1], "opencode/gpt-5.5-fast — fast default");
+        assert_eq!(
+            items.last().map(String::as_str),
+            Some(EDIT_CONFIG_MODEL_ITEM)
+        );
+    }
+
+    #[test]
+    fn model_picker_includes_config_edit_entry_when_known_models_are_empty() {
+        let items = model_picker_items(&[]);
+
+        assert_eq!(
+            items,
+            vec!["Default — let the agent decide", EDIT_CONFIG_MODEL_ITEM]
+        );
+    }
+
+    #[test]
+    fn model_picker_interprets_final_item_as_config_edit_when_models_are_empty() {
+        assert_eq!(
+            model_picker_selection(&[], 1),
+            ModelPickerSelection::EditConfig
+        );
+    }
+
+    #[test]
+    fn model_picker_interprets_known_model_without_changing_its_id() {
+        let models = vec![ModelOption {
+            id: "opencode/custom-provider-model".to_string(),
+            description: "provider model".to_string(),
+        }];
+
+        assert_eq!(
+            model_picker_selection(&models, 1),
+            ModelPickerSelection::Known("opencode/custom-provider-model".to_string())
+        );
+    }
+
+    #[test]
+    fn model_from_config_uses_feature_override_before_global() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+        config.ai.generate.model = Some("custom-generate-model".to_string());
+        assert_eq!(
+            model_from_config(&config, "generate"),
+            Some("custom-generate-model".to_string())
+        );
+    }
+
+    #[test]
+    fn model_from_config_reads_global_model_for_global_feature() {
+        let mut config = Config::default();
+        config.ai.model = Some("custom-global-model".to_string());
+        assert_eq!(
+            model_from_config(&config, "global"),
+            Some("custom-global-model".to_string())
+        );
+    }
+
+    #[test]
+    fn model_from_config_does_not_inherit_global_model_for_lane() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+        assert_eq!(model_from_config(&config, "lane"), None);
+    }
+
+    #[test]
+    fn model_from_config_returns_none_when_exact_feature_model_is_absent() {
+        assert_eq!(model_from_config(&Config::default(), "generate"), None);
+    }
+
+    #[test]
+    fn custom_model_edit_hint_names_the_exact_selected_scope() {
+        assert_eq!(model_config_key("global"), "[ai].model");
+        assert_eq!(model_config_key("lane"), "[ai.lane].model");
+    }
+
+    #[test]
+    fn configured_editor_rejects_missing_editor_values() {
+        let err = configured_editor_from(None, None).unwrap_err();
+        assert!(err.to_string().contains("$EDITOR or $VISUAL is not set"));
+    }
+
+    #[test]
+    fn configured_editor_rejects_blank_editor_value() {
+        let err = configured_editor_from(Some("  ".to_string()), None).unwrap_err();
+        assert!(err.to_string().contains("$EDITOR is empty"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editor_non_zero_exit_is_contextual() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let err = open_config_in_editor_with(&path, "false").unwrap_err();
+        assert!(err.to_string().contains("editor exited with status"));
+    }
+
+    #[test]
+    fn absent_user_config_is_initialized_without_merged_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested").join("config.toml");
+        ensure_user_config_file(&path).unwrap();
+        let loaded = load_user_config_file(&path).unwrap();
+        assert!(path.exists());
+        assert_eq!(loaded.ai.agent, None);
+        assert_eq!(loaded.ai.model, None);
+    }
+
+    #[test]
+    fn malformed_edited_user_config_returns_contextual_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "[ai\nmodel =").unwrap();
+        let err = load_user_config_file(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse edited config"));
+    }
+
+    #[test]
+    fn unreadable_edited_user_config_returns_contextual_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let err = load_user_config_file(temp.path()).unwrap_err();
+        assert!(err.to_string().contains("Failed to read edited config"));
+    }
+
+    #[test]
+    fn edited_global_custom_model_reloads_and_preserves_feature_scopes_when_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        edit_config_for_custom_model_with(&mut config, "global", &path, |edited_path| {
+            std::fs::write(
+                edited_path,
+                r#"
+[ai]
+agent = "claude"
+model = "gateway/custom-global"
+
+[ai.generate]
+agent = "codex"
+model = "gpt-5.5-fast"
+
+[ai.lane]
+agent = "pi"
+model = "anthropic/claude-opus-4-8"
+"#,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let selected_model = model_from_config(&config, "global");
+        persist_ai_selection_with(
+            &mut config,
+            "global",
+            "opencode",
+            selected_model,
+            |persisted| {
+                std::fs::write(&path, toml::to_string_pretty(persisted)?)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let persisted = load_user_config_file(&path).unwrap();
+        assert_eq!(persisted.ai.agent.as_deref(), Some("opencode"));
+        assert_eq!(persisted.ai.model.as_deref(), Some("gateway/custom-global"));
+        assert_eq!(persisted.ai.generate.agent.as_deref(), Some("codex"));
+        assert_eq!(persisted.ai.generate.model.as_deref(), Some("gpt-5.5-fast"));
+        assert_eq!(persisted.ai.lane.agent.as_deref(), Some("pi"));
+        assert_eq!(
+            persisted.ai.lane.model.as_deref(),
+            Some("anthropic/claude-opus-4-8")
+        );
+    }
+
+    #[test]
+    fn edited_feature_custom_model_reloads_and_preserves_other_scopes_when_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        edit_config_for_custom_model_with(&mut config, "generate", &path, |edited_path| {
+            std::fs::write(
+                edited_path,
+                r#"
+[ai]
+agent = "claude"
+model = "claude-sonnet-5"
+
+[ai.generate]
+agent = "opencode"
+model = "provider/custom-generate"
+
+[ai.standup]
+agent = "gemini"
+model = "gemini-2.5-flash"
+"#,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let selected_model = model_from_config(&config, "generate");
+        persist_ai_selection_with(&mut config, "generate", "pi", selected_model, |persisted| {
+            std::fs::write(&path, toml::to_string_pretty(persisted)?)?;
+            Ok(())
+        })
+        .unwrap();
+        let persisted = load_user_config_file(&path).unwrap();
+        assert_eq!(persisted.ai.agent.as_deref(), Some("claude"));
+        assert_eq!(persisted.ai.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(persisted.ai.generate.agent.as_deref(), Some("pi"));
+        assert_eq!(
+            persisted.ai.generate.model.as_deref(),
+            Some("provider/custom-generate")
+        );
+        assert_eq!(persisted.ai.standup.agent.as_deref(), Some("gemini"));
+        assert_eq!(
+            persisted.ai.standup.model.as_deref(),
+            Some("gemini-2.5-flash")
         );
     }
 

@@ -140,6 +140,8 @@ st config --set-ai
 
 You're asked which feature to configure (`generate`, `standup`, `resolve`, `lane`, or global default), then prompted for agent and model. The choice is written to the appropriate `[ai.*]` section.
 
+The final model choice, **Edit config file to use another model**, opens the global user config and accepts arbitrary or provider-qualified model IDs that are not in stax's built-in or live provider lists. Set `[ai].model` for the global selection, or `model` in the exact selected feature section such as `[ai.generate]` or `[ai.lane]`. A global model is not copied into a per-feature section when that feature's model remains unset.
+
 ### First-use prompting
 
 The first time you run an AI-powered command without a configured agent (e.g. `st standup --ai`), stax opens the picker automatically and persists the choice for future runs — no manual config editing required.

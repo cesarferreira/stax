@@ -493,6 +493,8 @@ stax gen --pr-title                # Refresh PR title with AI
 stax gen --commit-msg              # Amend HEAD commit message with AI
 stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
+# Model picker ends with "Edit config file to use another model" for custom IDs,
+# including agents with no built-in list; edit [ai] or the exact [ai.<feature>] section.
 ```
 
 ### AI Worktree Lanes (parallel AI agents)

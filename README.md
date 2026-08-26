@@ -315,6 +315,8 @@ Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different a
 st config --set-ai
 ```
 
+The model picker can also open your user config for a custom or provider-qualified model ID, including for agents without a built-in model list.
+
 → [PR templates & AI](docs/integrations/pr-templates-and-ai.md) · [Reporting](docs/workflows/reporting.md)
 
 <a id="commands"></a>
