@@ -2,11 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.106.0] - 2026-08-26
+
+### 🚀 Features
+
+- *(gh-stack)* Support gh-stack v0.1.0 atomic stack merges ([#794](https://github.com/cesarferreira/stax/issues/794))
+
+### 🐛 Bug Fixes
+
+- Fix ready refresh after PR merges ([#796](https://github.com/cesarferreira/stax/issues/796))
+
+### 💼 Other
+
+- Add localhost web workspace with redesigned layout ([#791](https://github.com/cesarferreira/stax/issues/791))
+- Remove the native macOS desktop app now that st web is the graphical workspace. ([#792](https://github.com/cesarferreira/stax/issues/792))
+- Add screenshot to README for visual reference
+- Removed plans
+- New screenshot
+
+### 🧪 Testing
+
+- Isolate GitHub CLI auth in test repos ([#789](https://github.com/cesarferreira/stax/issues/789))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Tier draft PR verification ([#797](https://github.com/cesarferreira/stax/issues/797))
 ## [0.105.1] - 2026-08-23
 
 ### 🧪 Testing
 
 - *(ci)* Make stax ci integration coverage deterministic ([#788](https://github.com/cesarferreira/stax/issues/788))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.105.0] - 2026-08-23
 
 ### 🐛 Bug Fixes
