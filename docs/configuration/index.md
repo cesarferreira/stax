@@ -329,6 +329,15 @@ rejects mismatches before looking up a token or making a request.
 3. `gh auth token` (`auth.use_gh_cli = true`)
 4. `GITHUB_TOKEN` (only when `auth.allow_github_token_env = true`)
 
+GitHub can return `401 Unauthorized` or `404 Not Found` when the selected token
+is expired or cannot see a private repository. Stax adds actionable auth
+guidance to these responses for repository list/search operations and for
+review/comment reads after a PR has already been resolved. Run
+`stax auth --from-gh` to refresh from GitHub CLI, or verify the token's
+repository access and scopes. Direct missing-PR lookups and mutations keep their
+normal errors because their 404 responses commonly describe an absent resource,
+not an authentication problem.
+
 ```bash
 st auth status
 ```

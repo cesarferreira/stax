@@ -281,3 +281,45 @@ async fn reviews_inbox_reports_comment_api_failures() {
     output.assert_failure();
     output.assert_stderr_contains("Failed to list issue comments");
 }
+
+#[tokio::test]
+async fn reviews_inbox_reports_actionable_auth_hint_for_not_found_comments() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &server.uri());
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/test/repo.git",
+    ])
+    .assert_success();
+    let branch = repo.create_stack(&["auth-failed-review-fetch"]).remove(0);
+    write_branch_pr_metadata(&repo, &branch, "main", 45);
+
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/issues/45/comments"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "message": "Not Found"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/pulls/45/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(
+        &["reviews", "--stack", "--json"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+
+    output.assert_failure();
+    output.assert_stderr_contains("Failed to list issue comments");
+    output.assert_stderr_contains("Not Found");
+    output.assert_stderr_contains("token is expired");
+    output.assert_stderr_contains("stax auth --from-gh");
+}
