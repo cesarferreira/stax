@@ -164,7 +164,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st changelog --find [query]` | Flag form of commit fuzzy-find |
 | `st generate` · `st gen` | AI generation: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
-| `st watch` | Live auto-refreshing stack status with CI and PR state (`--current`, `--interval <seconds>`) |
+| `st watch` | Live auto-refreshing stack status with CI and PR state (`--current`, `--interval <seconds>`); `--iterations <N>` performs exactly `N` total refreshes (`1` renders exactly once; `0` is rejected), then returns without a final sleep. For `N > 1`, use `--interval <seconds>` to control the delay between refreshes. |
 
 ## Utilities
 
