@@ -101,10 +101,10 @@ stax fix                       # Auto-repair metadata
 stax test <cmd...>             # Run command on each branch
 stax demo                      # Interactive tutorial
 
-stax skills                    # List installed AI agent skill files + version status
-stax skills list               # Same as above
-stax skills update             # Download latest skills from GitHub and update all installed files
-stax skills update --dry-run   # Preview what would be updated without writing
+stax skills                    # List installed AI agent skill files + local package-version-marker status
+stax skills list               # Same as above; does not verify fetched content
+stax skills update             # Fetch, compare fully rendered files, and refresh changed instructions
+stax skills update --dry-run   # Preview content-based updates without writing
 st --skill                     # Print bundled agent skill (SKILL.md format) to stdout
 
 stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
@@ -558,10 +558,10 @@ stax doctor                        # Repo/config health checks (also reports sta
 stax doctor --fix                  # Confirm once to set recommended git config and update stale installed skills
 stax demo                          # Interactive tutorial
 
-stax skills                        # List installed AI agent skill files + version status
-stax skills list                   # Same as above
-stax skills update                 # Download latest skills from GitHub and update all installed files
-stax skills update --dry-run       # Preview what would be updated without writing
+stax skills                        # List installed AI agent skill files + local package-version-marker status
+stax skills list                   # Same as above; does not verify fetched content
+stax skills update                 # Fetch, compare fully rendered files, and refresh changed instructions
+stax skills update --dry-run       # Preview content-based updates without writing
 ```
 
 ## Common Workflows
@@ -735,6 +735,7 @@ Symbols:
 
 - Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
+- Run `stax skills update` to refresh changed skill instructions even when `stax skills list` shows the installed package version as current; byte-identical files are not rewritten.
 - Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.

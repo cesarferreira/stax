@@ -474,16 +474,11 @@ pub fn run_update_with(
             continue;
         };
 
-        let installed_version = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| extract_skills_version(&c));
-
-        let needs_update = installed_version
-            .as_deref()
-            .map(|v| v != PKG_VERSION)
-            .unwrap_or(true);
-
+        let content = build_content(&remote_body, loc);
         let file_exists = path.exists();
+        let needs_update = std::fs::read(&path)
+            .map(|installed| installed != content.as_bytes())
+            .unwrap_or(true);
 
         if !needs_update && file_exists {
             println!(
@@ -498,7 +493,6 @@ pub fn run_update_with(
 
         let action = if file_exists { "update" } else { "install" };
         let result = if file_exists { "updated" } else { "installed" };
-        let content = build_content(&remote_body, loc);
 
         if dry_run {
             println!(
