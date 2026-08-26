@@ -499,3 +499,17 @@ fn merge_accepts_interval_of_one() {
         Some(Commands::Merge { interval: 1, .. })
     ));
 }
+
+#[test]
+fn merge_rejects_zero_timeout() {
+    assert!(try_parse_cli(&["stax", "merge", "--timeout", "0"]).is_err());
+}
+
+#[test]
+fn merge_accepts_timeout_of_one() {
+    let cli = parse_cli(&["stax", "merge", "--timeout", "1"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Merge { timeout: 1, .. })
+    ));
+}

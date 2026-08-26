@@ -56,7 +56,7 @@ st --trace status --json >/dev/null
 - `st merge --stack` — GitHub/GitLab stack merge: target every selected PR/MR to trunk, merge only the selected tip with SHA-preserving `merge`, and poll lower items for authoritative merged state; timed-out items stay open. Multi-PR GitHub `rebase`/`squash` fails before mutation because rewritten SHAs prevent genuine lower-PR merged state; a single selected GitHub PR may still use them. GitLab first verifies project merge settings, sends `squash: false`, and rejects explicit `rebase`/`squash`. Gitea/Forgejo is unsupported
 - `st merge --stack --full` — include descendants above the current branch and land the full stack through the actual stack tip
 - `st merge --remote` — merge entirely via GitHub API, no local git operations (GitHub only)
-- `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains
+- `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains, polling only within the configured timeout deadline
 
 See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 
@@ -313,7 +313,11 @@ st completions elvish
 - `--when-ready` · `--when-ready --interval 10`
 - `--remote` · `--remote --all` · `--remote --timeout 60 --interval 10`
 - `--queue` · `--queue --all --yes`
-- `--no-wait` / `--no-sync` / `--no-delete` / `--timeout 60` / `--quiet`
+- `--timeout <minutes>` — positive whole minutes (default: 30); zero is rejected
+- `--interval <seconds>` — positive whole seconds (default: 15) for `--when-ready`, `--remote`, `--queue`, and `--stack --when-ready`; zero is rejected
+- `--no-wait` / `--no-sync` / `--no-delete` / `--quiet`
+
+For `--queue`, the timeout is a real deadline: stax caps the final sleep to the remaining budget and does not start another forge status poll once the deadline is reached.
 
 ### `st sync` / `st rs`
 

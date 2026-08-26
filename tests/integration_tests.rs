@@ -36,6 +36,10 @@ fn sanitized_stax_command() -> Command {
         .env_remove("STAX_GITHUB_TOKEN")
         .env_remove("STAX_SHELL_INTEGRATION")
         .env_remove("GH_TOKEN")
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_COMMITTER_NAME")
+        .env_remove("GIT_COMMITTER_EMAIL")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
@@ -8836,6 +8840,16 @@ mod forge_mock_tests {
         token_env: &str,
         args: &[&str],
     ) -> Output {
+        run_stax_with_token_env_and_extra_env(repo, home, token_env, &[], args)
+    }
+
+    fn run_stax_with_token_env_and_extra_env(
+        repo: &TestRepo,
+        home: &Path,
+        token_env: &str,
+        extra_env: &[(&str, &str)],
+        args: &[&str],
+    ) -> Output {
         let gitconfig = ensure_empty_gitconfig(home);
         let mut command = Command::new(stax_bin());
         command
@@ -8848,6 +8862,9 @@ mod forge_mock_tests {
             .env("STAX_DISABLE_UPDATE_CHECK", "1")
             .env("STAX_TEST_DISABLE_HEAD_SYNC", "1")
             .env("STAX_STACK_MERGE_INDIRECT_WAIT_SECS", "0");
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
         command.output().expect("Failed to execute stax")
     }
 
@@ -14375,6 +14392,244 @@ exit 1
             })
             .count();
         assert_eq!(patch_count, 2, "Expected retarget and rollback PATCHes");
+    }
+
+    async fn setup_single_pr_merge_queue(
+        mock_server: &MockServer,
+        branch_name: &str,
+        pr_number: u64,
+    ) -> (TempDir, TestRepo, TempDir, String) {
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", branch_name]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch = repo.current_branch();
+        repo.create_file("queue.txt", "queue\n");
+        repo.commit("Add queue fixture");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch]);
+        assert!(push.status.success(), "{}", TestRepo::stderr(&push));
+        write_branch_pr_metadata(&repo, &branch, "main", pr_number, Some(false));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture(pr_number, &branch, "main", "queue-sha")
+            ])))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains(format!(
+                "pullRequest(number: {})",
+                pr_number
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": { "id": format!("PR_node_{}", pr_number) }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("enqueuePullRequest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "enqueuePullRequest": {
+                        "mergeQueueEntry": { "position": 1 }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+
+        (home, repo, remote_root, branch)
+    }
+
+    #[tokio::test]
+    async fn test_merge_queue_observes_pr_merged_before_deadline() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let pr_number = 771;
+        let (home, repo, _remote_root, branch) =
+            setup_single_pr_merge_queue(&mock_server, "queue-success", pr_number).await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", pr_number)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    pr_number,
+                    &branch,
+                    "main",
+                    "queue-sha",
+                )),
+            )
+            .with_priority(1)
+            .up_to_n_times(3)
+            .mount(&mock_server)
+            .await;
+
+        let mut merged = github_pull_fixture(pr_number, &branch, "main", "queue-sha");
+        merged["merged_at"] = serde_json::json!("2026-08-25T00:00:00Z");
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", pr_number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merged))
+            .with_priority(2)
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env_and_extra_env(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &[("STAX_TEST_MILLIS_PER_SECOND", "50")],
+            &[
+                "merge",
+                "--queue",
+                "--yes",
+                "--timeout",
+                "1",
+                "--interval",
+                "5",
+                "--no-sync",
+            ],
+        );
+
+        assert!(
+            output.status.success(),
+            "merge --queue failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("Stack Merged") && stdout.contains("Merged 1 PR"),
+            "expected successful queue completion, got:\n{}",
+            stdout
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let enqueue_index = requests
+            .iter()
+            .position(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/graphql"
+                    && String::from_utf8_lossy(&request.body).contains("enqueuePullRequest")
+            })
+            .expect("missing enqueue mutation");
+        let polls_after_enqueue = requests
+            .iter()
+            .skip(enqueue_index + 1)
+            .filter(|request| {
+                request.method.as_str() == "GET"
+                    && request.url.path() == format!("/repos/test/repo/pulls/{}", pr_number)
+            })
+            .count();
+        assert_eq!(polls_after_enqueue, 2, "expected two queue status polls");
+    }
+
+    #[tokio::test]
+    async fn test_merge_queue_timeout_shorter_than_interval_stops_at_deadline() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let pr_number = 772;
+        let (home, repo, _remote_root, branch) =
+            setup_single_pr_merge_queue(&mock_server, "queue-timeout", pr_number).await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", pr_number)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    pr_number,
+                    &branch,
+                    "main",
+                    "queue-sha",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let started = std::time::Instant::now();
+        let output = run_stax_with_token_env_and_extra_env(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &[("STAX_TEST_MILLIS_PER_SECOND", "50")],
+            &[
+                "merge",
+                "--queue",
+                "--yes",
+                "--timeout",
+                "1",
+                "--interval",
+                "200",
+                "--no-sync",
+            ],
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            output.status.success(),
+            "merge --queue failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("Timed out after 1 min waiting for merge queue to finish."),
+            "expected timeout warning, got:\n{}",
+            stdout
+        );
+        // 1 minute × 60 simulated seconds × 50 ms is a 3-second deadline.
+        // Keep 500 ms of tolerance while still rejecting an immediate timeout.
+        let scaled_deadline = std::time::Duration::from_secs(3);
+        let lower_bound_tolerance = std::time::Duration::from_millis(500);
+        assert!(
+            elapsed >= scaled_deadline - lower_bound_tolerance,
+            "queue wait returned before the scaled deadline margin: {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(8),
+            "queue wait exceeded the scaled deadline margin: {:?}",
+            elapsed
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let enqueue_index = requests
+            .iter()
+            .position(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/graphql"
+                    && String::from_utf8_lossy(&request.body).contains("enqueuePullRequest")
+            })
+            .expect("missing enqueue mutation");
+        let status_requests: Vec<_> = requests
+            .iter()
+            .enumerate()
+            .filter(|(_, request)| {
+                request.method.as_str() == "GET"
+                    && request.url.path() == format!("/repos/test/repo/pulls/{}", pr_number)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            status_requests.len(),
+            2,
+            "expected only pre-enqueue merge/base checks"
+        );
+        assert!(
+            status_requests.iter().all(|index| *index < enqueue_index),
+            "deadline must prevent a post-enqueue status poll: {:?}",
+            status_requests
+        );
     }
 
     #[tokio::test]

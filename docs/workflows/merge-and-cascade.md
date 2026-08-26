@@ -111,9 +111,12 @@ Enqueue the stack into your forge's merge queue (GitHub) or merge trains (GitLab
 ```bash
 st merge --queue
 st merge --queue --all --yes
+st merge --queue --timeout 60 --interval 10
 ```
 
 Flow: retarget all PRs to trunk → enqueue each → poll until merged (respects `--timeout` and `--interval`) → auto `st rs` unless `--no-sync` → desktop notification.
+
+`--timeout` accepts positive whole minutes (default: 30), and `--interval` accepts positive whole seconds (default: 15); zero is rejected for either flag. The queue timeout is a hard polling deadline: the final sleep is capped to the remaining time, and stax does not begin another forge status poll once that deadline is reached.
 
 | Forge | Requirement |
 |---|---|

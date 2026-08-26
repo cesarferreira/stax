@@ -376,7 +376,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         no_wait: bool,
         /// Max wait time for CI per PR in minutes
-        #[arg(long, default_value = "30")]
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
         /// Wait for each PR to be ready (CI + approval) before merging
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote", "queue"])]
