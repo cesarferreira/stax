@@ -978,42 +978,155 @@ async fn test_skills_update_rewrites_when_pkg_version_advances_past_stale_marker
     );
 }
 
-/// Regression: a single-quoted YAML `stax_version` with a trailing comment and
-/// equal to `PKG_VERSION` is current. `skills update` must skip it (independent
-/// of what the upstream marker says), and `skills list` must not report it as stale.
+fn expected_codex_skill(body: &str) -> String {
+    format!(
+        "---\nname: stax\ndescription: Use when the user wants to create, submit, sync, restack, navigate, or merge stacked Git branches or PRs, or asks about stax commands, flags, or workflows. Covers all stax commands and best practices for AI coding agents.\nstax_version: \"{}\"\nmetadata:\n  short-description: Stax stacked-branch and PR management commands\n---\n\n{body}",
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// `skills update` compares the complete generated skill, not only its version
+/// marker. `skills list` deliberately remains a local version-marker report.
 #[tokio::test]
-async fn test_skills_update_skips_commented_current_version() {
+async fn test_skills_update_refreshes_changed_same_version_content() {
     ensure_crypto_provider();
-    let mock_server = MockServer::start().await;
+    let initial_server = MockServer::start().await;
+    let changed_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
 
     Mock::given(method("GET"))
         .and(path("/skills.md"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_string("<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n"),
+                .set_body_string("<!-- stax-skills-version: 0.50.2 -->\n# Initial instructions\n"),
         )
+        .mount(&initial_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.50.2 -->\n# Revised instructions\n"),
+        )
+        .mount(&changed_server)
+        .await;
+
+    let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    let initial_url = format!("{}/skills.md", initial_server.uri());
+    let changed_url = format!("{}/skills.md", changed_server.uri());
+
+    let install_output = Command::new(stax_bin())
+        .args(["skills", "update", "--skills", "codex"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env("STAX_SKILLS_URL", &initial_url)
+        .output()
+        .expect("install initial Codex skill");
+    assert!(install_output.status.success(), "{install_output:?}");
+
+    let initial_bytes = fs::read(&codex_skill).expect("read initial Codex skill");
+
+    let list_output = Command::new(stax_bin())
+        .args(["skills", "list"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run stax skills list");
+    assert!(list_output.status.success(), "{list_output:?}");
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        list_stdout.contains(&format!("(v{})", env!("CARGO_PKG_VERSION"))),
+        "list must classify the installed marker as current:\n{list_stdout}"
+    );
+    let mtime_before_dry_run = fs::metadata(&codex_skill)
+        .expect("stat Codex skill before dry run")
+        .modified()
+        .expect("read Codex skill mtime before dry run");
+
+    let dry_run_output = Command::new(stax_bin())
+        .args(["skills", "update", "--dry-run", "--skills", "codex"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env("STAX_SKILLS_URL", &changed_url)
+        .output()
+        .expect("dry-run changed Codex skill update");
+    assert!(dry_run_output.status.success(), "{dry_run_output:?}");
+    let dry_run_stdout = String::from_utf8_lossy(&dry_run_output.stdout);
+    assert!(
+        dry_run_stdout.contains("Codex") && dry_run_stdout.contains("would update"),
+        "dry run must detect the changed body:\n{dry_run_stdout}"
+    );
+    assert_eq!(
+        fs::read(&codex_skill).expect("read Codex skill after dry run"),
+        initial_bytes,
+        "dry run must not change the installed skill",
+    );
+    assert_eq!(
+        fs::metadata(&codex_skill)
+            .expect("stat Codex skill after dry run")
+            .modified()
+            .expect("read Codex skill mtime after dry run"),
+        mtime_before_dry_run,
+        "dry run must not change the installed skill mtime",
+    );
+
+    let update_output = Command::new(stax_bin())
+        .args(["skills", "update", "--skills", "codex"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env("STAX_SKILLS_URL", &changed_url)
+        .output()
+        .expect("update changed Codex skill");
+    assert!(update_output.status.success(), "{update_output:?}");
+    let update_stdout = String::from_utf8_lossy(&update_output.stdout);
+    assert!(
+        update_stdout.contains("Codex") && update_stdout.contains("updated"),
+        "changed body must update Codex:\n{update_stdout}"
+    );
+    assert_eq!(
+        fs::read_to_string(&codex_skill).expect("read rewritten Codex skill"),
+        expected_codex_skill("<!-- stax-skills-version: 0.50.2 -->\n# Revised instructions\n"),
+    );
+}
+
+#[tokio::test]
+async fn test_skills_update_skips_byte_identical_content_without_changing_mtime() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+    let body = "<!-- stax-skills-version: 0.50.2 -->\n# Stable instructions\n";
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
         .mount(&mock_server)
         .await;
 
-    let pkg_version = env!("CARGO_PKG_VERSION");
     let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
     fs::create_dir_all(codex_skill.parent().expect("parent dir")).expect("mkdir codex skill dir");
-    fs::write(
-        &codex_skill,
-        format!(
-            "---\nname: stax\nstax_version: '{pkg_version}' # installed by package manager\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
-        ),
-    )
-    .expect("seed up-to-date codex skill");
-
-    let mtime_before = fs::metadata(&codex_skill)
-        .expect("stat codex skill")
+    fs::write(&codex_skill, expected_codex_skill(body)).expect("seed canonical Codex skill");
+    let sentinel_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after Unix epoch")
+        .as_secs()
+        .saturating_sub(86_400)
+        & !1;
+    let sentinel = std::time::UNIX_EPOCH + std::time::Duration::from_secs(sentinel_secs);
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&codex_skill)
+        .expect("open Codex skill")
+        .set_times(fs::FileTimes::new().set_modified(sentinel))
+        .expect("set sentinel mtime");
+    let bytes_before = fs::read(&codex_skill).expect("read seeded Codex skill");
+    let mtime_before_update = fs::metadata(&codex_skill)
+        .expect("stat seeded Codex skill")
         .modified()
-        .expect("mtime");
+        .expect("read seeded Codex skill mtime");
 
     let output = Command::new(stax_bin())
-        .args(["skills", "update"])
+        .args(["skills", "update", "--skills", "codex"])
         .env("HOME", home.path())
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .env(
@@ -1021,23 +1134,24 @@ async fn test_skills_update_skips_commented_current_version() {
             format!("{}/skills.md", mock_server.uri()),
         )
         .output()
-        .expect("run stax skills update");
-    assert!(output.status.success(), "{:?}", output);
-
+        .expect("run byte-identical skills update");
+    assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Codex") && stdout.contains("already up to date"),
-        "expected Codex to be skipped:\n{}",
-        stdout
+        "byte-identical file must be skipped:\n{stdout}"
     );
-
-    let mtime_after = fs::metadata(&codex_skill)
-        .expect("stat codex skill")
-        .modified()
-        .expect("mtime");
     assert_eq!(
-        mtime_before, mtime_after,
-        "file at PKG_VERSION must not be rewritten",
+        fs::read(&codex_skill).expect("read skipped skill"),
+        bytes_before
+    );
+    assert_eq!(
+        fs::metadata(&codex_skill)
+            .expect("stat skipped skill")
+            .modified()
+            .expect("read skipped skill mtime"),
+        mtime_before_update,
+        "byte-identical update must preserve the sentinel mtime",
     );
 
     let list_output = Command::new(stax_bin())
@@ -1046,18 +1160,79 @@ async fn test_skills_update_skips_commented_current_version() {
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
         .expect("run stax skills list");
-    assert!(list_output.status.success(), "{:?}", list_output);
-
+    assert!(list_output.status.success(), "{list_output:?}");
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
     assert!(
-        list_stdout.contains("Codex") && list_stdout.contains(&format!("(v{pkg_version})")),
-        "list must show the single-quoted Codex skill at PKG_VERSION:\n{}",
-        list_stdout
+        list_stdout.contains(&format!("(v{})", env!("CARGO_PKG_VERSION"))),
+        "list must retain version-marker semantics:\n{list_stdout}"
+    );
+}
+
+#[tokio::test]
+async fn test_skills_update_download_failure_preserves_installed_file() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("download failed"))
+        .mount(&mock_server)
+        .await;
+
+    let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    fs::create_dir_all(codex_skill.parent().expect("parent dir")).expect("mkdir codex skill dir");
+    fs::write(&codex_skill, "seeded installed skill\n").expect("seed installed skill");
+    let sentinel_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time after Unix epoch")
+        .as_secs()
+        .saturating_sub(86_400)
+        & !1;
+    let sentinel = std::time::UNIX_EPOCH + std::time::Duration::from_secs(sentinel_secs);
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&codex_skill)
+        .expect("open seeded skill")
+        .set_times(fs::FileTimes::new().set_modified(sentinel))
+        .expect("set seeded skill mtime");
+    let bytes_before = fs::read(&codex_skill).expect("read seeded skill");
+    let mtime_before_update = fs::metadata(&codex_skill)
+        .expect("stat seeded skill")
+        .modified()
+        .expect("read seeded skill mtime");
+
+    let output = Command::new(stax_bin())
+        .args(["skills", "update", "--skills", "codex"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run failed skills update");
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to download skills from GitHub"),
+        "download failure must retain its context:\n{stderr}"
     );
     assert!(
-        !list_stdout.contains("→ v"),
-        "list must not show a stale-version arrow for the single-quoted skill:\n{}",
-        list_stdout
+        stderr.contains("500"),
+        "download failure must report the HTTP status:\n{stderr}"
+    );
+    assert_eq!(
+        fs::read(&codex_skill).expect("read skill after failure"),
+        bytes_before
+    );
+    assert_eq!(
+        fs::metadata(&codex_skill)
+            .expect("stat skill after failure")
+            .modified()
+            .expect("read skill mtime after failure"),
+        mtime_before_update,
+        "download failure must not change the installed file",
     );
 }
 

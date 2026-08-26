@@ -185,6 +185,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |
 
+`st skills update` fetches the remote body and compares each fully rendered harness file byte-for-byte, rewriting instructions that differ even when the installed package-version marker matches. It leaves byte-identical files untouched; `--dry-run` reports the same decision without writing. `st skills list` is intentionally local-only: its current/stale indicator compares the installed package-version marker with this stax binary and does not verify fetched content.
+
 ### `st tmux`
 
 | Command | Description |

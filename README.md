@@ -118,6 +118,8 @@ st --version
 
 `st setup` handles shell integration, AI agent skills, and GitHub auth in a single step. When you install skills interactively (or with `--yes`), stax asks which agent harnesses should receive the skill file, pre-checking the ones it detects on disk. Use `--skills all|detected|<ids>` for non-interactive control.
 
+`st skills update` fetches and compares the fully rendered skill file for each selected harness, so it refreshes changed instructions even when the installed package-version marker matches; byte-identical files are left untouched. `st skills list` reports only those local package-version markers, not whether the remote instructions have changed.
+
 ```bash
 st setup --yes
 ```
