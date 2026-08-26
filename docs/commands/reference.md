@@ -426,7 +426,7 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 - Binds **127.0.0.1 only**; no `--host` flag is available.
 - Each session URL embeds an unguessable 48-hex session token: `/s/<token>/`. Requests with a wrong or missing token return 404.
 - Every mutating POST requires a matching CSRF token field; mismatches return 403.
-- Non-local `Host` / `Origin` headers are rejected with 403.
+- `Host` must be local. Requests without `Origin` are allowed, but a present `Origin` must exactly equal `http://127.0.0.1:<actual-bound-port>` (including an ephemeral or busy-port fallback port); cross-site, malformed, duplicate, and wrong-port values return 403. This check is independent of the session token and CSRF protections.
 - Only one mutation runs at a time; mutating controls are disabled while an operation is in flight.
 - All git operations run in `spawn_blocking` to avoid blocking the async Tokio runtime.
 - Session state is in-memory; restarting the server generates a new token and URL.

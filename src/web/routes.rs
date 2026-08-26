@@ -14,21 +14,17 @@ use crate::web::templates::{
 };
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, Path, Query, Request, State};
 use axum::http::{HeaderMap, Response, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use serde::Deserialize;
 
 type AppState = SharedSession;
 
-pub fn build_router(session: SharedSession) -> Router {
-    Router::new()
-        // Static assets (no token needed)
-        .route("/assets/app.css", get(serve_css))
-        .route("/assets/htmx.min.js", get(serve_htmx))
-        .route("/assets/app.js", get(serve_appjs))
-        // Session routes
+pub fn build_router(session: SharedSession, allowed_origin: String) -> Router {
+    let token_routes = Router::new()
         .route("/s/{token}/", get(workspace_handler))
         .route("/s/{token}/stack", get(stack_partial))
         .route("/s/{token}/select", post(select_branch))
@@ -51,6 +47,17 @@ pub fn build_router(session: SharedSession) -> Router {
         .route("/s/{token}/op/reorder", post(op_reorder))
         .route("/s/{token}/op/open-pr", get(op_open_pr))
         .route("/s/{token}/project", post(switch_project))
+        .route_layer(middleware::from_fn_with_state(
+            allowed_origin,
+            token_route_guard,
+        ));
+
+    Router::new()
+        // Static assets (no token needed)
+        .route("/assets/app.css", get(serve_css))
+        .route("/assets/htmx.min.js", get(serve_htmx))
+        .route("/assets/app.js", get(serve_appjs))
+        .merge(token_routes)
         .with_state(session)
 }
 
@@ -97,16 +104,33 @@ fn log_action(action: &str, detail: &str) {
     }
 }
 
-fn check_local_host(headers: &HeaderMap) -> Option<Response<Body>> {
+fn is_local_host(headers: &HeaderMap) -> bool {
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let host_part = host.split(':').next().unwrap_or(host);
-    if host_part != "127.0.0.1" && host_part != "localhost" {
-        return Some((StatusCode::FORBIDDEN, Html("<h1>Forbidden</h1>")).into_response());
+    host_part == "127.0.0.1" || host_part == "localhost"
+}
+
+fn has_allowed_origin(headers: &HeaderMap, allowed_origin: &str) -> bool {
+    let mut origins = headers.get_all(header::ORIGIN).iter();
+    match origins.next() {
+        None => true,
+        Some(origin) => origins.next().is_none() && origin.to_str().ok() == Some(allowed_origin),
     }
-    None
+}
+
+async fn token_route_guard(
+    State(allowed_origin): State<String>,
+    request: Request,
+    next: Next,
+) -> axum::response::Response {
+    if !is_local_host(request.headers()) || !has_allowed_origin(request.headers(), &allowed_origin)
+    {
+        return (StatusCode::FORBIDDEN, Html("<h1>Forbidden</h1>")).into_response();
+    }
+    next.run(request).await
 }
 
 fn compute_stack_row_meta(
@@ -174,11 +198,8 @@ async fn serve_appjs() -> impl IntoResponse {
 async fn workspace_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -221,12 +242,9 @@ struct BranchQuery {
 async fn stack_partial(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Query(q): Query<BranchQuery>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -256,12 +274,9 @@ struct SelectForm {
 async fn select_branch(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<SelectForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -283,11 +298,8 @@ async fn select_branch(
 async fn branch_details(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -363,11 +375,8 @@ async fn branch_details(
 async fn branch_diff(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -418,11 +427,8 @@ async fn branch_diff(
 async fn ci_summary(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -440,12 +446,9 @@ struct SearchForm {
 async fn search_branches(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<SearchForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -477,12 +480,9 @@ struct PanesForm {
 async fn toggle_panes(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<PanesForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -516,12 +516,9 @@ struct ThemeForm {
 async fn set_theme(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<ThemeForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -553,12 +550,9 @@ struct CsrfForm {
 async fn refresh_handler(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -580,12 +574,9 @@ struct CheckoutForm {
 async fn op_checkout(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CheckoutForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -612,12 +603,9 @@ struct CreateForm {
 async fn op_create(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CreateForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -648,12 +636,9 @@ struct RenameForm {
 async fn op_rename(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<RenameForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -681,12 +666,9 @@ struct DeleteForm {
 async fn op_delete(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<DeleteForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -714,12 +696,9 @@ struct RestackForm {
 async fn op_restack(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<RestackForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -752,12 +731,9 @@ async fn op_restack(
 async fn op_submit(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -777,12 +753,9 @@ async fn op_submit(
 async fn op_undo(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -803,12 +776,9 @@ async fn op_undo(
 async fn op_redo(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -837,12 +807,9 @@ struct MoveForm {
 async fn op_move(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<MoveForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -875,12 +842,9 @@ struct ReorderForm {
 async fn op_reorder(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<ReorderForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -923,12 +887,9 @@ struct ProjectForm {
 async fn switch_project(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(form): Form<ProjectForm>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
@@ -1010,12 +971,9 @@ where
 async fn op_open_pr(
     State(state): State<AppState>,
     Path(token): Path<String>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Query(q): Query<BranchQuery>,
 ) -> impl IntoResponse {
-    if let Some(r) = check_local_host(&headers) {
-        return r;
-    }
     if let Some(r) = check_token(&state, &token) {
         return r;
     }
