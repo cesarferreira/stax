@@ -260,6 +260,10 @@ single_stack = "on"                # "on" | "off" — when "off", skip stack-lin
 native_stack = "auto"              # "auto" | "off" | "link" — gh-stack on submit; use "off" to disable
 stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment links when native registration succeeds
 
+[ai.generate]
+title = "Prefix PR titles with the issue key"
+body = "Include testing and rollout sections"
+
 # Native GitHub Stacked PRs are additive. Disable with native_stack = "off" or st submit --no-native-stack.
 # Repos/users without access or without `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
 # can offer `gh extension install github/gh-stack` when `gh` is installed.
@@ -494,6 +498,8 @@ stax gen --commit-msg              # Amend HEAD commit message with AI
 stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
 ```
+
+`[ai.generate].title` applies to `stax gen --pr-title` and title generation in `stax submit --ai`; `.body` applies to `--pr-body` and submit body generation. A repo-root `stax.toml` can override either global field independently. Empty/whitespace-only values do nothing, commit-message generation ignores both, and stax's final JSON/markdown-only output rule remains authoritative.
 
 ### AI Worktree Lanes (parallel AI agents)
 

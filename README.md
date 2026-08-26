@@ -315,6 +315,16 @@ Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different a
 st config --set-ai
 ```
 
+Projects can also define PR-specific writing rules in a repo-root `stax.toml` (or globally in `~/.config/stax/config.toml`):
+
+```toml
+[ai.generate]
+title = "Prefix titles with the issue key"
+body = "Include testing and rollout sections"
+```
+
+These rules apply to AI-generated PR titles and bodies from `generate` and `submit --ai`; commit-message generation is unchanged.
+
 → [PR templates & AI](docs/integrations/pr-templates-and-ai.md) · [Reporting](docs/workflows/reporting.md)
 
 <a id="commands"></a>
@@ -406,6 +416,10 @@ a repo-root `stax.toml` overlays only the values it sets:
 [submit]
 stack_links = "body"   # "comment" | "body" | "both" | "off"
 single_stack = "on"    # "on" | "off" — when "off", skip stack-link sync while only one PR exists
+
+[ai.generate]
+title = "Prefix titles with the issue key"
+body = "Include testing and rollout sections"
 ```
 
 → [Full config reference](docs/configuration/index.md)

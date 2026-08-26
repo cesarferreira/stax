@@ -58,6 +58,8 @@ st ss --ai --body --yes     # refresh existing PR bodies automatically
 
 For existing PRs, interactive `--ai` asks whether to update title, body, both, or skip. With `--yes`, plain `--ai` leaves existing PR content alone; explicit `--title` and/or `--body` updates those fields automatically.
 
+Optional `[ai.generate]` instructions let global or repository config add project writing rules. Submit includes only the instructions for the requested targets: `--title` uses `title`, `--body` uses `body`, and unscoped `--ai` uses both.
+
 ## AI generation hub (`st gen` / `st generate`)
 
 Bare `st gen` (alias of `st generate`) opens an interactive picker: refresh **PR body**, refresh **PR title**, or amend **HEAD** with a new commit message. For scripting, pass exactly one artifact flag:
@@ -69,6 +71,19 @@ st gen --commit-msg
 ```
 
 `--template` / `--no-template` apply only to `--pr-body`. `--model` requires `--agent` on the same run.
+
+Configure PR writing rules globally in `~/.config/stax/config.toml` or per repository in root-level `stax.toml`:
+
+```toml
+[ai.generate]
+title = "Prefix titles with the issue key"
+body = """
+Keep the Summary concise.
+Include Testing and Rollout sections.
+"""
+```
+
+A repository value overrides the matching global field while unspecified sibling fields remain inherited. Empty or whitespace-only values have no effect. `--pr-title` consumes only `title`, `--pr-body` consumes only `body`, and `--commit-msg` consumes neither.
 
 ## AI PR body refresh
 
@@ -103,6 +118,8 @@ st generate --pr-body
 | `--no-prompt` + multiple templates | No template (avoids silent arbitrary pick) |
 | Interactive + single template | Auto-select the single template |
 | Interactive + multiple templates | Fuzzy picker |
+
+The selected template still supplies the body structure; the configured `body` instruction adds project-specific guidance. Custom instructions are appended before stax's final output directive, so title/submit responses must still use the requested JSON shape and direct body generation must still return markdown body content only.
 
 ```bash
 st generate --pr-body --template feature

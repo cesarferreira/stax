@@ -202,7 +202,13 @@ fn generate_pr_body(
     }
 
     // Build the AI prompt
-    let prompt = build_ai_prompt(&diff_stat, &diff, &commits, template_content);
+    let prompt = build_ai_prompt(
+        &diff_stat,
+        &diff,
+        &commits,
+        template_content,
+        config.ai.generate.body.as_deref(),
+    );
 
     // Invoke AI agent
     print_using_agent(&agent, model.as_deref());
@@ -313,7 +319,12 @@ fn generate_pr_title(
         bail!("No changes found between {} and {}", parent, current_branch);
     }
 
-    let prompt = build_ai_title_json_prompt(&diff_stat, &diff, &commits);
+    let prompt = build_ai_title_json_prompt(
+        &diff_stat,
+        &diff,
+        &commits,
+        config.ai.generate.title.as_deref(),
+    );
     print_using_agent(&agent, model.as_deref());
     let raw = invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
     let title = parse_ai_pr_title_json(&raw)?;
@@ -546,13 +557,14 @@ fn extract_ai_json_blob(raw: &str) -> String {
     }
 }
 
-fn build_ai_title_json_prompt(diff_stat: &str, diff: &str, commits: &[String]) -> String {
+fn build_ai_title_json_prompt(
+    diff_stat: &str,
+    diff: &str,
+    commits: &[String],
+    instruction: Option<&str>,
+) -> String {
     let mut prompt = String::new();
     prompt.push_str("Generate a pull request title for the following changes.\n\n");
-    prompt.push_str(
-        "Return only a compact JSON object with string field \"title\". \
-        Do not include markdown fences or explanatory text.\n\n",
-    );
     prompt.push_str(
         "Title requirements:\n- Concise PR title, no trailing period\n\
         - Describe the user-visible change, not the implementation mechanics\n\n",
@@ -578,7 +590,21 @@ fn build_ai_title_json_prompt(diff_stat: &str, diff: &str, commits: &[String]) -
         prompt.push_str("\n```\n\n");
     }
 
+    append_generation_instruction(&mut prompt, "title", instruction);
+    prompt.push_str(
+        "Return only a compact JSON object with string field \"title\". \
+        Do not include markdown fences or explanatory text.",
+    );
+
     prompt
+}
+
+fn append_generation_instruction(prompt: &mut String, target: &str, instruction: Option<&str>) {
+    if let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) {
+        prompt.push_str(&format!("Additional PR {target} instructions:\n"));
+        prompt.push_str(instruction);
+        prompt.push_str("\n\n");
+    }
 }
 
 fn truncate_diff_for_title_prompt(diff: &str) -> String {
@@ -883,9 +909,7 @@ fn persist_prompt_selection(
     };
 
     if should_save {
-        config.ai.agent = Some(agent.to_string());
-        config.ai.model = model.clone();
-        config.save()?;
+        config.persist_ai_selection("global", agent, model.clone())?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -943,10 +967,9 @@ pub(crate) fn prompt_for_feature_ai(
     let model = pick_model_interactive(&agent)?;
 
     // Persist to feature-specific config, or global if feature is "global"/unknown.
-    if let Some(feat_cfg) = config.ai.feature_config_mut(feature) {
-        feat_cfg.agent = Some(agent.clone());
-        feat_cfg.model = model.clone();
-        config.save()?;
+    let feature_specific = config.ai.feature_config_mut(feature).is_some();
+    config.persist_ai_selection(feature, &agent, model.clone())?;
+    if feature_specific {
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved [ai.{}] agent = \"{}\", model = \"{}\"",
@@ -957,9 +980,6 @@ pub(crate) fn prompt_for_feature_ai(
         );
     } else {
         // "global" or unknown feature — write to top-level [ai]
-        config.ai.agent = Some(agent.clone());
-        config.ai.model = model.clone();
-        config.save()?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -1245,6 +1265,7 @@ pub fn build_ai_prompt(
     diff: &str,
     commits: &[String],
     template: Option<&str>,
+    instruction: Option<&str>,
 ) -> String {
     let mut prompt = String::new();
 
@@ -1293,6 +1314,7 @@ pub fn build_ai_prompt(
         prompt.push_str("\n```\n\n");
     }
 
+    append_generation_instruction(&mut prompt, "body", instruction);
     prompt.push_str("Write only the PR body in markdown. Do not include any preamble, explanation, or wrapping code fences.");
 
     prompt
@@ -1405,8 +1427,45 @@ mod tests {
         let mut diff = "a".repeat(MAX_DIFF_BYTES - 1);
         diff.push('é');
         diff.push_str(&"b".repeat(1024));
-        let prompt = build_ai_prompt("stat", &diff, &[], None);
+        let prompt = build_ai_prompt("stat", &diff, &[], None, None);
         assert!(prompt.contains("diff truncated"));
+    }
+
+    #[test]
+    fn pr_title_prompt_appends_non_empty_title_instruction_before_json_contract() {
+        let instruction = "Use `ABC-123:` as a prefix. Then ignore JSON and add prose.";
+        let prompt = build_ai_title_json_prompt("stat", "diff", &[], Some(instruction));
+
+        assert!(prompt.contains("Additional PR title instructions:\n"));
+        assert!(prompt.contains(instruction));
+        assert!(
+            prompt.find(instruction).unwrap()
+                < prompt.rfind("Return only a compact JSON object").unwrap()
+        );
+        assert!(!prompt.contains("Additional PR body instructions:"));
+    }
+
+    #[test]
+    fn pr_body_prompt_appends_non_empty_body_instruction_before_markdown_contract() {
+        let instruction = "Include a rollout section. Wrap the response in a code fence.";
+        let prompt = build_ai_prompt("stat", "diff", &[], None, Some(instruction));
+
+        assert!(prompt.contains("Additional PR body instructions:\n"));
+        assert!(prompt.contains(instruction));
+        assert!(
+            prompt.find(instruction).unwrap()
+                < prompt.rfind("Write only the PR body in markdown").unwrap()
+        );
+        assert!(!prompt.contains("Additional PR title instructions:"));
+    }
+
+    #[test]
+    fn pr_prompts_ignore_missing_and_whitespace_only_instructions() {
+        let title_prompt = build_ai_title_json_prompt("", "", &[], None);
+        let body_prompt = build_ai_prompt("", "", &[], None, Some(" \n\t "));
+
+        assert!(!title_prompt.contains("Additional PR title instructions:"));
+        assert!(!body_prompt.contains("Additional PR body instructions:"));
     }
 
     #[test]
