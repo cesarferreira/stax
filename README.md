@@ -5,7 +5,7 @@
 
   <p>
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
-  <img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&style=flat-square&logo=github&color=007ACC&label=tests">
+  <img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&logo=github&color=007ACC&label=tests">
 </a>
     <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax?color=blue"></a>
     <a href="https://crates.io/crates/stax"><img src="https://img.shields.io/crates/d/stax.svg?color=blue" alt="Downloads"></a>
