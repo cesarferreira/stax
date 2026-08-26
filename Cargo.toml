@@ -116,7 +116,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 # Local web workspace (`st web`)
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "json"] }
 maud = { version = "0.27", features = ["axum"] }
-getrandom = "0.3"
+getrandom = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
