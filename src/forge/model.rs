@@ -3,6 +3,15 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::str::FromStr;
 
+/// A fork of the upstream repo that stax can push a branch to when the
+/// caller lacks write access to the upstream itself.
+#[derive(Debug, Clone)]
+pub struct ForkTarget {
+    pub owner: String,
+    pub ssh_url: String,
+    pub https_url: String,
+}
+
 /// A comment on a PR issue thread (conversation comment)
 #[derive(Debug, Clone)]
 pub struct IssueComment {

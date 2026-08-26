@@ -295,6 +295,19 @@ impl ForgeClient {
     ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         dispatch!(self, get_reviews_given(hours, username))
     }
+
+    /// Find an existing fork of this repo owned by `login` that stax can
+    /// push to. GitHub-only: fork-fallback submit is not supported on other
+    /// forges yet.
+    pub async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>> {
+        dispatch!(self, find_pushable_fork(login))
+    }
+
+    /// Fork this repo under the authenticated user's account. GitHub-only:
+    /// fork-fallback submit is not supported on other forges yet.
+    pub async fn create_fork(&self) -> Result<ForkTarget> {
+        dispatch!(self, create_fork())
+    }
 }
 
 impl Forge for GitHubClient {
@@ -440,6 +453,12 @@ impl Forge for GitHubClient {
         username: &str,
     ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
+    }
+    async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>> {
+        self.find_pushable_fork(login).await
+    }
+    async fn create_fork(&self) -> Result<ForkTarget> {
+        self.create_fork().await
     }
 }
 
@@ -597,6 +616,12 @@ impl Forge for GitLabClient {
         username: &str,
     ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
+    }
+    async fn find_pushable_fork(&self, _login: &str) -> Result<Option<ForkTarget>> {
+        bail!("Fork fallback for submit is currently only supported on GitHub")
+    }
+    async fn create_fork(&self) -> Result<ForkTarget> {
+        bail!("Fork fallback for submit is currently only supported on GitHub")
     }
 }
 
@@ -758,6 +783,12 @@ impl Forge for GiteaClient {
     ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
     }
+    async fn find_pushable_fork(&self, _login: &str) -> Result<Option<ForkTarget>> {
+        bail!("Fork fallback for submit is currently only supported on GitHub")
+    }
+    async fn create_fork(&self) -> Result<ForkTarget> {
+        bail!("Fork fallback for submit is currently only supported on GitHub")
+    }
 }
 
 impl Forge for ForgeClient {
@@ -896,6 +927,12 @@ impl Forge for ForgeClient {
         username: &str,
     ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
+    }
+    async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>> {
+        self.find_pushable_fork(login).await
+    }
+    async fn create_fork(&self) -> Result<ForkTarget> {
+        self.create_fork().await
     }
 }
 

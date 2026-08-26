@@ -45,6 +45,8 @@ single_stack = "on"    # "on" | "off"
 # base_url = "https://github.com"
 # api_base_url = "https://github.company.com/api/v3"
 # forge = "github" # "github" | "gitlab" | "gitea" — override auto-detection
+# auto_fork = false # always fall back to submitting from a fork when the upstream push is denied
+# fork_remote = "fork" # name of a pre-configured git remote for the fork (skip auto-detect)
 
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
@@ -296,6 +298,28 @@ forge = "gitlab"
 Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (Forgejo is treated as Gitea).
 
 Auto-detection fallback: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, otherwise → GitHub.
+
+## Fork fallback for submit
+
+When `stax branch submit` pushes to an upstream you lack write access to, GitHub rejects the push. Opt in to a fork-based fallback so stax re-runs the push against your fork instead:
+
+```toml
+[remote]
+auto_fork = true          # always fall back to a fork on permission-denied push
+fork_remote = "fork"      # optional: reuse an existing git remote you added yourself
+```
+
+Or use `stax branch submit --fork` for a one-off. When enabled:
+
+- stax reuses a pushable fork under your GitHub login, or creates one via the GitHub API when none exists.
+- the branch is pushed with `--force-with-lease` (never a bare `--force`); the first time stax publishes a branch to your fork it refuses to overwrite an existing fork branch whose tip is not already contained in your local branch. stax records what it published in `refs/stax/fork-published/<remote>/<branch>` so later restacks still force-push cleanly.
+- the PR is opened with head `<fork_owner>:<branch>`; `maintainer_can_modify` is set on fork PRs only.
+- an existing fork remote (`fork`, or your `remote.fork_remote` name) is never silently repointed; the run fails before any fork is created on GitHub.
+- when stax creates the fork for you, it waits for GitHub to finish creating the repo (fork creation is asynchronous) before pushing, up to ~2 minutes.
+
+Supported forges: GitHub only. Fork fallback rejects GitLab/Gitea cleanly.
+Scope: single branch only. A multi-branch stack cannot be submitted from a fork because a stacked child PR's base branch cannot live in the upstream repo.
+The base branch must already exist upstream.
 
 ### Automatic CI hydration trust
 

@@ -23,6 +23,46 @@ pub(crate) fn metadata_ref_oid(repo: &Repository, branch: &str) -> Option<String
 }
 const STAX_TRUNK_REF: &str = "refs/stax/trunk";
 const STAX_PREV_BRANCH_REF: &str = "refs/stax/prev-branch";
+const FORK_PUBLISHED_REF_PREFIX: &str = "refs/stax/fork-published/";
+
+/// Build the full ref name for the fork-published marker of `remote`/`branch`.
+fn fork_published_refname(remote: &str, branch: &str) -> String {
+    format!("{FORK_PUBLISHED_REF_PREFIX}{remote}/{branch}")
+}
+
+/// Read the OID that stax last published for `branch` on the fork `remote`.
+/// Unlike `read_metadata`/`read_trunk`, this ref points directly at a commit, not a blob.
+pub fn read_fork_published(
+    repo: &Repository,
+    remote: &str,
+    branch: &str,
+) -> Result<Option<String>> {
+    let ref_name = fork_published_refname(remote, branch);
+
+    match repo.find_reference(&ref_name) {
+        Ok(reference) => Ok(reference.target().map(|oid| oid.to_string())),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Record that stax published `oid` for `branch` on the fork `remote`.
+pub fn write_fork_published_at(
+    workdir: &Path,
+    remote: &str,
+    branch: &str,
+    oid: &str,
+) -> Result<()> {
+    let ref_name = fork_published_refname(remote, branch);
+    let status = command::status(workdir, &["update-ref", &ref_name, oid])
+        .context("Failed to update ref")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to update ref {}", ref_name);
+    }
+
+    Ok(())
+}
 
 /// Read metadata JSON for a branch from git refs
 pub fn read_metadata(repo: &Repository, branch: &str) -> Result<Option<String>> {
