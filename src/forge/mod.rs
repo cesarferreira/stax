@@ -292,7 +292,7 @@ impl ForgeClient {
         &self,
         hours: i64,
         username: &str,
-    ) -> Result<Vec<ReviewActivity>> {
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         dispatch!(self, get_reviews_given(hours, username))
     }
 }
@@ -434,7 +434,11 @@ impl Forge for GitHubClient {
     ) -> Result<Vec<ReviewActivity>> {
         self.get_reviews_received(hours, username).await
     }
-    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+    async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
     }
 }
@@ -587,7 +591,11 @@ impl Forge for GitLabClient {
     ) -> Result<Vec<ReviewActivity>> {
         self.get_reviews_received(hours, username).await
     }
-    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+    async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
     }
 }
@@ -743,7 +751,11 @@ impl Forge for GiteaClient {
     ) -> Result<Vec<ReviewActivity>> {
         self.get_reviews_received(hours, username).await
     }
-    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+    async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
     }
 }
@@ -878,7 +890,11 @@ impl Forge for ForgeClient {
     ) -> Result<Vec<ReviewActivity>> {
         self.get_reviews_received(hours, username).await
     }
-    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+    async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
         self.get_reviews_given(hours, username).await
     }
 }

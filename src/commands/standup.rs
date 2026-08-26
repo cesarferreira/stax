@@ -1,7 +1,7 @@
 use crate::commands::generate;
 use crate::config::Config;
 use crate::engine::Stack;
-use crate::forge::{ForgeClient, PrActivity, ReviewActivity};
+use crate::forge::{ForgeClient, ForgeSignal, PrActivity, ReviewActivity};
 use crate::git::GitRepo;
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
@@ -25,6 +25,7 @@ struct StandupJson {
     reviews_given: Vec<ReviewActivityJson>,
     recent_pushes: Vec<PushActivity>,
     needs_attention: NeedsAttention,
+    signals: StandupSignals,
     #[serde(skip_serializing_if = "Option::is_none")]
     jit: Option<JitSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +62,44 @@ struct NeedsAttention {
     branches_needing_restack: Vec<String>,
     ci_failing: Vec<String>,
     prs_with_requested_changes: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct StandupSignals {
+    reviews_given: SignalAvailability,
+    ci_failing: SignalAvailability,
+}
+
+#[derive(Clone, Serialize)]
+struct SignalAvailability {
+    status: SignalStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SignalStatus {
+    Available,
+    Unsupported,
+    Unavailable,
+    NotRequested,
+}
+
+impl SignalAvailability {
+    fn available() -> Self {
+        Self {
+            status: SignalStatus::Available,
+            reason: None,
+        }
+    }
+
+    fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            status: SignalStatus::Unavailable,
+            reason: Some(reason.into()),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -102,9 +141,10 @@ struct StandupData {
     reviews_given: Vec<ReviewActivity>,
     recent_pushes: Vec<PushActivity>,
     needs_attention: NeedsAttention,
+    signals: StandupSignals,
 }
 
-fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
+fn collect_standup_data(all: bool, hours: i64, ci: bool) -> Result<StandupData> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -126,12 +166,15 @@ fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
             .collect()
     };
 
-    let (merged_prs, opened_prs, reviews_received, reviews_given) =
+    let (merged_prs, opened_prs, reviews_received, reviews_given, reviews_given_signal) =
         fetch_forge_activity(&remote_info, hours);
 
     let recent_pushes = get_recent_pushes(&repo, &branches_to_show, hours);
-    let needs_attention =
+    let mut needs_attention =
         build_needs_attention(&repo, &stack, &branches_to_show, &reviews_received);
+    let (ci_failing, ci_failing_signal) =
+        fetch_ci_failures(ci, &repo, &stack, &branches_to_show, &remote_info);
+    needs_attention.ci_failing = ci_failing;
 
     Ok(StandupData {
         hours,
@@ -143,6 +186,10 @@ fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
         reviews_given,
         recent_pushes,
         needs_attention,
+        signals: StandupSignals {
+            reviews_given: reviews_given_signal,
+            ci_failing: ci_failing_signal,
+        },
     })
 }
 
@@ -151,6 +198,7 @@ pub fn run(
     json: bool,
     all: bool,
     hours: i64,
+    ci: bool,
     ai: bool,
     jit: bool,
     agent_flag: Option<String>,
@@ -168,7 +216,7 @@ pub fn run(
     let show_progress = standup_progress_enabled(json, plain_text);
 
     let collect_timer = LiveTimer::maybe_new_stderr(show_progress, "Collecting standup context...");
-    let data = match collect_standup_data(all, hours) {
+    let data = match collect_standup_data(all, hours, ci) {
         Ok(data) => {
             LiveTimer::maybe_finish_ok(collect_timer, "done");
             data
@@ -277,6 +325,7 @@ pub fn run(
         reviews_given,
         recent_pushes,
         needs_attention,
+        signals,
     } = data;
 
     if json {
@@ -326,6 +375,7 @@ pub fn run(
                 .collect(),
             recent_pushes,
             needs_attention,
+            signals: signals.clone(),
             jit: jit_summary,
             jit_error: if jit { jit_error } else { None },
         };
@@ -454,6 +504,27 @@ pub fn run(
         println!();
     }
 
+    let signal_notes = [
+        ("Reviews given", &signals.reviews_given),
+        ("CI failures", &signals.ci_failing),
+    ];
+    let signal_notes: Vec<_> = signal_notes
+        .into_iter()
+        .filter(|(_, signal)| !matches!(signal.status, SignalStatus::Available))
+        .collect();
+    if !signal_notes.is_empty() {
+        println!("{}", "Signals".dimmed().bold());
+        for (label, signal) in signal_notes {
+            println!(
+                "   {} {}: {}",
+                "•".dimmed(),
+                label,
+                signal.reason.as_deref().unwrap_or("unavailable").dimmed()
+            );
+        }
+        println!();
+    }
+
     if let Some(jit_data) = &jit_summary {
         print_jit_section(jit_data);
     } else if let Some(err) = &jit_error {
@@ -483,6 +554,11 @@ pub fn run(
         && pushes_with_activity.is_empty()
         && !has_attention
         && !has_jit_signal
+        && matches!(signals.reviews_given.status, SignalStatus::Available)
+        && matches!(
+            signals.ci_failing.status,
+            SignalStatus::Available | SignalStatus::NotRequested
+        )
     {
         println!(
             "{}",
@@ -1104,23 +1180,52 @@ fn fetch_forge_activity(
     Vec<PrActivity>,
     Vec<ReviewActivity>,
     Vec<ReviewActivity>,
+    SignalAvailability,
 ) {
     let Some(remote) = remote_info else {
-        return (vec![], vec![], vec![], vec![]);
+        return (
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            SignalAvailability::unavailable("no supported forge remote configured"),
+        );
     };
 
     if crate::forge::forge_token(remote.forge).is_none() {
-        return (vec![], vec![], vec![], vec![]);
+        return (
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            SignalAvailability::unavailable("forge authentication is not configured"),
+        );
     }
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(_) => return (vec![], vec![], vec![], vec![]),
+        Err(err) => {
+            return (
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                SignalAvailability::unavailable(err.to_string()),
+            );
+        }
     };
 
     let client = match rt.block_on(async { ForgeClient::new(remote) }) {
         Ok(client) => client,
-        Err(_) => return (vec![], vec![], vec![], vec![]),
+        Err(err) => {
+            return (
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                SignalAvailability::unavailable(err.to_string()),
+            );
+        }
     };
 
     // Get current user
@@ -1129,7 +1234,13 @@ fn fetch_forge_activity(
         .unwrap_or_default();
 
     if username.is_empty() {
-        return (vec![], vec![], vec![], vec![]);
+        return (
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            SignalAvailability::unavailable("could not determine the authenticated forge user"),
+        );
     }
 
     let merged_prs = rt
@@ -1144,11 +1255,72 @@ fn fetch_forge_activity(
         .block_on(async { client.get_reviews_received(hours, &username).await })
         .unwrap_or_default();
 
-    let reviews_given = rt
-        .block_on(async { client.get_reviews_given(hours, &username).await })
-        .unwrap_or_default();
+    let (reviews_given, reviews_given_signal) =
+        match rt.block_on(async { client.get_reviews_given(hours, &username).await }) {
+            Ok(ForgeSignal::Available(reviews)) => (reviews, SignalAvailability::available()),
+            Ok(ForgeSignal::Unsupported { reason }) => (
+                vec![],
+                SignalAvailability {
+                    status: SignalStatus::Unsupported,
+                    reason: Some(reason),
+                },
+            ),
+            Err(err) => (vec![], SignalAvailability::unavailable(format!("{err:#}"))),
+        };
 
-    (merged_prs, opened_prs, reviews_received, reviews_given)
+    (
+        merged_prs,
+        opened_prs,
+        reviews_received,
+        reviews_given,
+        reviews_given_signal,
+    )
+}
+
+fn fetch_ci_failures(
+    requested: bool,
+    repo: &GitRepo,
+    stack: &Stack,
+    branches: &[String],
+    remote_info: &Option<RemoteInfo>,
+) -> (Vec<String>, SignalAvailability) {
+    if !requested {
+        return (
+            vec![],
+            SignalAvailability {
+                status: SignalStatus::NotRequested,
+                reason: Some("not checked; rerun with --ci (may add network latency)".to_string()),
+            },
+        );
+    }
+    let Some(remote) = remote_info else {
+        return (
+            vec![],
+            SignalAvailability::unavailable("no supported forge remote configured"),
+        );
+    };
+    if crate::forge::forge_token(remote.forge).is_none() {
+        return (
+            vec![],
+            SignalAvailability::unavailable("forge authentication is not configured"),
+        );
+    }
+    let result = (|| -> Result<Vec<String>> {
+        let rt = tokio::runtime::Runtime::new()?;
+        let statuses = rt.block_on(async {
+            let client = ForgeClient::new(remote)?;
+            crate::commands::ci::fetch_ci_statuses_async(repo, &client, stack, branches).await
+        })?;
+        Ok(statuses
+            .into_iter()
+            .filter(|status| status.overall_status.as_deref() == Some("failure"))
+            .map(|status| status.branch)
+            .collect())
+    })();
+    match result {
+        Ok(branches) => (branches, SignalAvailability::available()),
+        Err(err) => (vec![], SignalAvailability::unavailable(format!("{err:#}"))),
+    }
 }
 
 fn get_recent_pushes(repo: &GitRepo, branches: &[String], hours: i64) -> Vec<PushActivity> {
@@ -1316,6 +1488,10 @@ mod tests {
                 ci_failing: vec![],
                 prs_with_requested_changes: vec![],
             },
+            signals: StandupSignals {
+                reviews_given: SignalAvailability::available(),
+                ci_failing: SignalAvailability::available(),
+            },
             jit: None,
             jit_error: None,
         };
@@ -1363,6 +1539,10 @@ mod tests {
                 branches_needing_restack: vec!["feature-1".to_string()],
                 ci_failing: vec![],
                 prs_with_requested_changes: vec![],
+            },
+            signals: StandupSignals {
+                reviews_given: SignalAvailability::available(),
+                ci_failing: SignalAvailability::available(),
             },
         }
     }
@@ -1504,6 +1684,7 @@ Current Sprint: OBX Sprint
             false,
             false,
             24,
+            false,
             false,
             false,
             None,

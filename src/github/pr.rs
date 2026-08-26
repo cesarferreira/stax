@@ -380,7 +380,10 @@ fn rollup_ci_status(rollup: &StatusCheckRollupData) -> CiStatus {
 }
 
 impl GitHubClient {
-    async fn graphql_data<T: DeserializeOwned>(&self, payload: serde_json::Value) -> Result<T> {
+    pub(crate) async fn graphql_data<T: DeserializeOwned>(
+        &self,
+        payload: serde_json::Value,
+    ) -> Result<T> {
         match self.octocrab.graphql(&payload).await {
             Ok(data) => Ok(data),
             Err(octocrab::Error::Graphql { source, .. }) => {

@@ -269,6 +269,12 @@ pub struct ReviewActivity {
     pub is_received: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum ForgeSignal<T> {
+    Available(T),
+    Unsupported { reason: String },
+}
+
 /// Open pull request info for repo-level listing commands.
 #[derive(Debug, Clone, Serialize)]
 pub struct RepoPrListItem {

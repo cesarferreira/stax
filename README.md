@@ -307,6 +307,8 @@ st generate --pr-title    # non-interactive: refresh PR title from branch diff
 st generate --commit-msg  # non-interactive: amend HEAD commit message with AI
 st standup --ai           # spoken-style daily engineering summary
 st standup --ai --style slack  # Slack-ready Yesterday/Today bullets
+st standup --ci           # include CI failures for selected stack branches
+st standup --ci --json    # activity + explicit signal availability metadata
 ```
 
 Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. `st create --ai`, `st submit --ai`, and `st generate` / `st gen` (PR body/title, commit message) share the `generate` setting. Configure with:
@@ -358,7 +360,7 @@ st config --set-ai
 | `st create --ai` | Generate a branch name from local changes |
 | `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
-| `st standup` | Summarize recent engineering activity |
+| `st standup` | Summarize recent engineering activity (`--ci` opts into live CI checks) |
 | `st tmux status` | Print a tmux-formatted status string (branch, stack position, PR, CI) for `status-right` |
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |

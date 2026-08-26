@@ -1996,7 +1996,7 @@ fn test_ci_command_flags() {
 // ============================================================================
 
 #[test]
-fn test_standup_command_flags_include_ai_and_style() {
+fn test_standup_command_flags_include_ai_style_and_opt_in_ci() {
     let output = stax(&["standup", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2006,6 +2006,12 @@ fn test_standup_command_flags_include_ai_and_style() {
         stdout
     );
     assert!(stdout.contains("--ai"), "Expected --ai flag: {}", stdout);
+    assert!(stdout.contains("--ci"), "Expected --ci flag: {}", stdout);
+    assert!(
+        stdout.contains("network latency"),
+        "Expected --ci help to explain its cost: {}",
+        stdout
+    );
     assert!(
         stdout.contains("spoken") && stdout.contains("slack"),
         "Expected spoken and slack style values: {}",

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::{Config, GitHubAuthSource};
-use crate::forge::{PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
+use crate::forge::{ForgeSignal, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
 
 const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -110,6 +110,56 @@ struct Review {
 #[derive(Debug, Deserialize)]
 struct SearchIssuesResponse {
     items: Vec<SearchIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewContributionsData {
+    viewer: ReviewContributionsViewer,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewContributionsViewer {
+    contributions_collection: ReviewContributionsCollection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewContributionsCollection {
+    pull_request_review_contributions: ReviewContributionConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewContributionConnection {
+    nodes: Option<Vec<Option<ReviewContributionNode>>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewContributionNode {
+    occurred_at: DateTime<Utc>,
+    user: Option<ReviewUser>,
+    pull_request_review: Option<AuthoredReview>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthoredReview {
+    state: String,
+    pull_request: ReviewedPullRequest,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewedPullRequest {
+    number: u64,
+    title: String,
+    repository: ReviewedRepository,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewedRepository {
+    name_with_owner: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -485,18 +535,78 @@ impl GitHubClient {
         Ok(reviews)
     }
 
-    /// Get reviews given by user on others' PRs in the last N hours
-    /// Note: This is expensive for large repos, returns empty to keep standup fast
+    /// Get reviews given by the authenticated user in one bounded GraphQL request.
     pub async fn get_reviews_given(
         &self,
-        _hours: i64,
+        hours: i64,
         _username: &str,
-    ) -> Result<Vec<ReviewActivity>> {
-        // Not yet implemented: scanning all PRs via REST is O(N) and too slow
-        // for large repos. A future version could use GitHub's GraphQL
-        // PullRequestReviewContributionsByRepository connection to fetch this
-        // efficiently in a single query.
-        Ok(vec![])
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
+        let to = Utc::now();
+        let from = to - chrono::Duration::hours(hours);
+        let query = format!(
+            r#"
+            query {{
+                viewer {{
+                    contributionsCollection(from: "{}", to: "{}") {{
+                        pullRequestReviewContributions(first: 100, orderBy: {{ field: OCCURRED_AT, direction: DESC }}) {{
+                            nodes {{
+                                occurredAt
+                                user {{ login }}
+                                pullRequestReview {{
+                                    state
+                                    pullRequest {{
+                                        number
+                                        title
+                                        repository {{ nameWithOwner }}
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+            "#,
+            from.to_rfc3339(),
+            to.to_rfc3339()
+        );
+
+        self.record_api_call("graphql.review_contributions");
+        let data: ReviewContributionsData = self
+            .graphql_data(serde_json::json!({ "query": query }))
+            .await
+            .context("Failed to query authored review contributions")?;
+        let repository = format!("{}/{}", self.owner, self.repo);
+        let reviews = data
+            .viewer
+            .contributions_collection
+            .pull_request_review_contributions
+            .nodes
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .filter_map(|node| {
+                let reviewer = node.user?.login;
+                if reviewer.trim().is_empty() {
+                    return None;
+                }
+                let review = node.pull_request_review?;
+                if node.occurred_at < from
+                    || review.pull_request.repository.name_with_owner != repository
+                {
+                    return None;
+                }
+                Some(ReviewActivity {
+                    pr_number: review.pull_request.number,
+                    pr_title: review.pull_request.title,
+                    reviewer,
+                    state: review.state,
+                    timestamp: node.occurred_at,
+                    is_received: false,
+                })
+            })
+            .collect();
+
+        Ok(ForgeSignal::Available(reviews))
     }
 
     /// Get all open PRs authored by the given user
