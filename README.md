@@ -4,9 +4,11 @@
   <p><strong>Stacked Git branches and PRs — fast, safe, and built for humans and AI agents.</strong></p>
 
   <p>
-    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg"></a>
-    <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
-    <a href="https://github.com/cesarferreira/stax/releases"><img alt="Release" src="https://img.shields.io/github/v/release/cesarferreira/stax?color=blue"></a>
+    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
+  <img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&style=flat-square&logo=github&color=007ACC&label=tests">
+</a>
+    <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax?color=blue"></a>
+    <a href="https://crates.io/crates/stax"><img src="https://img.shields.io/crates/d/stax.svg?color=blue" alt="Downloads"></a>
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
 
