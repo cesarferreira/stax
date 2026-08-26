@@ -82,6 +82,60 @@ fn submit_stack_with(repo: &TestRepo, args: &[&str]) -> String {
     format!("{stdout}\n{stderr}")
 }
 
+fn submit_stack_verbose(repo: &TestRepo) -> String {
+    submit_stack_with(
+        repo,
+        &[
+            "ss",
+            "--no-pr",
+            "--no-template",
+            "--no-prompt",
+            "--yes",
+            "--verbose",
+        ],
+    )
+}
+
+fn submit_stack_verbose_expect_failure(repo: &TestRepo) -> String {
+    let out = repo.run_stax(&[
+        "ss",
+        "--no-pr",
+        "--no-template",
+        "--no-prompt",
+        "--yes",
+        "--verbose",
+    ]);
+    let combined = format!("{}\n{}", TestRepo::stdout(&out), TestRepo::stderr(&out));
+    assert!(
+        !out.status.success(),
+        "submit unexpectedly succeeded:\n{combined}"
+    );
+    combined
+}
+
+fn worktree_registrations(repo: &TestRepo) -> String {
+    let out = repo.git(&["worktree", "list", "--porcelain"]);
+    assert!(
+        out.status.success(),
+        "worktree list failed: {}",
+        TestRepo::stderr(&out)
+    );
+    TestRepo::stdout(&out)
+}
+
+fn assert_worktree_registrations_unchanged(repo: &TestRepo, before: &str) {
+    let after = worktree_registrations(repo);
+    assert_eq!(
+        after, before,
+        "temporary submit worktree leaked:\nbefore:\n{before}\nafter:\n{after}"
+    );
+}
+
+fn assert_ancestor(repo: &TestRepo, ancestor: &str, descendant: &str, message: &str) {
+    let out = repo.git(&["merge-base", "--is-ancestor", ancestor, descendant]);
+    assert!(out.status.success(), "{message}");
+}
+
 /// Thesis part 1: the preparation phase must not be silent.
 ///
 /// Before the fix the only output was a single summary line printed *after*
@@ -155,6 +209,272 @@ fn temp_restack_replays_without_creating_a_worktree() {
         combined.contains("2 rebase(s): 2 replayed in-memory, 0 worktree(s) created"),
         "expected both rebases to replay without a worktree, got:\n{combined}"
     );
+}
+
+/// Signed commits must use Git's real rebase path: replaying in the object
+/// database would otherwise publish an unsigned replacement commit.
+#[test]
+fn signed_temp_restack_uses_worktree_and_preserves_signing_failure() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "signed"]);
+    assert!(bc.status.success(), "bc signed: {}", TestRepo::stderr(&bc));
+    repo.create_file("signed.txt", "signed");
+    repo.commit("Commit requiring a signature when rebased");
+
+    let co = repo.git(&["checkout", "main"]);
+    assert!(
+        co.status.success(),
+        "checkout main: {}",
+        TestRepo::stderr(&co)
+    );
+    repo.create_file("trunk.txt", "moved");
+    repo.commit("Trunk moves forward");
+    let co = repo.git(&["checkout", "signed"]);
+    assert!(
+        co.status.success(),
+        "checkout signed: {}",
+        TestRepo::stderr(&co)
+    );
+
+    let signer = common::stax_bin();
+    let config = repo.git(&["config", "--local", "commit.gpgsign", "true"]);
+    assert!(
+        config.status.success(),
+        "set commit.gpgsign: {}",
+        TestRepo::stderr(&config)
+    );
+    let config = repo.git(&["config", "--local", "gpg.format", "openpgp"]);
+    assert!(
+        config.status.success(),
+        "set gpg.format: {}",
+        TestRepo::stderr(&config)
+    );
+    let config = repo.git(&[
+        "config",
+        "--local",
+        "gpg.program",
+        signer
+            .to_str()
+            .expect("compiled stax binary path must be UTF-8"),
+    ]);
+    assert!(
+        config.status.success(),
+        "set gpg.program: {}",
+        TestRepo::stderr(&config)
+    );
+
+    let signing_enabled = repo.git(&["config", "--bool", "--get", "commit.gpgsign"]);
+    assert!(
+        signing_enabled.status.success(),
+        "read commit.gpgsign: {}",
+        TestRepo::stderr(&signing_enabled)
+    );
+    assert_eq!(
+        TestRepo::stdout(&signing_enabled).trim(),
+        "true",
+        "fixture must enable repository-local commit signing"
+    );
+    let configured_signer = repo.git(&["config", "--get", "gpg.program"]);
+    assert_eq!(
+        TestRepo::stdout(&configured_signer).trim(),
+        signer.to_str().unwrap(),
+        "fixture must use the deterministic failing signer"
+    );
+
+    let worktrees_before = worktree_registrations(&repo);
+    let combined = submit_stack_verbose_expect_failure(&repo);
+
+    assert!(
+        combined.contains("git rebase") && combined.contains("gpg failed to sign the data"),
+        "submit must reach Git's signing rebase failure, got:\n{combined}"
+    );
+    assert_worktree_registrations_unchanged(&repo, &worktrees_before);
+}
+
+/// Merge commits need Git's own rebase semantics, which a linear object
+/// database replay cannot preserve.
+#[test]
+fn merge_history_temp_restack_uses_one_worktree() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "merge-history"]);
+    assert!(
+        bc.status.success(),
+        "bc merge-history: {}",
+        TestRepo::stderr(&bc)
+    );
+    let branch = repo.current_branch();
+
+    let co = repo.git(&["checkout", "-b", "merge-source"]);
+    assert!(
+        co.status.success(),
+        "checkout merge-source: {}",
+        TestRepo::stderr(&co)
+    );
+    repo.create_file("merge-source.txt", "merge source");
+    repo.commit("Commit on merge source");
+
+    let co = repo.git(&["checkout", &branch]);
+    assert!(
+        co.status.success(),
+        "checkout {branch}: {}",
+        TestRepo::stderr(&co)
+    );
+    let merge = repo.git(&[
+        "merge",
+        "--no-ff",
+        "merge-source",
+        "-m",
+        "Merge merge source",
+    ]);
+    assert!(
+        merge.status.success(),
+        "create merge commit: {}",
+        TestRepo::stderr(&merge)
+    );
+    let merge_count = repo.git(&["rev-list", "--merges", "--count", "main..HEAD"]);
+    assert!(
+        merge_count.status.success(),
+        "count merge commits: {}",
+        TestRepo::stderr(&merge_count)
+    );
+    assert_eq!(
+        TestRepo::stdout(&merge_count).trim(),
+        "1",
+        "fixture must contain exactly one merge in the replay range"
+    );
+
+    let co = repo.git(&["checkout", "main"]);
+    assert!(
+        co.status.success(),
+        "checkout main: {}",
+        TestRepo::stderr(&co)
+    );
+    repo.create_file("trunk.txt", "moved");
+    repo.commit("Trunk moves forward");
+    let trunk = repo.get_commit_sha("main");
+    let co = repo.git(&["checkout", &branch]);
+    assert!(
+        co.status.success(),
+        "checkout {branch}: {}",
+        TestRepo::stderr(&co)
+    );
+
+    let worktrees_before = worktree_registrations(&repo);
+    let combined = submit_stack_verbose(&repo);
+
+    assert!(
+        combined.contains("1 rebase(s): 0 replayed in-memory, 1 worktree(s) created"),
+        "merge history must use one real worktree, got:\n{combined}"
+    );
+    let published = repo.get_commit_sha(&format!("refs/remotes/origin/{branch}"));
+    assert_ancestor(
+        &repo,
+        &trunk,
+        &published,
+        "published merge-history branch must be rebased onto the moved trunk",
+    );
+    assert_worktree_registrations_unchanged(&repo, &worktrees_before);
+}
+
+/// A root commit has no parent to cherry-pick from, so it must also use the
+/// worktree path and let Git turn it into a commit based on the moved trunk.
+#[test]
+fn root_history_temp_restack_uses_one_worktree() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "root-history"]);
+    assert!(
+        bc.status.success(),
+        "bc root-history: {}",
+        TestRepo::stderr(&bc)
+    );
+    let branch = repo.current_branch();
+
+    let co = repo.git(&["checkout", "--orphan", "isolated-root"]);
+    assert!(
+        co.status.success(),
+        "checkout orphan: {}",
+        TestRepo::stderr(&co)
+    );
+    let remove = repo.git(&["rm", "-rf", "."]);
+    assert!(
+        remove.status.success(),
+        "clear orphan index: {}",
+        TestRepo::stderr(&remove)
+    );
+    repo.create_file("root.txt", "root history");
+    let add = repo.git(&["add", "root.txt"]);
+    assert!(
+        add.status.success(),
+        "stage root commit: {}",
+        TestRepo::stderr(&add)
+    );
+    let commit = repo.git(&["commit", "-m", "Parentless root commit"]);
+    assert!(
+        commit.status.success(),
+        "create root commit: {}",
+        TestRepo::stderr(&commit)
+    );
+    let move_branch = repo.git(&["branch", "-f", &branch, "HEAD"]);
+    assert!(
+        move_branch.status.success(),
+        "replace {branch} history: {}",
+        TestRepo::stderr(&move_branch)
+    );
+    let co = repo.git(&["checkout", &branch]);
+    assert!(
+        co.status.success(),
+        "checkout {branch}: {}",
+        TestRepo::stderr(&co)
+    );
+    let parents = repo.git(&["rev-list", "--parents", "-n", "1", "HEAD"]);
+    assert!(
+        parents.status.success(),
+        "inspect root commit parents: {}",
+        TestRepo::stderr(&parents)
+    );
+    assert_eq!(
+        TestRepo::stdout(&parents).split_whitespace().count(),
+        1,
+        "fixture branch tip must be a parentless root commit"
+    );
+
+    let co = repo.git(&["checkout", "main"]);
+    assert!(
+        co.status.success(),
+        "checkout main: {}",
+        TestRepo::stderr(&co)
+    );
+    repo.create_file("trunk.txt", "moved");
+    repo.commit("Trunk moves forward");
+    let trunk = repo.get_commit_sha("main");
+    let co = repo.git(&["checkout", &branch]);
+    assert!(
+        co.status.success(),
+        "checkout {branch}: {}",
+        TestRepo::stderr(&co)
+    );
+
+    let worktrees_before = worktree_registrations(&repo);
+    let combined = submit_stack_verbose(&repo);
+
+    assert!(
+        combined.contains("1 rebase(s): 0 replayed in-memory, 1 worktree(s) created"),
+        "root history must use one real worktree, got:\n{combined}"
+    );
+    let published = repo.get_commit_sha(&format!("refs/remotes/origin/{branch}"));
+    assert_ancestor(
+        &repo,
+        &trunk,
+        &published,
+        "published root-history branch must be rebased onto the moved trunk",
+    );
+    assert_worktree_registrations_unchanged(&repo, &worktrees_before);
 }
 
 /// The object-database replay must bail (not guess) when the rebase conflicts,
