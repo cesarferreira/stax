@@ -78,7 +78,7 @@ stax comments                  # Show current PR comments
 stax reviews --stack           # Review/comment inbox; GitHub review comments include inline file/line locations
 stax reviews --all --json      # Machine-readable inbox for every tracked PR
 stax copy [--pr]               # Copy branch name or PR URL
-stax ci [--oneline|-1]         # CI status (per-check table; --oneline / multi-branch = one line per branch)
+stax ci [--oneline|-1]         # CI status (all GitHub status/check-run pages; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
 stax standup --ai              # AI-generated spoken standup update (colored card)
 stax standup --ai --style slack  # AI-generated Slack-ready Yesterday/Today bullets
@@ -467,6 +467,7 @@ stax watch --iterations N --interval <seconds>  # Run N total refreshes with a d
 # Oneline roll-up: status icon · branch · #PR · draft/ready · title · check-count + timing.
 # Single branch shows the full per-check table; any multi-branch view defaults to oneline;
 # --verbose forces the grouped cards. --oneline conflicts with --verbose.
+# GitHub commit statuses and check runs are aggregated across all pages before latest-result roll-up.
 
 `--iterations` counts total refreshes: `1` renders exactly once, `0` is invalid, and a bounded run never sleeps after its final refresh. For `N > 1`, use `--interval <seconds>` to set the delay between refreshes.
 

@@ -462,6 +462,7 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 - `--stack` / `--all` / `--oneline` (`-1`) / `--verbose` / `--watch` / `--watch --strict` / `--interval 30` / `--json`
 - For tracked PRs, CI is fetched for the forge's live PR head, so commits added remotely by formatters or other automation are reflected without moving the local branch. If the live PR revision cannot be resolved, stax falls back to the local branch revision.
 - CI status is always fetched live. `--refresh` remains accepted for compatibility but does not change the fetch behavior.
+- On GitHub, all commit-status and check-run pages are collected before the latest result for each check is selected and the overall state is calculated.
 - Three render modes: the **full per-check table** (single branch, default), grouped **summary cards** (`--verbose`/`-v`), and the **one-line roll-up** (`--oneline`/`-1`). Any multi-branch view (`--stack`/`--all`) defaults to the roll-up; `--verbose` overrides it back to cards. `--oneline` and `--verbose` cannot be combined.
 - The roll-up renders one line per branch, base→tip: CI status icon · branch · `#PR` · `draft`/`ready` · PR title · trailing check-count and timing. A bare `--oneline` defaults its scope to the current stack.
 - By default, `--watch` waits until every check is terminal, even if one check has already failed. Add `--strict` to exit as soon as any check fails.
