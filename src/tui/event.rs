@@ -36,6 +36,9 @@ pub enum KeyAction {
     Quit,
     ReorderMode,
     MovePicker,
+    ToggleStackPane,
+    ToggleSummaryPane,
+    TogglePatchPane,
 
     // Reorder mode actions
     MoveUp,
@@ -75,10 +78,10 @@ impl From<KeyEvent> for KeyAction {
 impl KeyAction {
     pub fn from_key(key: KeyEvent, context: KeyContext) -> Self {
         // Handle Ctrl+C for quit
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            if let KeyCode::Char('c') = key.code {
-                return KeyAction::Quit;
-            }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && let KeyCode::Char('c') = key.code
+        {
+            return KeyAction::Quit;
         }
 
         // Handle Shift modifiers

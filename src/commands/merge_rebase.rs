@@ -38,18 +38,18 @@ pub(crate) fn rebase_descendant_onto_parent_with_provenance(
     let result =
         repo.rebase_branch_onto_with_provenance(branch, &onto_ref, &fallback_upstream, false)?;
 
-    if result == RebaseResult::Success {
-        if let Some(meta) = BranchMetadata::read(repo.inner(), branch)? {
-            let parent_commit = repo
-                .resolve_ref(&onto_ref)
-                .unwrap_or_else(|_| repo.branch_commit(parent).unwrap_or_default());
-            let updated_meta = BranchMetadata {
-                parent_branch_name: parent.to_string(),
-                parent_branch_revision: parent_commit,
-                ..meta
-            };
-            updated_meta.write(repo.inner(), branch)?;
-        }
+    if result == RebaseResult::Success
+        && let Some(meta) = BranchMetadata::read(repo.inner(), branch)?
+    {
+        let parent_commit = repo
+            .resolve_ref(&onto_ref)
+            .unwrap_or_else(|_| repo.branch_commit(parent).unwrap_or_default());
+        let updated_meta = BranchMetadata {
+            parent_branch_name: parent.to_string(),
+            parent_branch_revision: parent_commit,
+            ..meta
+        };
+        updated_meta.write(repo.inner(), branch)?;
     }
 
     Ok(result)

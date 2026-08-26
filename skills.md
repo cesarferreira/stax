@@ -1,9 +1,9 @@
-<!-- stax-skills-version: 0.51.0 -->
+<!-- stax-skills-version: 0.106.0 -->
 # Stax Skills for AI Coding Agents
 
-This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode) how to use `stax` to manage stacked Git branches and PRs.
+This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, pi) how to use `stax` to manage stacked Git branches and PRs.
 
-> Installing this skill: run `stax skills update` (or `st setup --install-skills`). Per-agent setup details live in `docs/integrations/`.
+> Installing this skill: run `stax skills update` (or `st setup --install-skills`). To print the bundled skill (SKILL.md format): `st --skill`. Per-agent setup details live in `docs/integrations/`.
 
 ## What is Stax?
 
@@ -22,13 +22,16 @@ Stax manages stacked branches: small focused branches layered on top of each oth
 stax status|ls                # Stack status (tree)
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
+stax web [path] [--port <n>] [--no-open]  # Start localhost workspace; busy ports fall back automatically
 
 stax submit|ss                 # Submit full stack
+stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
+stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
 stax restack                   # Rebase branch/stack onto parents
-stax cascade                   # Restack bottom-up and submit updates
+stax cascade                   # Restack bottom-up and submit updates (no trunk fetch; offline-friendly)
 
 stax get [branch|PR]           # Sync current stack, or fetch/checkout a remote branch or PR stack
 stax checkout|co|bco           # Checkout branch (interactive by default)
@@ -53,21 +56,27 @@ stax split                     # Interactive branch split into stack
 
 stax continue|cont             # Continue after conflict resolution
 stax abort                     # Abort in-progress rebase/conflict flow
-stax undo [op-id]              # Undo last/specific operation
+stax undo [op-id]              # Undo last/specific operation — covers restack, submit, sync (trunk ff + deletions + reparents + restack phase)
 stax redo [op-id]              # Redo last/specific undone operation
 
 stax pr                        # Open current branch PR
 stax pr body                   # Print current PR description
 stax pr body --edit            # Edit current PR description in $EDITOR
-stax ready                     # Interactive PR readiness dashboard for all tracked PRs, newest changed first (merge/ping/fix/wait/draft)
-stax ready --current           # Readiness dashboard for current stack only
+stax ready                     # Interactive unmerged-PR readiness TUI; refresh drops remotely merged PRs without local cleanup
+stax ready --current           # PR readiness TUI scoped to current stack only
 stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
-stax pr list --ready           # Same readiness view under PR list
-stax ready --all               # Explicit all tracked branch PRs (default)
+stax pr list --ready           # Same interactive TUI under PR list
+stax draft [branch]            # Mark current or named branch PR as draft
+stax draft --stack             # Mark every PR in the current stack as draft
+stax undraft [branch]          # Mark current or named branch PR ready for review
+stax undraft --stack           # Mark every PR in the current stack ready for review
+stax ready --all               # Explicit all tracked branches (default)
 stax issue list                # List open issues
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
+stax reviews --stack           # Review/comment inbox; GitHub review comments include inline file/line locations
+stax reviews --all --json      # Machine-readable inbox for every tracked PR
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci [--oneline|-1]         # CI status (per-check table; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
@@ -96,6 +105,7 @@ stax skills                    # List installed AI agent skill files + version s
 stax skills list               # Same as above
 stax skills update             # Download latest skills from GitHub and update all installed files
 stax skills update --dry-run   # Preview what would be updated without writing
+st --skill                     # Print bundled agent skill (SKILL.md format) to stdout
 
 stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
 stax absorb                    # Absorb staged changes into correct stack branches
@@ -107,11 +117,14 @@ stax worktree ll               # Richer worktree status (managed/prunable/confli
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
 stax worktree path <name>      # Print absolute path of a worktree (for scripting)
 stax worktree remove <name>    # Remove a worktree
+stax worktree promote          # Retire current lane + check its branch out in main worktree
 stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
 stax worktree restack          # Restack all stax-managed worktrees
 stax setup                     # Install shell integration, then optionally offer AI agent skills + auth onboarding
 stax setup --yes               # Accept shell setup defaults, install skills, and import auth from gh when available
-stax setup --install-skills    # Install shell integration and accept the skills install automatically
+stax setup --install-skills    # Install shell integration and skills for all harnesses (non-interactive)
+stax setup --install-skills --skills claude,cursor   # Only selected harnesses
+stax setup --yes               # Skills for detected harnesses only
 stax setup --skip-skills       # Install shell integration without the skills prompt
 stax setup --auth-from-gh      # Install shell integration and import GitHub auth from gh without prompting
 stax setup --skip-auth         # Install shell integration without the auth onboarding step
@@ -141,6 +154,31 @@ cargo release patch --no-confirm # Dry-run cargo release only (no bump/tag/push)
 ```
 
 Release prep regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) (config in `cliff.toml`) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version. Conventional prefixes map to grouped sections (`feat` → Features, `fix` → Bug Fixes, `docs` → Documentation, etc.); non-conventional subjects land in `Other` rather than being dropped. git-cliff must be installed locally (`cargo install git-cliff`).
+
+### Web Workspace (`st web`)
+
+`st web` starts a localhost HTMX workspace in the browser.
+
+```bash
+stax web                          # Start on 127.0.0.1:8787 and open browser
+stax web --port 9000              # Custom port (falls back to a free OS port if busy)
+stax web --port 0                 # Ephemeral port
+stax web --no-open                # Print URL only; don't open browser
+stax web /path/to/repo            # Open a specific repository
+```
+
+Key properties:
+- GitKraken-inspired layout: grouped toolbar, stack graph table (topology + ahead/behind + PR chips), file-list + patch Changes panel, Details inspector, status bar
+- Binds **127.0.0.1 only** — never reachable from the network; no `--host` flag
+- Unguessable 48-hex session token in every URL: `/s/<token>/…`
+- CSRF token required on all mutating POSTs; wrong token → 403
+- Non-local `Host`/`Origin` headers → 403
+- One mutation at a time; mutating controls disabled while op is in flight
+- Session state is in-memory; server restart generates a new URL
+
+Supports checkout, create, rename, delete, restack, submit (draft), undo/redo, and move. Use `/` to search, `1`/`2`/`3` to toggle panes, `Esc` to dismiss overlays.
+
+
 
 ### Create and Edit Branches
 
@@ -189,6 +227,9 @@ stax split                         # Split current branch into multiple stacked 
 ```bash
 stax submit                        # Submit full stack
 stax ss                            # Alias for submit
+stax submit --plan                 # Read-only action plan (no fetch/push/metadata writes)
+stax submit --plan --json          # Versioned v2 plan for automation (action strings are extensible)
+                                      # Live remote heads are read without fetching; chained restacks and unresolved PR/link decisions are runtime-evaluated
 stax submit --draft                # Create draft PRs
 stax submit --no-pr                # Push only (no PR create/update)
 stax submit --no-fetch             # Skip git fetch
@@ -206,31 +247,69 @@ stax submit --ai --title           # Generate/update PR title only
 stax submit --ai --body            # Generate/update PR body only
 stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
+stax submit --native-stack         # Force-attempt native GitHub Stack registration for this run
+stax submit --no-native-stack      # Skip native GitHub Stack registration for this run
+stax completions zsh               # Generate completions: bash|zsh|fish|powershell|elvish
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
+# stax --default-config  # print full annotated template (all sections + allowed values)
+# st --skill             # print bundled AI agent skill (SKILL.md format)
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
+native_stack = "auto"              # "auto" | "off" | "link" — gh-stack on submit; use "off" to disable
+stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment links when native registration succeeds
+
+# Native GitHub Stacked PRs are additive. Disable with native_stack = "off" or st submit --no-native-stack.
+# Repos/users without access or without `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
+# can offer `gh extension install github/gh-stack` when `gh` is installed.
+# `stax submit --native-stack` still keeps submit non-blocking, but prints an
+# actionable note when `gh`, `github/gh-stack`, or `gh stack link` support is missing.
+# gh-stack v0.0.8+ uses the public Stacks REST API and preserves normal GitHub
+# CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
+# stax strips those overrides before `gh stack` and falls back to a keyring OAuth
+# account. `stax doctor` always shows the installed version, marks anything below
+# v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `merge --stack`),
+# can upgrade it with `stax doctor --fix`, and probes legacy OAuth (versions
+# below v0.0.8 only) only when token overrides exist.
+# Native GitHub Stack updates are append-only. If relinking would remove or insert
+# a PR, run `stax stack unlink <stack-number>` and then `stax stack link` again.
+# stax prints the repository-scoped Stack number when gh-stack returns it.
+# Once linked, GitHub owns base-branch transitions for those PRs and rejects
+# any PATCH touching `base` ("...part of a stack"). stax treats this as
+# non-fatal in submit/merge cascade retargets (prints a note, continues);
+# `stax merge --stack`/`--queue` fail with an actionable message instead,
+# since merging out of stack order needs a real base change (run
+# `stax stack unlink` first if that's what you want).
+# GitHub's native Stack feature only supports one linear chain — if a branch
+# in the local stack has two+ children (a fork), stax detects this itself
+# and skips native `gh stack link` for that submit (prints a note) rather
+# than handing gh-stack a branch set it might silently mis-linearize.
+# stax's own body/comment stack links have no such limit and render forked
+# siblings at equal depth.
 
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit
 stax upstack submit                # Submit current + descendants
 stax downstack submit              # Submit ancestors + current
 
-# branch/upstack submit can publish temporary rebased heads when the excluded
-# parent is already remote-synced; local branch tips and metadata are not moved.
-# Plain git commits on the branch are included. If the parent has local-only
-# commits, use downstack submit / full submit or restack first.
+# submit can publish temporary rebased heads for branches that need restack;
+# local branch tips and metadata are not moved. Scoped submit still requires an
+# excluded parent to be remote-synced; otherwise use downstack/full submit or
+# restack first.
 
 stax merge --all                   # Merge whole stack
 stax merge --downstack-only        # Merge ancestors below current, then rebase current
 stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
-stax merge --stack                 # GitHub only: validate selected tip once, merge it, and mark lower PRs as absorbed
+stax merge --stack                 # GitHub/GitLab only: target selected items to trunk, merge the tip, preserve merged state
+                                    # (GitHub: delegates to atomic `gh stack merge` when the repo has a confirmed native
+                                    # Stack and gh-stack v0.1.0+; falls back to the flow above otherwise, with a note)
+stax merge --stack --method rebase # Single-PR GitHub only; multi-PR GitHub and all GitLab ranges reject rewriting methods
 stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
 stax merge --stack --full          # Stack-merge full stack even from the middle
-stax merge --stack --when-ready    # Wait only for selected tip PR readiness before stack fast-forward merge
+stax merge --stack --when-ready    # Wait only for selected tip PR/MR readiness before the one-item stack merge
 stax merge --when-ready            # Wait for CI + approval before each merge
 stax merge --remote                # Merge via GitHub API only — no local checkout/rebase/push
 stax merge --remote --all          # Include full stack (GitHub only)
@@ -243,14 +322,29 @@ stax merge-when-ready              # Backward-compatible alias
 
 stax rs                            # Sync trunk + clean merged branches
 stax rs --restack                  # Sync then restack
+stax sync --dry-run                # Preview sync plan (read-only — no fetch, no stash, no ref writes); alias: --plan
+stax sync --dry-run --json         # Same as --dry-run but emits a single JSON doc (kind:"sync_plan", schema_version:1, dry_run:true); always exits 0; no receipt written
+stax sync --json                   # Run sync and emit result as JSON (kind:"sync", schema_version:1); implies non-interactive (quiet); does NOT imply --force; failures emit JSON + non-zero exit
+stax sync --json --force           # Same as --json but also auto-confirms branch deletions (scripting entry point)
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
-stax sync --force                  # Force sync without prompts
-stax sync --prune                  # No-op: kept for CLI compatibility (use --full to fetch --prune all remote-tracking refs)
+stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
+# Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
+stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
-stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
-# sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
+stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
+stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
+stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
+# sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
+# The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
+# Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
+# When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
+# Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
+# If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
+# sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
+# --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; error message names --stash; stax sync --json --stash succeeds on a dirty tree (stashes before sync, restores after); --json conflicts with --continue.
+# trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation
@@ -259,22 +353,27 @@ stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
 
-stax update                        # Sync trunk, restack, then submit (no merged cleanup)
-stax update --no-pr                # Push only after trunk sync/restack
-stax update --no-submit            # Trunk sync/restack only
-stax update --force                # Force sync without prompts first
-stax update --force --yes --no-prompt # Full update without sync/submit prompts
-stax update --verbose              # Show detailed sync/restack/submit timings
+stax refresh                        # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
+stax refresh --no-pr                # Push only after trunk sync/restack
+stax refresh --no-submit            # Trunk sync/restack only
+stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
+stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
+stax refresh --force                # Force sync without prompts first
+stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
+stax refresh --verbose              # Show detailed sync/restack/submit timings
+# `stax update` remains a back-compat alias for `stax refresh`.
+# refresh inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
 stax restack --continue            # Continue after conflicts
 stax restack --dry-run             # Predict conflicts only
+# Preview commands (read-only, always exit 0): stax sync --dry-run · stax restack --dry-run · stax submit --dry-run · stax merge --dry-run
 stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
 stax restack --quiet               # Also silences the preflight notice below
 
-stax cascade                       # Restack bottom-up then submit
+stax cascade                       # Restack bottom-up then submit (no trunk fetch; offline-friendly)
 stax cascade --no-pr               # Push only, skip PR updates
 stax cascade --no-submit           # Local restack only
 stax cascade --auto-stash-pop      # Stash/pop dirty target worktrees
@@ -334,17 +433,22 @@ stax range-diff                    # Range-diff branches needing restack
 
 stax pr body                       # Print current PR description
 stax pr body --edit                # Edit current PR description in $EDITOR
-stax ready                         # Interactive PR readiness dashboard for all tracked PRs, newest changed first; arrows move, Enter opens PR
-stax ready --current               # Current-stack readiness dashboard
-stax ready --plain                 # Fresh static readiness table: ACTION, PR, BRANCH, REVIEWS, CI, TITLE
-stax ready --all                   # Readiness for all tracked branch PRs (default)
-stax ready --json                  # Machine-readable readiness rows
-stax pr list --ready               # Same readiness view under PR list
+stax ready                         # Interactive unmerged-PR readiness TUI; refresh drops remotely merged PRs without local cleanup
+stax ready --current               # PR readiness TUI scoped to current stack only
+stax ready --plain                 # Static readiness table: action · PR · branch · reviews · CI · title
+stax ready --all                   # Explicit all tracked branches (default)
+stax ready --json                  # Machine-readable readiness rows (existing schema: action/reason/branch/…)
+stax ready --interval 30           # Override auto-refresh interval (default 15s)
+stax pr list --ready               # Same interactive TUI under PR list
 stax issue list --limit 50 --json  # List open issues with optional limit and JSON output
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
+stax next / stax n                  # Next unmerged branch; deterministic on forks
+stax freeze [branch]                # Protect branch from restacks and sync history rewrites (including imported refresh/squash cleanup)
+stax unfreeze [branch]              # Remove freeze protection
+stax run --parallel --jobs 4 <cmd>  # Concurrent checks; command receives STAX_RUN_BRANCH
 
-stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
+stax ci                            # Live CI for current PR head, full per-check table (falls back to local revision when needed)
 stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)
 stax ci --all                      # CI for all tracked branches (one-line-per-branch roll-up)
 stax ci --oneline                  # One compact line per branch across the stack (alias: -1)
@@ -389,7 +493,8 @@ stax gen --pr-title                # Refresh PR title with AI
 stax gen --commit-msg              # Amend HEAD commit message with AI
 stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
-# Model picker includes "Edit config file to use another model" for custom IDs.
+# Model picker ends with "Edit config file to use another model" for custom IDs,
+# including agents with no built-in list; edit [ai] or the exact [ai.<feature>] section.
 ```
 
 ### AI Worktree Lanes (parallel AI agents)
@@ -406,12 +511,25 @@ stax wt ll                                        # Rich status of all lanes
 stax wt rs                                        # Restack ALL stax-managed worktrees after trunk moves
 stax wt rm add-dark-mode --delete-branch          # Remove worktree + delete branch + metadata
 stax wt rm add-dark-mode --force                  # Force remove dirty worktree
+stax wt promote                                    # Continue current lane branch in main worktree
 stax wt cleanup --dry-run                         # Preview bulk prune/remove decisions
 stax wt cleanup                                   # Prune stale entries + remove merged/detached lanes
 
 # Lower-level worktree control
 stax wt c review-pass --agent codex -- "address the open PR comments"  # Create + launch agent
 stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
+
+# Warm-start dependencies: by default, removing a clean, merged-equivalent
+# worktree parks it as a reusable warm slot (reset --hard trunk + `git clean -fd`,
+# which keeps gitignored deps like node_modules / .venv) instead of deleting it.
+# The next create/lane adopts that slot instead of a cold `git worktree add`, so
+# built deps survive. A --force dirty removal never parks.
+#
+# Optional ~/.config/stax/config.toml or repo-root stax.toml overrides:
+[worktree]
+reuse_slots = false               # disable recycling (cold create + real remove)
+max_idle_slots = 4                # cap on parked idle slots
+reconcile = "pnpm install"        # non-fatal deps re-sync on adopt
 ```
 
 ### Maintenance, Safety, and Setup
@@ -426,7 +544,7 @@ stax undo --no-push                # Undo locally only
 stax redo                          # Re-apply last undone operation
 stax redo <op-id> --no-push        # Redo locally only
 
-stax validate                      # Validate stack metadata health
+stax validate                      # Validate stack metadata health (read-only; never prunes refs)
 stax fix --dry-run                 # Preview metadata repairs
 stax fix --yes                     # Apply metadata repairs non-interactively
 
@@ -478,13 +596,14 @@ stax ss --rerequest-review
 ```bash
 stax ready
 stax merge --when-ready --interval 15
-stax merge --stack --when-ready    # GitHub stack fast-forward: selected tip CI only, defaults to rebase
+stax merge --stack --when-ready    # GitHub/GitLab stack merge: selected tip CI only, preserving merge
 ```
 
 ### After Base PR Merges
 
 ```bash
-stax update
+stax refresh
+# `stax update` is a back-compat alias for `stax refresh`.
 ```
 
 ### Resolve Rebase Conflicts
@@ -519,8 +638,9 @@ stax fix --yes
 ```bash
 # One-time shell integration (enables transparent cd)
 stax setup
-stax setup --yes               # Shell integration + skills + auth import from gh when available
-stax setup --install-skills    # Non-interactive onboarding: shell integration + AI agent skills
+stax setup --yes               # Shell integration + skills for detected agents + auth import from gh when available
+stax setup --install-skills    # Non-interactive: shell integration + skills for all harnesses
+stax skills update --all         # Update every harness, ignoring configured selection
 
 # Create a worktree for an existing local branch
 stax worktree create feature/payments-api
@@ -539,6 +659,9 @@ sw payments-api
 # All stax commands work normally inside worktrees
 stax restack --all
 stax ss
+
+# Hand this branch back to the main worktree (both checkouts must be clean)
+stax worktree promote
 
 # Clean up
 stax worktree remove payments-api
@@ -580,7 +703,7 @@ stax wt cleanup      # bulk-remove merged/detached lanes
 ◉  feature/validation 1↑         # ◉ = current branch, 1↑ = commits ahead of parent
 ○  feature/auth 2↑ 1↓ ⟳          # ⟳ = needs restack
 ○  feature/old-base (missing parent: feature/base)
-│ ○    ☁ feature/payments PR #42 # ☁ = has remote, PR #N = open PR
+│ ○    ☁ wt feature/payments PR #42 # ☁ = has remote, wt/󰙅 = linked worktree, PR #N = open PR
 ○─┘    ☁ main                    # trunk branch
 ```
 
@@ -589,6 +712,7 @@ Symbols:
 - `◉` = current branch
 - `○` = other branch
 - `☁` = has remote tracking
+- `wt` / Nerd Font tree icon = checked out in a linked worktree (`display.worktree_glyph` in config)
 - `↑` = commits ahead of parent
 - `↓` = commits behind parent
 - `⟳` = needs restacking (parent changed)
@@ -601,20 +725,23 @@ Symbols:
 2. Sync often (`stax rs`).
 3. Restack after merges (`stax rs --restack`); squash-merged local parents collapse to their updated parent before descendants rebase.
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
-5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
+5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery. Validation is read-only; only `fix` removes orphaned refs.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
 9. Use `stax worktree create` when you want a worktree for an existing local branch, fetched remote branch, or human parallel development — `st lane` is the higher-level AI shortcut.
-10. Run `stax setup` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
+10. Use `stax worktree promote` inside a clean lane to retire it and continue its branch in the main worktree without losing stax or PR metadata.
+11. Run `stax setup` once per machine to enable `stax worktree go`, `stax worktree promote`, and the `sw` alias to move the parent shell automatically.
 
 ## Tips
 
-- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, and unchanged branch diffs can be reused from the repo-local TUI cache on reopen.
+- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
+- Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.
 - Use `--json` on supported commands for machine-readable output.
 - Use `stax lane` with no arguments for an interactive picker over all stax-managed lanes — useful when you forget where a session lives.
 - Use `stax worktree go` (or `sw`) + shell integration to switch between stacks without `cd` gymnastics.
+- Use `stax worktree promote` when a lane should become the main-worktree checkout; it refuses dirty or conflicted checkouts instead of stashing automatically. If Git reports a removal failure after already retiring the lane, Stax keeps the completed promotion and warns you to inspect leftover files.
 - `stax worktree list` shows ALL worktrees including those created externally via `git worktree add`.

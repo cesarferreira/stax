@@ -13,36 +13,32 @@ const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
 const STACK_LINKS_BODY_START_MARKER: &str = "<!-- stax-stack-links:start -->";
 const STACK_LINKS_BODY_END_MARKER: &str = "<!-- stax-stack-links:end -->";
 
-/// A comment on a PR issue thread (conversation comment)
-#[derive(Debug, Clone)]
-pub struct IssueComment {
-    #[allow(dead_code)]
-    pub id: u64,
-    pub body: String,
-    pub user: String,
-    pub created_at: DateTime<Utc>,
+/// True when a PR base-update failure is GitHub rejecting the change because
+/// the PR is registered in a native GitHub Stack (private preview). GitHub
+/// owns base-branch management for stacked PRs once linked, and returns this
+/// validation error for `PATCH .../pulls/{n}` calls that touch `base` — even
+/// when the requested value matches the PR's current base, or when the
+/// caller is trying to perform a legitimate retarget (e.g. a merge cascade
+/// moving the next PR onto trunk).
+///
+/// Matches on GitHub's exact wording ("...pull request is part of a
+/// stack.") rather than the shorter "part of a stack" fragment, so a
+/// hypothetical negated message like "...is not part of a stack" can never
+/// be misclassified as a lock (the two phrases aren't substrings of one
+/// another, since "not " breaks the contiguous match).
+pub(crate) fn is_native_stack_base_locked_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .to_lowercase()
+            .contains("pull request is part of a stack")
+    })
 }
 
-/// A review comment on a PR (inline code comment)
-#[derive(Debug, Clone)]
-pub struct ReviewComment {
-    #[allow(dead_code)]
-    pub id: u64,
-    pub body: String,
-    pub user: String,
-    pub path: String,
-    pub line: Option<u32>,
-    pub start_line: Option<u32>,
-    pub created_at: DateTime<Utc>,
-    pub diff_hunk: Option<String>,
-}
-
-/// Combined comment for unified display
-#[derive(Debug, Clone)]
-pub enum PrComment {
-    Issue(IssueComment),
-    Review(ReviewComment),
-}
+pub use crate::forge::{
+    CiStatus, EnqueueResult, IssueComment, MergeMethod, MergeQueueEntry, PrComment, PrInfo,
+    PrInfoWithHead, PrMergeStatus, ReviewComment,
+};
 
 #[derive(Debug, Deserialize)]
 struct ApiUser {
@@ -57,61 +53,20 @@ struct ApiIssueComment {
     created_at: DateTime<Utc>,
 }
 
-impl PrComment {
-    pub fn created_at(&self) -> DateTime<Utc> {
-        match self {
-            PrComment::Issue(c) => c.created_at,
-            PrComment::Review(c) => c.created_at,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn user(&self) -> &str {
-        match self {
-            PrComment::Issue(c) => &c.user,
-            PrComment::Review(c) => &c.user,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn body(&self) -> &str {
-        match self {
-            PrComment::Issue(c) => &c.body,
-            PrComment::Review(c) => &c.body,
-        }
-    }
+// As of octocrab 0.54 `number`, `head` and `base` are required fields on
+// `PullRequest`, so a response missing any of them fails to deserialize before
+// it ever reaches this code. These accessors stay as the single place that knows
+// how to read them, but no longer need to report absence.
+fn octocrab_pr_number(pr: &PullRequest) -> u64 {
+    pr.number
 }
 
-#[derive(Debug, Clone)]
-pub struct PrInfo {
-    pub number: u64,
-    pub state: String,
-    pub is_draft: bool,
-    pub base: String,
+fn octocrab_pr_head(pr: &PullRequest) -> &Head {
+    &pr.head
 }
 
-#[derive(Debug, Clone)]
-pub struct PrInfoWithHead {
-    pub info: PrInfo,
-    pub head: String,
-    pub head_label: Option<String>,
-    pub title: String,
-}
-
-fn octocrab_pr_number(pr: &PullRequest) -> Result<u64> {
-    pr.number.context("GitHub PR response missing number")
-}
-
-fn octocrab_pr_head(pr: &PullRequest) -> Result<&Head> {
-    pr.head
-        .as_deref()
-        .context("GitHub PR response missing head")
-}
-
-fn octocrab_pr_base(pr: &PullRequest) -> Result<&Base> {
-    pr.base
-        .as_deref()
-        .context("GitHub PR response missing base")
+fn octocrab_pr_base(pr: &PullRequest) -> &Base {
+    &pr.base
 }
 
 fn octocrab_pr_state(pr: &PullRequest) -> String {
@@ -123,10 +78,10 @@ fn octocrab_pr_state(pr: &PullRequest) -> String {
 
 fn octocrab_pr_info_with_state(pr: &PullRequest, state: String) -> Result<PrInfo> {
     Ok(PrInfo {
-        number: octocrab_pr_number(pr)?,
+        number: octocrab_pr_number(pr),
         state,
         is_draft: pr.draft.unwrap_or(false),
-        base: octocrab_pr_base(pr)?.ref_field.clone(),
+        base: octocrab_pr_base(pr).ref_field.clone(),
     })
 }
 
@@ -135,7 +90,7 @@ fn octocrab_pr_info(pr: &PullRequest) -> Result<PrInfo> {
 }
 
 fn octocrab_pr_info_with_head(pr: &PullRequest) -> Result<PrInfoWithHead> {
-    let head = octocrab_pr_head(pr)?;
+    let head = octocrab_pr_head(pr);
 
     Ok(PrInfoWithHead {
         head_label: head.label.clone(),
@@ -143,156 +98,6 @@ fn octocrab_pr_info_with_head(pr: &PullRequest) -> Result<PrInfoWithHead> {
         info: octocrab_pr_info(pr)?,
         head: head.ref_field.clone(),
     })
-}
-
-/// Merge method for PRs
-#[derive(Debug, Clone, Copy, Default)]
-pub enum MergeMethod {
-    #[default]
-    Squash,
-    Merge,
-    Rebase,
-}
-
-impl MergeMethod {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            MergeMethod::Squash => "squash",
-            MergeMethod::Merge => "merge",
-            MergeMethod::Rebase => "rebase",
-        }
-    }
-}
-
-impl std::str::FromStr for MergeMethod {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s.to_lowercase().as_str() {
-            "squash" => Ok(MergeMethod::Squash),
-            "merge" => Ok(MergeMethod::Merge),
-            "rebase" => Ok(MergeMethod::Rebase),
-            _ => anyhow::bail!("Invalid merge method: {}. Use: squash, merge, or rebase", s),
-        }
-    }
-}
-
-/// CI check status
-#[derive(Debug, Clone, PartialEq)]
-pub enum CiStatus {
-    Pending,
-    Success,
-    Failure,
-    /// No CI checks configured - treat as passing
-    NoCi,
-}
-
-impl CiStatus {
-    #[allow(clippy::should_implement_trait)]
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "success" => CiStatus::Success,
-            "pending" => CiStatus::Pending,
-            "failure" | "error" => CiStatus::Failure,
-            // GitHub returns "neutral" for skipped/cancelled checks - treat as success
-            "neutral" | "skipped" | "cancelled" => CiStatus::Success,
-            // Empty or unknown typically means no CI configured
-            "" | "none" | "unknown" => CiStatus::NoCi,
-            // Default: no CI configured (don't block on unrecognized states)
-            _ => CiStatus::NoCi,
-        }
-    }
-
-    pub fn is_success(&self) -> bool {
-        // NoCi is treated as success (nothing to wait for)
-        matches!(self, CiStatus::Success | CiStatus::NoCi)
-    }
-
-    pub fn is_pending(&self) -> bool {
-        matches!(self, CiStatus::Pending)
-    }
-
-    pub fn is_failure(&self) -> bool {
-        matches!(self, CiStatus::Failure)
-    }
-
-    #[allow(dead_code)]
-    pub fn display_text(&self) -> &'static str {
-        match self {
-            CiStatus::Success => "passed",
-            CiStatus::Pending => "running",
-            CiStatus::Failure => "failed",
-            CiStatus::NoCi => "no checks",
-        }
-    }
-}
-
-/// Detailed PR merge status
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct PrMergeStatus {
-    pub number: u64,
-    pub title: String,
-    pub state: String,
-    pub updated_at: Option<String>,
-    pub is_draft: bool,
-    pub mergeable: Option<bool>,
-    pub mergeable_state: String,
-    pub ci_status: CiStatus,
-    pub review_decision: Option<String>,
-    pub approvals: usize,
-    pub changes_requested: bool,
-    pub head_sha: String,
-}
-
-impl PrMergeStatus {
-    /// Check if PR is ready to merge (approved + CI passed + mergeable)
-    pub fn is_ready(&self) -> bool {
-        self.ci_status.is_success()
-            && !self.is_draft
-            && self.mergeable.unwrap_or(false)
-            && !self.changes_requested
-            && self.state.to_lowercase() == "open"
-    }
-
-    /// Check if PR is waiting (CI pending or mergeable computing)
-    pub fn is_waiting(&self) -> bool {
-        self.ci_status.is_pending() || self.mergeable.is_none()
-    }
-
-    /// Check if PR has a blocking issue
-    pub fn is_blocked(&self) -> bool {
-        self.ci_status.is_failure()
-            || self.changes_requested
-            || self.is_draft
-            || self.mergeable == Some(false)
-    }
-
-    /// Get human-readable status
-    pub fn status_text(&self) -> &'static str {
-        if self.state.to_lowercase() != "open" {
-            return "Closed";
-        }
-        if self.is_draft {
-            return "Draft";
-        }
-        if self.changes_requested {
-            return "Changes requested";
-        }
-        if self.ci_status.is_failure() {
-            return "CI failed";
-        }
-        if self.mergeable == Some(false) {
-            return "Has conflicts";
-        }
-        if self.is_waiting() {
-            return "Waiting";
-        }
-        if self.is_ready() {
-            return "Ready";
-        }
-        "Ready" // Default to ready if nothing is blocking
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,17 +127,6 @@ struct PrNodeId {
 struct EnqueueData {
     #[serde(rename = "enqueuePullRequest")]
     enqueue_pull_request: Option<EnqueueResult>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EnqueueResult {
-    #[serde(rename = "mergeQueueEntry")]
-    pub merge_queue_entry: Option<MergeQueueEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MergeQueueEntry {
-    pub position: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -628,7 +422,7 @@ impl GitHubClient {
         };
 
         for pr in &prs.items {
-            let head = octocrab_pr_head(pr)?;
+            let head = octocrab_pr_head(pr);
             if head.ref_field != branch {
                 continue;
             }
@@ -689,7 +483,7 @@ impl GitHubClient {
             };
 
             for pr in &prs.items {
-                let head = octocrab_pr_head(pr)?.ref_field.clone();
+                let head = octocrab_pr_head(pr).ref_field.clone();
                 if prs_by_head.contains_key(&head) {
                     continue;
                 }
@@ -1066,6 +860,7 @@ impl GitHubClient {
         commit_message: Option<String>,
         sha: Option<String>,
     ) -> Result<()> {
+        self.record_api_call("pulls.merge");
         let merge_method = match method {
             MergeMethod::Squash => octocrab::params::pulls::MergeMethod::Squash,
             MergeMethod::Merge => octocrab::params::pulls::MergeMethod::Merge,
@@ -1193,6 +988,7 @@ impl GitHubClient {
 
     /// Get PR review information using GraphQL API
     async fn get_pr_reviews(&self, pr_number: u64) -> Result<(Option<String>, usize, bool)> {
+        self.record_api_call("graphql.pr_reviews");
         let query = format!(
             r#"
             query {{
@@ -1235,6 +1031,7 @@ impl GitHubClient {
 
     /// Get the GraphQL node ID for a PR (needed for mutations like enqueuePullRequest).
     async fn get_pr_node_id(&self, pr_number: u64) -> Result<String> {
+        self.record_api_call("graphql.pr_node_id");
         let query = format!(
             r#"
             query {{
@@ -1266,6 +1063,7 @@ impl GitHubClient {
     pub async fn enqueue_pr(&self, pr_number: u64) -> Result<EnqueueResult> {
         let node_id = self.get_pr_node_id(pr_number).await?;
 
+        self.record_api_call("graphql.enqueue_pr");
         let mutation = format!(
             r#"
             mutation {{
@@ -1290,6 +1088,7 @@ impl GitHubClient {
 
     /// Check if a PR is already merged
     pub async fn is_pr_merged(&self, pr_number: u64) -> Result<bool> {
+        self.record_api_call("pulls.is_merged");
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
@@ -1311,11 +1110,12 @@ impl GitHubClient {
             .get(pr_number)
             .await
             .context("Failed to get PR")?;
-        Ok(octocrab_pr_head(&pr)?.sha.clone())
+        Ok(octocrab_pr_head(&pr).sha.clone())
     }
 
     /// List all issue comments (conversation comments) on a PR
     pub async fn list_issue_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
+        self.record_api_call("issues.comments.list");
         let url = format!(
             "/repos/{}/{}/issues/{}/comments",
             self.owner, self.repo, pr_number
@@ -1339,6 +1139,7 @@ impl GitHubClient {
 
     /// List all review comments (inline code comments) on a PR
     pub async fn list_review_comments(&self, pr_number: u64) -> Result<Vec<ReviewComment>> {
+        self.record_api_call("pulls.comments.list");
         let url = format!(
             "/repos/{}/{}/pulls/{}/comments",
             self.owner, self.repo, pr_number
@@ -1421,10 +1222,10 @@ fn format_merge_error(err: octocrab::Error) -> anyhow::Error {
                 msg.push_str(&format!("\n  - {}", item));
             }
         }
-        if let Some(url) = source.documentation_url.as_ref() {
-            if !url.is_empty() {
-                msg.push_str(&format!("\n  docs: {}", url));
-            }
+        if let Some(url) = source.documentation_url.as_ref()
+            && !url.is_empty()
+        {
+            msg.push_str(&format!("\n  docs: {}", url));
         }
         return anyhow::Error::new(err).context(msg);
     }
@@ -1437,6 +1238,13 @@ pub struct StackPrInfo {
     pub branch: String,
     pub pr_number: Option<u64>,
     pub is_imported: bool,
+    /// 1-based distance from trunk (number of ancestors, trunk included).
+    /// Used to indent this entry in the rendered Stack Links list — siblings
+    /// sharing a parent (a forked local stack) get the same depth instead of
+    /// being nested under one another by list position. Callers that only
+    /// use a `StackPrInfo` as a branch/PR-number lookup key (not for
+    /// rendering) may pass `0`.
+    pub depth: usize,
 }
 
 fn stack_links_intro(prs: &[StackPrInfo], current_index: Option<usize>, mr_label: &str) -> String {
@@ -1511,8 +1319,9 @@ pub fn generate_stack_links_markdown(
             None => format!("`{}`{}", pr_info.branch, pointer),
         };
 
-        // Indent based on position in stack (2 spaces per level)
-        let indent = "  ".repeat(i + 1);
+        // Indent based on actual depth from trunk (2 spaces per level), not
+        // list position — a forked stack has siblings at the same depth.
+        let indent = "  ".repeat(pr_info.depth.max(1));
         lines.push(format!("{}* {}", indent, pr_text));
     }
 
@@ -1589,8 +1398,45 @@ pub fn remove_stack_links_from_body(existing_body: &str) -> String {
 mod tests {
     use super::*;
     use octocrab::Octocrab;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_string_contains, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn is_native_stack_base_locked_error_matches_githubs_exact_wording() {
+        let err = anyhow::anyhow!(
+            "Cannot change the base branch because the pull request is part of a stack."
+        )
+        .context("Failed to update PR base");
+
+        assert!(is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_ignores_unrelated_validation_errors() {
+        let err = anyhow::anyhow!(
+            "A pull request already exists for base branch 'main' and head branch 'feature'"
+        )
+        .context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_ignores_generic_errors() {
+        let err = anyhow::anyhow!("connection reset by peer").context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_does_not_misfire_on_negated_wording() {
+        // Guards against a hypothetical future GitHub message that negates
+        // stack membership — must not collide with the lock detector.
+        let err = anyhow::anyhow!("The pull request is not part of a stack, so this is a no-op")
+            .context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
 
     #[test]
     fn test_merge_method_from_str_squash() {
@@ -1733,6 +1579,7 @@ mod tests {
         assert!(!status.is_ready());
         assert!(status.is_waiting());
         assert!(!status.is_blocked());
+        assert_eq!(status.status_text(), "CI checks");
     }
 
     #[test]
@@ -1754,6 +1601,7 @@ mod tests {
 
         assert!(!status.is_ready());
         assert!(status.is_waiting());
+        assert_eq!(status.status_text(), "mergeability check");
     }
 
     #[test]
@@ -1915,6 +1763,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(1),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 1, &remote, "main");
@@ -1945,16 +1794,19 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(2),
                 is_imported: false,
+                depth: 2,
             },
             StackPrInfo {
                 branch: "feature-c".to_string(),
                 pr_number: Some(3),
                 is_imported: false,
+                depth: 3,
             },
         ];
 
@@ -1986,16 +1838,19 @@ mod tests {
                 branch: "imported-base".to_string(),
                 pr_number: Some(10),
                 is_imported: true,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "local-middle".to_string(),
                 pr_number: Some(20),
                 is_imported: false,
+                depth: 2,
             },
             StackPrInfo {
                 branch: "local-tip".to_string(),
                 pr_number: Some(30),
                 is_imported: false,
+                depth: 3,
             },
         ];
 
@@ -2026,6 +1881,51 @@ mod tests {
         assert!(!tip_comment.contains("current local branch"));
     }
 
+    /// Siblings that share a parent (a forked local stack) must render at
+    /// the same indent, not nested one under the other — depth comes from
+    /// each entry's actual position in the branch tree, not its position in
+    /// the list.
+    #[test]
+    fn test_generate_stack_comment_renders_forked_siblings_at_equal_depth() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "bottom".to_string(),
+                pr_number: Some(1),
+                is_imported: false,
+                depth: 1,
+            },
+            StackPrInfo {
+                branch: "fork-a".to_string(),
+                pr_number: Some(2),
+                is_imported: false,
+                depth: 2,
+            },
+            StackPrInfo {
+                branch: "fork-b".to_string(),
+                pr_number: Some(3),
+                is_imported: false,
+                depth: 2,
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 1, &remote, "main");
+
+        assert!(
+            comment.contains("  * **PR #1** 👈\n    * **PR #2**\n    * **PR #3**"),
+            "fork-a and fork-b share a parent and must be indented equally, got:\n{comment}"
+        );
+    }
+
     #[test]
     fn test_generate_stack_comment_without_pr() {
         let remote = crate::remote::RemoteInfo {
@@ -2043,11 +1943,13 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: None, // No PR yet
                 is_imported: true,
+                depth: 2,
             },
         ];
 
@@ -2075,11 +1977,13 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(10),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(11),
                 is_imported: false,
+                depth: 2,
             },
         ];
 
@@ -2110,6 +2014,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(5),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 5, &remote, "main");
@@ -2135,6 +2040,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(42),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 42, &remote, "main");
@@ -2221,6 +2127,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(42),
             is_imported: false,
+            depth: 1,
         };
         let cloned = info.clone();
         assert_eq!(cloned.branch, "feature");
@@ -3116,6 +3023,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_pr_records_api_call() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-owner/test-repo/pulls/11/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "abc123",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        client
+            .merge_pr(11, MergeMethod::Squash, None, None, None)
+            .await
+            .unwrap();
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 1);
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.merge" && *count == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_pr_records_node_id_and_mutation() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("repository(owner"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": { "id": "PR_kwABC" }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("enqueuePullRequest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "enqueuePullRequest": {
+                        "mergeQueueEntry": { "position": 1 }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.enqueue_pr(20).await.unwrap();
+
+        assert_eq!(
+            result.merge_queue_entry.and_then(|entry| entry.position),
+            Some(1)
+        );
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 2);
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "graphql.pr_node_id" && *count == 1)
+        );
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "graphql.enqueue_pr" && *count == 1)
+        );
+    }
+
+    #[tokio::test]
     async fn test_get_pr_with_head_errors_when_response_missing_head() {
         let mock_server = MockServer::start().await;
 
@@ -3137,10 +3128,16 @@ mod tests {
             .await
             .expect_err("missing head should fail");
 
+        // The contract is that a malformed response surfaces an actionable
+        // error naming the absent field rather than panicking or silently
+        // returning a PR with an empty head. Which layer reports it is an
+        // implementation detail: before octocrab 0.54 `head` was optional and
+        // stax added the context itself; from 0.54 it is a required field, so
+        // serde rejects the response during deserialization.
         let msg = format!("{:#}", err);
         assert!(
-            msg.contains("GitHub PR response missing head"),
-            "expected missing head context, got: {msg}"
+            msg.contains("head"),
+            "expected an error naming the missing head field, got: {msg}"
         );
     }
 

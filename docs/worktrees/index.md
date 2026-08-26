@@ -28,6 +28,9 @@ st wt c payments-api --from main
 # Jump back into a lane
 st wt go payments-api
 
+# Make this lane the branch checked out in the main worktree
+st wt promote
+
 # Inventory
 st wt ls
 st wt ll
@@ -83,6 +86,7 @@ Selectors accepted by `go`, `path`, `rm`, and reuse paths in `create`:
 | `st wt ll` | `st worktree ll`, `st wtll` | Rich status view with managed/dirty/rebase/conflict/marker/prunable state (`--json`) |
 | `st wt path <name>` | `st worktree path <name>` | Print absolute path |
 | `st wt rm [name]` | `st worktree remove`, `st wtrm` | Remove one worktree (`wt rm` removes current); supports `-f/--force`, `--delete-branch` |
+| `st wt promote` | `st worktree promote` | Retire the current linked worktree and check its branch out in the main worktree |
 | `st wt prune` | `st worktree prune`, `st wtprune` | Remove stale `git worktree` bookkeeping only |
 | `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune + bulk-remove safe detached/merged lanes (`--dry-run`, `--yes`, `-f`) |
 | `st wt restack` | `st worktree restack`, `st wtrs`, `st wt rs` | Restack all stax-managed worktrees |
@@ -95,7 +99,7 @@ st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 st wt go review-pass --agent codex --tmux
 ```
 
-- `--agent` supports `claude`, `codex`, `gemini`, `opencode`
+- `--agent` supports `claude`, `codex`, `gemini`, `opencode`, `pi`
 - `--model` requires `--agent`
 - `--run` and `--agent` are mutually exclusive
 - anything after `--` is passed through to the agent/command
@@ -150,6 +154,7 @@ After installation:
 
 - `st wt c ...` moves the parent shell into the new lane
 - `st wt go ...` moves the parent shell into the selected lane
+- `st wt promote` moves the parent shell to the main worktree after a successful handoff
 - `st lane ...` moves the parent shell into the selected lane
 - `st wt rm` (no arg) can relocate the shell before removing the current worktree
 - `sw <name>` becomes a quick alias for `st wt go <name>`
@@ -157,7 +162,27 @@ After installation:
 Supports `bash`, `zsh`, and `fish`.
 
 !!! note "Windows"
-    On Windows, worktree commands work but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. Manually `cd` to the printed path after `st wt c` / `st wt go`. See [Windows notes](../reference/windows.md).
+    On Windows, worktree commands work but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. Manually `cd` to the printed path after `st wt c`, `st wt go`, or `st wt promote`. See [Windows notes](../reference/windows.md).
+
+## Promote a lane to the main worktree
+
+Run `st wt promote` inside a linked worktree when you want to continue that
+branch in the repository's main worktree. Stax detaches the linked checkout,
+checks the same branch out in the main worktree, then removes or parks the old
+lane according to the existing warm-slot configuration.
+
+Promotion preserves the branch, commits, upstream, PR linkage, and stax
+metadata. It does not merge, delete, untrack, or automatically stash anything.
+Both the current lane and main worktree must be clean, unlocked, and free of an
+in-progress merge, rebase, or conflicts. If switching fails, Stax restores the
+original checkouts and reports any rollback problem. Git may report a removal
+failure only after it has already unregistered the old lane; in that case Stax
+keeps the completed handoff in the main worktree, removes a dangling `.git` file
+when safe, and tells you to inspect any remaining files in the old lane path.
+
+With shell integration, the current shell moves to the main worktree only after
+the handoff succeeds. Without it, Stax prints the main worktree path and a
+copyable `cd` command.
 
 ## Cleanup and safety
 
@@ -165,6 +190,7 @@ Supports `bash`, `zsh`, and `fish`.
 |---|---|
 | `st wt rm [name]` | Remove one live worktree (no name = current) |
 | `st wt rm --delete-branch` | Also delete the branch and its stax metadata |
+| `st wt promote` | Keep the branch and make it the main-worktree checkout |
 | `st wt prune` | Clear stale `git worktree` bookkeeping only — never removes a live directory |
 | `st wt cleanup` | Prune bookkeeping, then bulk-remove safe candidates |
 | `st wt rs` | Restack all stax-managed lanes |
@@ -190,6 +216,18 @@ Override in `~/.config/stax/config.toml`, or set shared project overrides in rep
 [worktree]
 # root_dir = ""             # default external root
 # root_dir = ".worktrees"   # keep worktrees inside the repo
+# root_dir = ".."           # keep lanes beside the main checkout
+
+# Warm-slot recycling: a removed worktree is parked and reused by the next lane
+# instead of being deleted, keeping built gitignored deps on disk.
+reuse_slots = true        # default; set false to always cold-create / real-remove
+
+# Maximum number of idle warm slots to keep parked.
+max_idle_slots = 4
+
+# Optional: command run (non-fatally) inside a slot after it is adopted, to
+# re-sync deps (e.g. "pnpm install", "uv sync").
+# reconcile = "pnpm install"
 
 [worktree.hooks]
 post_create = ""   # blocking hook before launch
@@ -199,8 +237,29 @@ pre_remove  = ""   # blocking hook before removal
 post_remove = ""   # background hook after removal
 ```
 
-- Relative `root_dir` values resolve under the main repo root.
-- Repo-local roots like `.worktrees` are added to `.gitignore` automatically.
+- Relative `root_dir` values resolve from the main repo root. Configure them
+  globally in `~/.config/stax/config.toml` to reuse the same layout across repos.
+- To keep a trunk clone and its lanes as siblings, place the trunk clone one
+  level below a plain container directory and set `root_dir = ".."` globally:
+
+  ```text
+  my-repo/
+    development/  # trunk clone
+    feature-x/    # stax-managed lane
+    feature-y/    # stax-managed lane
+  ```
+
+- Roots inside the repository, such as `.worktrees`, are added to `.gitignore`
+  automatically. Roots outside the repository, including `..`, leave
+  `.gitignore` untouched.
+- `root_dir` cannot resolve to the main repo directory itself. Use a
+  subdirectory or an external directory.
+- Warm-slot recycling (default): removing a clean, merged-equivalent worktree **parks** it instead of deleting it — stax moves it off its lane branch, resets it hard to trunk, and runs `git clean -fd`. That never uses `-x`, so gitignored dependency directories (`node_modules`, `.venv`, `vendor`, …) survive on disk.
+- The next `create` / `lane` **adopts** an idle parked slot instead of a cold `git worktree add`: it switches the slot to the fresh lane branch, resets to the base, cleans untracked files, and runs the `reconcile` hook. Adopting reuses the same directory, so the built deps are already there.
+- `reconcile` re-syncs deps after adoption (e.g. `pnpm install`, `uv sync`). It is **non-fatal** — a missing or failing command only warns and never fails the create.
+- `max_idle_slots` caps how many idle slots are kept; parking beyond the cap falls back to a real removal, and `worktree cleanup` evicts the oldest excess slots.
+- A `--force` (or confirmed) dirty removal **never** parks — it always does a real `git worktree remove`.
+- Set `reuse_slots = false` to opt out entirely: cold `git worktree add` on create, real `git worktree remove` on removal, and no pool manifest.
 - `post_create` and `pre_remove` are **blocking**; `post_start`, `post_go`, `post_remove` run in the **background**.
 - `--no-verify` on `create` / `go` skips hooks for that command.
 

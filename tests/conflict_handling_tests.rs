@@ -7,6 +7,10 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use stax::application::{
+    NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
+    OperationSideEffects, RepositorySession, RestackScope, TransactionStatus,
+};
 
 // =============================================================================
 // Bug 1: Conflict-stop must exit non-zero
@@ -86,46 +90,91 @@ fn test_restack_no_conflict_exits_zero() {
     output.assert_success();
 }
 
+#[test]
+fn restack_conflict_failed_receipt_lists_only_completed_branches() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["receipt-clean", "receipt-conflict"]);
+    let first = branches[0].clone();
+    let second = branches[1].clone();
+
+    repo.git(&["checkout", &second]).assert_success();
+    repo.create_file("receipt-conflict.txt", "branch version\n");
+    repo.commit("Prepare conflicting child change");
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("receipt-main-advance.txt", "main moved\n");
+    repo.commit("Advance main cleanly");
+    repo.create_file("receipt-conflict.txt", "main version\n");
+    repo.commit("Prepare conflicting main change");
+    repo.git(&["checkout", &second]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(
+            RestackScope::StackContaining(second.clone()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RebaseConflict);
+    assert_eq!(error.side_effects, OperationSideEffects::RepositoryChanged);
+    assert_eq!(
+        error.details,
+        OperationErrorDetails::Rebase {
+            branch: Some(second.clone()),
+            worktree: repo.path().canonicalize().unwrap(),
+        }
+    );
+    let receipt = error.receipt.expect("failed restack receipt");
+    let transaction = receipt.transaction.expect("failed transaction summary");
+    assert_eq!(transaction.status, TransactionStatus::Failed);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches == &vec![first]
+    ));
+    assert!(repo.has_rebase_in_progress());
+    repo.abort_rebase();
+}
+
 // =============================================================================
 // Bug 2: Commands mid-rebase should give clear error
 // =============================================================================
 
 #[test]
-fn test_status_during_rebase_gives_clear_error() {
+fn test_read_only_commands_allowed_during_rebase() {
     let repo = TestRepo::new();
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
     assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
-    let output = repo.run_stax(&["status"]);
-
-    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
-    assert!(
-        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
-        "Expected 'rebase in progress' message, got:\n{}",
-        combined
-    );
-    output.assert_failure();
+    for args in [&["status"][..], &["log"][..], &["ready", "--plain"][..]] {
+        let output = repo.run_stax(args);
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(
+            !combined.contains("A rebase is in progress. Resolve"),
+            "{:?} should not be blocked by rebase guard, got:\n{combined}",
+            args
+        );
+    }
 
     repo.abort_rebase();
 }
 
 #[test]
-fn test_log_during_rebase_gives_clear_error() {
+fn test_mutating_commands_blocked_during_rebase() {
     let repo = TestRepo::new();
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
     assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
-    let output = repo.run_stax(&["log"]);
+    let output = repo.run_stax(&["submit", "--no-verify"]);
 
     let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
     assert!(
-        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
-        "Expected 'rebase in progress' message, got:\n{}",
-        combined
+        combined.contains("A rebase is in progress. Resolve"),
+        "submit should be blocked by rebase guard, got:\n{combined}"
     );
     output.assert_failure();
 
@@ -346,4 +395,90 @@ fn test_restack_continue_completes_remaining_branches() {
         "Expected stack to be up-to-date after continue, got:\n{}",
         stdout
     );
+}
+
+// =============================================================================
+// Bug 4: restack should drop become-empty commits instead of stopping
+// =============================================================================
+
+/// Build a two-commit feature branch off main where the first commit's change
+/// duplicates a change that later lands on main, so it becomes empty on rebase,
+/// while the second commit does not. Returns (feat_branch, upstream_sha, new_main_sha).
+fn create_empty_commit_scenario(repo: &TestRepo) -> (String, String, String) {
+    repo.create_file("fileA.txt", "content X\n");
+    repo.commit("Add fileA");
+
+    repo.run_stax(&["bc", "feat"]);
+    let feat_branch = repo.current_branch();
+    let upstream_sha = {
+        let output = repo.git(&["merge-base", "main", &feat_branch]);
+        TestRepo::stdout(&output).trim().to_string()
+    };
+
+    repo.create_file("fileB.txt", "content Y\n");
+    repo.commit("Add fileB");
+
+    repo.create_file("fileC.txt", "content Z\n");
+    repo.commit("Add fileC");
+
+    repo.run_stax(&["checkout", "main"]);
+    repo.create_file("fileB.txt", "content Y\n");
+    repo.commit("Add fileB on main");
+    let new_main_sha = {
+        let output = repo.git(&["rev-parse", "main"]);
+        TestRepo::stdout(&output).trim().to_string()
+    };
+
+    repo.run_stax(&["checkout", &feat_branch]);
+
+    (feat_branch, upstream_sha, new_main_sha)
+}
+
+#[test]
+fn test_restack_drops_empty_commit_instead_of_stopping() {
+    let repo = TestRepo::new();
+    let (_feat_branch, _upstream_sha, _new_main_sha) = create_empty_commit_scenario(&repo);
+
+    let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
+    output.assert_success();
+
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Expected no rebase in progress after restack, output: {}",
+        TestRepo::stdout(&output)
+    );
+
+    let file_c = std::fs::read_to_string(repo.path().join("fileC.txt"))
+        .expect("fileC.txt should exist on feat after restack");
+    assert_eq!(file_c, "content Z\n");
+}
+
+#[test]
+fn test_continue_auto_skips_empty_commit() {
+    let repo = TestRepo::new();
+    let (feat_branch, upstream_sha, new_main_sha) = create_empty_commit_scenario(&repo);
+
+    let rebase_output = repo.git(&[
+        "rebase",
+        "--empty=stop",
+        "--onto",
+        &new_main_sha,
+        &upstream_sha,
+        &feat_branch,
+    ]);
+    let _ = rebase_output;
+
+    assert!(
+        repo.has_rebase_in_progress(),
+        "Expected rebase to stop on the become-empty commit"
+    );
+
+    let output = repo.run_stax(&["continue"]);
+
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Expected `st continue` to auto-skip the empty commit and finish, output: {}",
+        TestRepo::stdout(&output)
+    );
+    output.assert_success();
 }

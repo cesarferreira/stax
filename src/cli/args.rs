@@ -4,17 +4,63 @@ use std::path::PathBuf;
 
 pub(crate) const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be greater than zero".to_string())
+}
+
+fn parse_positive_i64(value: &str) -> Result<i64, String> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be greater than zero".to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "stax")]
 #[command(version)]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 pub(crate) struct Cli {
+    /// Show Git subprocess timings and a command summary
+    #[arg(long, global = true)]
+    pub(crate) trace: bool,
+
+    /// Print an annotated default config.toml (commented options and allowed values) and exit
+    #[arg(long = "default-config", conflicts_with = "skill")]
+    pub(crate) default_config: bool,
+
+    /// Print the bundled AI agent skill (SKILL.md format) and exit
+    #[arg(long = "skill", conflicts_with = "default_config")]
+    pub(crate) skill: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub(crate) struct WebArgs {
+    /// Repository to open; defaults to the current directory
+    pub(crate) path: Option<PathBuf>,
+    /// Port to bind (default 8787). If the requested port is busy, stax warns and uses a free OS-selected port.
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) port: u16,
+    /// Do not open the browser after starting the server
+    #[arg(long)]
+    pub(crate) no_open: bool,
+}
+
 #[derive(Args, Clone)]
 pub(crate) struct SubmitOptions {
+    /// Show the submit plan without fetching, pushing, or changing metadata
+    #[arg(long = "dry-run", visible_alias = "plan")]
+    pub(crate) dry_run: bool,
+    /// Output the read-only submit plan as JSON
+    #[arg(long, requires = "dry_run")]
+    pub(crate) json: bool,
     /// Create new PRs as drafts; convert existing PRs to draft
     #[arg(short, long, conflicts_with = "publish")]
     pub(crate) draft: bool,
@@ -78,6 +124,12 @@ pub(crate) struct SubmitOptions {
     /// Re-request review from existing reviewers when updating PRs
     #[arg(long)]
     pub(crate) rerequest_review: bool,
+    /// Force-attempt native GitHub Stack registration via `gh stack`
+    #[arg(long, conflicts_with = "no_native_stack")]
+    pub(crate) native_stack: bool,
+    /// Skip native GitHub Stack registration for this submit
+    #[arg(long, conflicts_with = "native_stack")]
+    pub(crate) no_native_stack: bool,
     /// Squash all commits on each branch into one before pushing
     #[arg(long)]
     pub(crate) squash: bool,
@@ -89,6 +141,8 @@ pub(crate) struct SubmitOptions {
 impl From<SubmitOptions> for commands::submit::SubmitOptions {
     fn from(submit: SubmitOptions) -> Self {
         Self {
+            dry_run: submit.dry_run,
+            json: submit.json,
             draft: submit.draft,
             publish: submit.publish,
             no_pr: submit.no_pr,
@@ -111,6 +165,13 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             title: submit.title,
             body: submit.body,
             rerequest_review: submit.rerequest_review,
+            native_stack_override: if submit.no_native_stack {
+                Some(crate::config::NativeStackMode::Off)
+            } else if submit.native_stack {
+                Some(crate::config::NativeStackMode::Link)
+            } else {
+                None
+            },
             squash: submit.squash,
             update_title: submit.update_title,
         }
@@ -205,6 +266,20 @@ pub(crate) struct AiLaneArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
+    /// Internal worker that refreshes the cached release check.
+    #[command(name = "__update-check", hide = true)]
+    UpdateCheck,
+
+    /// Start a localhost HTMX web workspace (opens in browser)
+    Web(WebArgs),
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
     /// Show all stacks (simple tree view)
     #[command(visible_alias = "ls")]
     Status {
@@ -286,7 +361,12 @@ pub(crate) enum Commands {
         /// Show merge plan without merging
         #[arg(long)]
         dry_run: bool,
-        /// Merge method: squash, merge, rebase (default: squash; rebase with --stack)
+        /// Merge method: squash, merge, rebase (default: squash; merge with --stack).
+        ///
+        /// With --stack, merge targets selected PRs/MRs to trunk and preserves commit
+        /// SHAs so GitHub or GitLab may mark lower items indirectly merged. Timed-out
+        /// items stay open. GitHub and GitLab reject rewriting methods for multi-item
+        /// ranges; a single GitHub PR may still use rebase or squash.
         #[arg(long)]
         method: Option<String>,
         /// Keep branches after merge (don't delete)
@@ -304,7 +384,7 @@ pub(crate) enum Commands {
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue", "stack"])]
         remote: bool,
-        /// Validate the selected tip PR, retarget it to trunk, and merge the selected stack range once
+        /// Prepare selected PR/MR bases and merge the selected stack range once (GitHub/GitLab)
         #[arg(long, conflicts_with_all = ["no_wait", "remote", "queue"])]
         stack: bool,
         /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
@@ -360,10 +440,13 @@ pub(crate) enum Commands {
     /// Sync repo - pull trunk, delete merged branches
     #[command(visible_alias = "rs")]
     Sync {
+        /// Show what sync would do without making any changes (ls-remote only — no fetch, no stash, no ref writes)
+        #[arg(long = "dry-run", visible_alias = "plan", conflicts_with = "continue")]
+        dry_run: bool,
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
-        /// No-op: kept for CLI compatibility (use `--full` for fetch --prune of all remote-tracking refs)
+        /// Deprecated no-op, accepted for compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
         /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
@@ -393,6 +476,15 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during restack operations
         #[arg(long)]
         auto_stash_pop: bool,
+        /// Automatically stash uncommitted changes before sync and restore them after
+        #[arg(long, conflicts_with = "no_stash")]
+        stash: bool,
+        /// Never stash uncommitted changes; bail if the working tree is dirty (wins over --force)
+        #[arg(long, conflicts_with = "stash")]
+        no_stash: bool,
+        /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
+        #[arg(long, conflicts_with = "continue")]
+        json: bool,
     },
 
     /// List and optionally clean up local branches (merged, upstream-gone, stale)
@@ -443,7 +535,7 @@ pub(crate) enum Commands {
         submit_after: RestackSubmitAfter,
     },
 
-    /// Restack from the bottom and submit updates
+    /// Restack the stack and submit updates, without fetching trunk (offline-friendly)
     Cascade {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
@@ -457,8 +549,8 @@ pub(crate) enum Commands {
     },
 
     /// Sync trunk, restack current stack, then submit updates
-    #[command(alias = "refresh")]
-    Update {
+    #[command(visible_alias = "update")]
+    Refresh {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
         no_pr: bool,
@@ -483,6 +575,9 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during sync/restack
         #[arg(long)]
         auto_stash_pop: bool,
+        /// Refresh every stack in the repo, not just the current one
+        #[arg(long)]
+        all_stacks: bool,
     },
 
     /// Checkout a branch in the stack
@@ -680,6 +775,10 @@ pub(crate) enum Commands {
     #[command(visible_alias = "p")]
     Prev,
 
+    /// Switch to the next unmerged branch upstack
+    #[command(visible_alias = "n")]
+    Next,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -692,7 +791,7 @@ pub(crate) enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
-    /// Stack commands (submit, restack)
+    /// Stack commands (submit, restack, native GitHub Stack link/unlink)
     #[command(subcommand, visible_alias = "s")]
     Stack(StackCommands),
 
@@ -736,7 +835,7 @@ pub(crate) enum Commands {
         command: Option<PrCommands>,
     },
 
-    /// Open live PR readiness for tracked pull requests
+    /// Interactive PR readiness dashboard (CI, reviews, merge state)
     Ready {
         /// Show all tracked branch PRs (default)
         #[arg(long, conflicts_with_all = ["current", "stack"])]
@@ -750,9 +849,12 @@ pub(crate) enum Commands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
-        /// Render a static table instead of the interactive TUI
+        /// Render one static table instead of the interactive TUI
         #[arg(long, conflicts_with = "json")]
         plain: bool,
+        /// Auto-refresh interval in seconds for the interactive TUI (default: 15)
+        #[arg(long, default_value = "15")]
+        interval: u64,
     },
 
     /// Browse open issues in the current repository
@@ -767,20 +869,38 @@ pub(crate) enum Commands {
     /// Mark the current (or named) branch's PR as a draft
     Draft {
         /// Branch to operate on (defaults to current)
+        #[arg(conflicts_with = "stack")]
         branch: Option<String>,
+        /// Apply to all PRs in the current stack
+        #[arg(long, conflicts_with = "branch")]
+        stack: bool,
     },
 
     /// Mark the current (or named) branch's PR as ready for review
     Undraft {
         /// Branch to operate on (defaults to current)
+        #[arg(conflicts_with = "stack")]
         branch: Option<String>,
+        /// Apply to all PRs in the current stack
+        #[arg(long, conflicts_with = "branch")]
+        stack: bool,
     },
 
-    /// Show comments on the current branch's PR
+    /// Show PR comments as a current-branch view or stack-wide review inbox
+    #[command(visible_alias = "reviews")]
     Comments {
         /// Output raw markdown without rendering
-        #[arg(long)]
+        #[arg(long, conflicts_with = "json")]
         plain: bool,
+        /// Include every PR in the current stack
+        #[arg(long, conflicts_with = "all")]
+        stack: bool,
+        /// Include every tracked PR in the repository
+        #[arg(long, conflicts_with = "stack")]
+        all: bool,
+        /// Output the inbox as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show CI status for all branches in the stack
@@ -794,7 +914,7 @@ pub(crate) enum Commands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
-        /// Force refresh (bypass cache)
+        /// Re-fetch CI status (kept for compatibility; CI is always fetched live)
         #[arg(long)]
         refresh: bool,
         /// Watch CI until completion (polls periodically)
@@ -836,6 +956,9 @@ pub(crate) enum Commands {
         /// Polling interval in seconds (overrides adaptive default)
         #[arg(long, short)]
         interval: Option<u64>,
+        /// Stop after N refreshes instead of running until interrupted
+        #[arg(long, value_name = "N")]
+        iterations: Option<usize>,
     },
 
     /// tmux integration: status bar string and popup viewer
@@ -949,6 +1072,18 @@ pub(crate) enum Commands {
         yes: bool,
     },
 
+    /// Protect a tracked branch from history-rewriting restacks
+    Freeze {
+        /// Branch to freeze (defaults to current)
+        branch: Option<String>,
+    },
+
+    /// Remove history-rewrite protection from a tracked branch
+    Unfreeze {
+        /// Branch to unfreeze (defaults to current)
+        branch: Option<String>,
+    },
+
     /// Run a command on each branch in the stack
     Run {
         /// Command to run
@@ -963,6 +1098,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Backward-compatible alias for `run`
@@ -980,6 +1121,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Interactive tutorial (no auth or repo needed)
@@ -994,7 +1141,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         all: bool,
         /// Time window in hours (default: 24)
-        #[arg(long, default_value = "24")]
+        #[arg(long, default_value = "24", value_parser = parse_positive_i64)]
         hours: i64,
         /// Summarize standup using AI
         #[arg(long)]
@@ -1158,6 +1305,13 @@ pub(crate) enum Commands {
         /// Install AI agent skills without prompting
         #[arg(long, conflicts_with_all = ["skip_skills", "print", "refresh"])]
         install_skills: bool,
+        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,opencode,pi)
+        #[arg(
+            long,
+            value_name = "LIST",
+            conflicts_with_all = ["skip_skills", "print", "refresh"]
+        )]
+        skills: Option<String>,
         /// Skip the optional GitHub auth onboarding step
         #[arg(long, conflicts_with_all = ["auth_from_gh", "print", "refresh"])]
         skip_auth: bool,
@@ -1341,6 +1495,16 @@ pub(crate) enum StackCommands {
         /// After restack, submit stack updates (`ask`, `yes`, `no`)
         #[arg(long, value_enum, default_value_t = RestackSubmitAfter::No)]
         submit_after: RestackSubmitAfter,
+    },
+
+    /// Register the current stack as a native GitHub Stack via `gh stack`
+    Link,
+
+    /// Unstack a native GitHub Stack via `gh stack`
+    Unlink {
+        /// Repository-scoped GitHub native stack number
+        #[arg(value_parser = clap::value_parser!(u64).range(1..))]
+        stack_number: Option<u64>,
     },
 }
 
@@ -1552,11 +1716,17 @@ pub(crate) enum SkillsCommands {
     /// List installed AI agent skill files and their version status
     List,
 
-    /// Download the latest skills from GitHub and update all installed skill files
+    /// Download the latest skills from GitHub and update installed skill files
     Update {
         /// Preview what would be updated without writing any files
         #[arg(long)]
         dry_run: bool,
+        /// Update every known harness, ignoring the configured selection
+        #[arg(long)]
+        all: bool,
+        /// Limit this run to specific harnesses: all | detected | auto | none | comma-separated ids
+        #[arg(long, value_name = "LIST", conflicts_with = "all")]
+        skills: Option<String>,
     },
 }
 
@@ -1626,6 +1796,12 @@ pub(crate) enum WorktreeCommands {
         /// Also delete the branch and stax metadata when safe
         #[arg(long)]
         delete_branch: bool,
+    },
+
+    /// Move the current linked-worktree branch to the main worktree
+    Promote {
+        #[arg(long, hide = true)]
+        shell_output: bool,
     },
 
     /// Remove stale git worktree bookkeeping
@@ -1708,12 +1884,45 @@ impl Commands {
                 CommandPolicy::RebaseControl
             }
             Commands::Undo { .. } | Commands::Redo { .. } => CommandPolicy::RebaseSafe,
+            Commands::Sync { dry_run: true, .. } => CommandPolicy::RebaseSafe,
             Commands::Restack {
                 r#continue: true, ..
             }
             | Commands::Sync {
                 r#continue: true, ..
             } => CommandPolicy::RebaseSafe,
+            // Read-only commands that do not touch the in-progress rebase.
+            Commands::Status { .. }
+            | Commands::Ll { .. }
+            | Commands::Log { .. }
+            | Commands::Ready { .. }
+            | Commands::Ci { .. }
+            | Commands::Watch { .. }
+            | Commands::Diff { .. }
+            | Commands::RangeDiff { .. }
+            | Commands::Doctor { .. }
+            | Commands::Comments { .. }
+            | Commands::Open
+            | Commands::Web(_)
+            | Commands::W
+            | Commands::Wtll { .. }
+            | Commands::Wtls => CommandPolicy::RebaseSafe,
+            Commands::Issue { command } => match command {
+                None | Some(IssueCommands::List { .. }) => CommandPolicy::RebaseSafe,
+            },
+            Commands::Pr { command } => match command {
+                None | Some(PrCommands::Open) | Some(PrCommands::List { .. }) => {
+                    CommandPolicy::RebaseSafe
+                }
+                Some(PrCommands::Body { .. }) => CommandPolicy::RequiresCleanRepoState,
+            },
+            Commands::Worktree { command } => match command {
+                None
+                | Some(WorktreeCommands::List { .. })
+                | Some(WorktreeCommands::LongList { .. })
+                | Some(WorktreeCommands::Path { .. }) => CommandPolicy::RebaseSafe,
+                Some(_) => CommandPolicy::RequiresCleanRepoState,
+            },
             _ => CommandPolicy::RequiresCleanRepoState,
         }
     }
@@ -1728,4 +1937,58 @@ pub(crate) enum CommandPolicy {
     RebaseControl,
     RebaseSafe,
     RequiresCleanRepoState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::Parser;
+    use std::path::Path;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+        std::thread::Builder::new()
+            .name("cli-parse".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args))
+            .expect("spawn parse thread")
+            .join()
+            .expect("join parse thread")
+            .expect("parse CLI")
+    }
+
+    #[test]
+    fn web_accepts_optional_path_and_defaults_to_8787() {
+        use super::WebArgs;
+        let default = parse_cli(&["st", "web"]);
+        assert!(matches!(
+            default.command,
+            Some(Commands::Web(WebArgs {
+                path: None,
+                port: 8787,
+                no_open: false
+            }))
+        ));
+        let with_port = parse_cli(&["st", "web", "--port", "9000"]);
+        assert!(matches!(
+            with_port.command,
+            Some(Commands::Web(WebArgs { port: 9000, .. }))
+        ));
+        let no_open = parse_cli(&["st", "web", "--no-open"]);
+        assert!(matches!(
+            no_open.command,
+            Some(Commands::Web(WebArgs { no_open: true, .. }))
+        ));
+    }
+
+    #[test]
+    fn web_accepts_explicit_path() {
+        use super::WebArgs;
+        let with_path = parse_cli(&["st", "web", "/tmp/repo"]);
+        assert!(matches!(
+            with_path.command,
+            Some(Commands::Web(WebArgs { path: Some(ref p), .. }))
+                if p == Path::new("/tmp/repo")
+        ));
+    }
 }

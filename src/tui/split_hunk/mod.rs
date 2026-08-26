@@ -60,23 +60,23 @@ fn run_app(
     loop {
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('c'))
-                {
-                    return Ok(false);
-                }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('c'))
+            {
+                return Ok(false);
+            }
 
-                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
-                match &app.mode {
-                    HunkSplitMode::List => handle_list_key(app, key.code, shift),
-                    HunkSplitMode::Sequential => handle_sequential_key(app, key.code, shift),
-                    HunkSplitMode::Naming => handle_naming_key(app, key.code),
-                    HunkSplitMode::ConfirmAbort => handle_confirm_abort_key(app, key.code),
-                    HunkSplitMode::Help => handle_help_key(app, key.code),
-                }
+            match &app.mode {
+                HunkSplitMode::List => handle_list_key(app, key.code, shift),
+                HunkSplitMode::Sequential => handle_sequential_key(app, key.code, shift),
+                HunkSplitMode::Naming => handle_naming_key(app, key.code),
+                HunkSplitMode::ConfirmAbort => handle_confirm_abort_key(app, key.code),
+                HunkSplitMode::Help => handle_help_key(app, key.code),
             }
         }
 
@@ -198,10 +198,8 @@ fn handle_naming_key(app: &mut HunkSplitApp, code: KeyCode) {
                 app.input_cursor -= 1;
             }
         }
-        KeyCode::Right => {
-            if app.input_cursor < app.input_buffer.len() {
-                app.input_cursor += 1;
-            }
+        KeyCode::Right if app.input_cursor < app.input_buffer.len() => {
+            app.input_cursor += 1;
         }
         _ => {}
     }

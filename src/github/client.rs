@@ -91,15 +91,7 @@ struct CheckRun {
     conclusion: Option<String>,
 }
 
-/// Open PR info for tracking command
-#[derive(Debug, Clone)]
-pub struct OpenPrInfo {
-    pub number: u64,
-    pub head_branch: String,
-    pub base_branch: String,
-    pub state: String,
-    pub is_draft: bool,
-}
+pub use crate::forge::OpenPrInfo;
 
 #[derive(Debug, Deserialize)]
 struct ReviewUser {
@@ -176,9 +168,34 @@ impl GitHubClient {
             "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
              `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
         )?;
+        Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
+    }
 
+    pub(crate) fn new_for_trusted_remote(
+        owner: &str,
+        repo: &str,
+        api_base_url: Option<String>,
+        config: &Config,
+        validated_remote_host: &str,
+    ) -> Result<Self> {
+        let (auth_source, token) = config
+            .github_token_with_source_for_host(validated_remote_host)?
+            .context(
+                "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
+                 `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
+            )?;
+        Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
+    }
+
+    fn new_with_auth(
+        owner: &str,
+        repo: &str,
+        api_base_url: Option<String>,
+        auth_source: GitHubAuthSource,
+        token: String,
+    ) -> Result<Self> {
         let mut builder = Octocrab::builder()
-            .personal_token(token.to_string())
+            .personal_token(token)
             .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
             .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
             .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))
@@ -253,25 +270,23 @@ impl GitHubClient {
             .octocrab
             .repos(&self.owner, &self.repo)
             .combined_status_for_ref(&Reference::Branch(commit_sha.to_string()))
-            .await
-            .ok();
+            .await?;
 
         // Then, check GitHub Actions check runs
-        let check_runs_status = self.get_check_runs_status(commit_sha).await.ok().flatten();
+        let check_runs_status = self.get_check_runs_status(commit_sha).await?;
 
         // Combine results: prioritize check runs (more common), fall back to commit status
-        match (check_runs_status, commit_status) {
+        match check_runs_status {
             // If we have check runs, use that status
-            (Some(cr_status), _) => Ok(Some(cr_status)),
+            Some(cr_status) => Ok(Some(cr_status)),
             // Fall back to commit status
-            (None, Some(status)) => Ok(Some(format!("{:?}", status.state).to_lowercase())),
-            // No CI at all
-            (None, None) => Ok(None),
+            None => Ok(Some(format!("{:?}", commit_status.state).to_lowercase())),
         }
     }
 
     /// Get status from GitHub Actions check runs
     async fn get_check_runs_status(&self, commit_sha: &str) -> Result<Option<String>> {
+        self.record_api_call("checks.check_runs");
         let url = format!(
             "/repos/{}/{}/commits/{}/check-runs",
             self.owner, self.repo, commit_sha
@@ -336,7 +351,14 @@ impl GitHubClient {
 
     /// Get the authenticated user's login name
     pub async fn get_current_user(&self) -> Result<String> {
-        let user = self.octocrab.current().user().await?;
+        self.record_api_call("users.current");
+        let user = self
+            .octocrab
+            .current()
+            .user()
+            .await
+            .context("Failed to look up the authenticated user")
+            .map_err(|e| self.enrich_api_error(e))?;
         Ok(user.login)
     }
 
@@ -348,6 +370,7 @@ impl GitHubClient {
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
         // Use search API to find only user's merged PRs - much faster than listing all
+        self.record_api_call("search.issues");
         let url = format!(
             "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:merged&sort=updated&order=desc&per_page=30",
             self.owner, self.repo, username
@@ -384,6 +407,7 @@ impl GitHubClient {
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
         // Use search API to find only user's created PRs
+        self.record_api_call("search.issues");
         let url = format!(
             "/search/issues?q=repo:{}/{}+author:{}+is:pr&sort=created&order=desc&per_page=30",
             self.owner, self.repo, username
@@ -420,6 +444,7 @@ impl GitHubClient {
             "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:open&per_page=20",
             self.owner, self.repo, username
         );
+        self.record_api_call("search.issues");
         let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
 
         let mut reviews = Vec::new();
@@ -430,6 +455,7 @@ impl GitHubClient {
                 "/repos/{}/{}/pulls/{}/reviews",
                 self.owner, self.repo, issue.number
             );
+            self.record_api_call("pulls.reviews.list");
             let pr_reviews: Vec<Review> = self
                 .octocrab
                 .get(&reviews_url, None::<&()>)
@@ -437,21 +463,20 @@ impl GitHubClient {
                 .unwrap_or_default();
 
             for review in pr_reviews {
-                if let Some(submitted) = review.submitted_at {
-                    if submitted >= since {
-                        if let Some(reviewer) = review.user {
-                            // Don't include self-reviews
-                            if reviewer.login != username {
-                                reviews.push(ReviewActivity {
-                                    pr_number: issue.number,
-                                    pr_title: issue.title.clone(),
-                                    reviewer: reviewer.login,
-                                    state: review.state,
-                                    timestamp: submitted,
-                                    is_received: true,
-                                });
-                            }
-                        }
+                if let Some(submitted) = review.submitted_at
+                    && submitted >= since
+                    && let Some(reviewer) = review.user
+                {
+                    // Don't include self-reviews
+                    if reviewer.login != username {
+                        reviews.push(ReviewActivity {
+                            pr_number: issue.number,
+                            pr_title: issue.title.clone(),
+                            reviewer: reviewer.login,
+                            state: review.state,
+                            timestamp: submitted,
+                            is_received: true,
+                        });
                     }
                 }
             }
@@ -483,6 +508,7 @@ impl GitHubClient {
             self.owner, self.repo, username
         );
 
+        self.record_api_call("search.issues");
         let response: SearchIssuesResponse = self
             .octocrab
             .get(&url, None::<&()>)
@@ -492,33 +518,58 @@ impl GitHubClient {
         // For each PR from search, we need to get the branch info
         // Search API doesn't include head/base branch refs, so we fetch each PR
         let mut results = Vec::new();
+        let mut skipped: Vec<(u64, String)> = Vec::new();
+        let found = response.items.len();
         for issue in response.items {
             // Fetch full PR details to get branch info
+            self.record_api_call("pulls.get");
             let pr = self
                 .octocrab
                 .pulls(&self.owner, &self.repo)
                 .get(issue.number)
                 .await;
 
-            if let Ok(pr) = pr {
-                let Some(number) = pr.number else {
-                    continue;
-                };
-                let Some(head) = pr.head.as_deref() else {
-                    continue;
-                };
-                let Some(base) = pr.base.as_deref() else {
-                    continue;
-                };
-
-                results.push(OpenPrInfo {
-                    number,
-                    head_branch: head.ref_field.clone(),
-                    base_branch: base.ref_field.clone(),
-                    state: "OPEN".to_string(),
-                    is_draft: pr.draft.unwrap_or(false),
-                });
+            match pr {
+                Ok(pr) => {
+                    // `id`, `number`, `url`, `head`, `base` and `locked` are
+                    // required fields as of octocrab 0.54, so a response missing
+                    // any of them fails to deserialize above and lands in `Err`.
+                    results.push(OpenPrInfo {
+                        number: pr.number,
+                        head_branch: pr.head.ref_field.clone(),
+                        base_branch: pr.base.ref_field.clone(),
+                        state: "OPEN".to_string(),
+                        is_draft: pr.draft.unwrap_or(false),
+                    });
+                }
+                Err(err) => skipped.push((issue.number, format!("{err}"))),
             }
+        }
+
+        // Skipping a PR we cannot read is the right call — one odd PR should not
+        // stop the rest being tracked — but doing it silently is not. If every
+        // PR search found turns out to be unreadable, an empty list is
+        // indistinguishable from "you have no open PRs", which sends the caller
+        // down a misleading path. Say so instead.
+        if !skipped.is_empty() {
+            if results.is_empty() {
+                let (number, err) = &skipped[0];
+                anyhow::bail!(
+                    "Found {} open PR(s) for this repository but could not read any of them.\n\
+                     First failure was PR #{}: {}\n\n\
+                     This usually means the forge returned a pull request payload \
+                     that this version of stax cannot parse. Please report it.",
+                    found,
+                    number,
+                    err
+                );
+            }
+            eprintln!(
+                "  warning: skipped {} of {} open PR(s) that could not be read (e.g. #{})",
+                skipped.len(),
+                found,
+                skipped[0].0
+            );
         }
 
         Ok(results)
@@ -537,7 +588,8 @@ impl GitHubClient {
             .octocrab
             .get(&url, None::<&()>)
             .await
-            .context("Failed to list pull requests")?;
+            .context("Failed to list pull requests")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         Ok(response
             .into_iter()
@@ -561,7 +613,6 @@ impl GitHubClient {
     /// GitHub's issues endpoint includes pull requests, so we filter them client-side and
     /// paginate until we have `limit` real issues or the API has no more pages.
     pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
-        self.record_api_call("issues.list");
         let want = limit.clamp(1, 100) as usize;
         let mut collected: Vec<RepoIssueListItem> = Vec::with_capacity(want);
         let mut page = 1u32;
@@ -572,11 +623,13 @@ impl GitHubClient {
                 self.owner, self.repo, page
             );
 
+            self.record_api_call("issues.list");
             let response: Vec<RepoListIssue> = self
                 .octocrab
                 .get(&url, None::<&()>)
                 .await
-                .context("Failed to list issues")?;
+                .context("Failed to list issues")
+                .map_err(|e| self.enrich_api_error(e))?;
 
             let fetched = response.len();
 
@@ -631,6 +684,235 @@ mod tests {
             .unwrap();
 
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    /// `get_user_open_prs` reads `number`, `head.ref` and `base.ref` off each
+    /// fetched pull request. Those were `Option` fields before octocrab 0.54 and
+    /// are required from 0.54 on, so this pins the happy path that the upgrade
+    /// moved: a well-formed response must still yield the same branch info.
+    #[tokio::test]
+    async fn test_get_user_open_prs_reads_head_and_base_refs() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": 2,
+                "incomplete_results": false,
+                "items": [
+                    {
+                        "number": 11,
+                        "title": "Feature A",
+                        "html_url": "https://github.com/test-owner/test-repo/pull/11",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "closed_at": null
+                    },
+                    {
+                        "number": 12,
+                        "title": "Feature B",
+                        "html_url": "https://github.com/test-owner/test-repo/pull/12",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "closed_at": null
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/12"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/12",
+                "id": 12,
+                "number": 12,
+                "head": { "ref": "feature-b", "sha": "cccc", "label": "test-owner:feature-b" },
+                "base": { "ref": "feature-a", "sha": "dddd" },
+                "draft": true
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client.get_user_open_prs("alice").await.unwrap();
+
+        assert_eq!(prs.len(), 2, "expected both PRs: {prs:?}");
+
+        let a = prs.iter().find(|p| p.number == 11).expect("PR 11 missing");
+        assert_eq!(a.head_branch, "feature-a");
+        assert_eq!(a.base_branch, "main");
+        assert_eq!(a.state, "OPEN");
+        assert!(!a.is_draft);
+
+        // Stacked child: its base is the sibling branch, not trunk.
+        let b = prs.iter().find(|p| p.number == 12).expect("PR 12 missing");
+        assert_eq!(b.head_branch, "feature-b");
+        assert_eq!(b.base_branch, "feature-a");
+        assert!(b.is_draft);
+    }
+
+    /// A single unusable pull request must be skipped, not abort the whole
+    /// listing — `stax branch track --all-prs` should still import everything
+    /// else it found.
+    ///
+    /// This is the behaviour the octocrab 0.54 upgrade re-routed. Previously
+    /// `head`/`base`/`number` were optional and stax skipped the PR explicitly;
+    /// now the response fails to deserialize and is skipped as a fetch error.
+    /// Same observable result, different mechanism, so it is worth pinning.
+    #[tokio::test]
+    async fn test_get_user_open_prs_skips_unusable_pr_and_keeps_the_rest() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": 2,
+                "incomplete_results": false,
+                "items": [
+                    {
+                        "number": 21,
+                        "title": "Broken",
+                        "html_url": "https://github.com/test-owner/test-repo/pull/21",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "closed_at": null
+                    },
+                    {
+                        "number": 22,
+                        "title": "Fine",
+                        "html_url": "https://github.com/test-owner/test-repo/pull/22",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "closed_at": null
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // PR 21 has no head at all.
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/21"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/21",
+                "id": 21,
+                "number": 21,
+                "base": { "ref": "main", "sha": "bbbb" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/22"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/22",
+                "id": 22,
+                "number": 22,
+                "head": { "ref": "feature-ok", "sha": "cccc", "label": "test-owner:feature-ok" },
+                "base": { "ref": "main", "sha": "dddd" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client
+            .get_user_open_prs("alice")
+            .await
+            .expect("one unusable PR must not fail the whole listing");
+
+        assert_eq!(prs.len(), 1, "expected only the usable PR: {prs:?}");
+        assert_eq!(prs[0].number, 22);
+        assert_eq!(prs[0].head_branch, "feature-ok");
+    }
+
+    /// The dangerous case the octocrab 0.54 upgrade made more likely: if every
+    /// PR the search found is unreadable, returning an empty list would render
+    /// as "No open PRs found", which is indistinguishable from genuinely having
+    /// none. That must be an error naming the failure instead.
+    #[tokio::test]
+    async fn test_get_user_open_prs_errors_when_no_pr_can_be_read() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": 1,
+                "incomplete_results": false,
+                "items": [
+                    {
+                        "number": 31,
+                        "title": "Broken",
+                        "html_url": "https://github.com/test-owner/test-repo/pull/31",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "closed_at": null
+                    }
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Missing `head`, so octocrab cannot deserialize it.
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/31"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/31",
+                "id": 31,
+                "locked": false,
+                "number": 31,
+                "base": { "ref": "main", "sha": "bbbb" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let err = client
+            .get_user_open_prs("alice")
+            .await
+            .expect_err("unreadable PRs must not look like an empty result");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("could not read any of them"),
+            "expected an explicit unreadable-PR error, got: {msg}"
+        );
+        assert!(
+            msg.contains("#31"),
+            "error should name the offending PR, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_current_user_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let error = client.get_current_user().await.unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("Failed to look up the authenticated user"));
+        assert!(message.contains("token is expired or lacks access"));
+        assert!(message.contains("stax auth --from-gh"));
     }
 
     #[tokio::test]
@@ -1204,6 +1486,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_open_issues_counts_every_page() {
+        let mock_server = MockServer::start().await;
+
+        // Page 1: 100 items, all PRs — filtered out, so nothing satisfies `want` yet
+        let pr_items: Vec<serde_json::Value> = (1u32..=100)
+            .map(|n| {
+                serde_json::json!({
+                    "number": n,
+                    "title": format!("PR {n}"),
+                    "html_url": format!("https://github.com/test-owner/test-repo/pull/{n}"),
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T12:00:00Z",
+                    "pull_request": {
+                        "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{n}")
+                    }
+                })
+            })
+            .collect();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(pr_items)))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 10,
+                    "title": "Real issue A",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/10",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-14T10:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let issues = client.list_open_issues(1).await.unwrap();
+        assert_eq!(issues.len(), 1);
+
+        let stats = client.api_call_stats();
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "issues.list" && *count == 2),
+            "expected issues.list to be recorded once per page, got: {:?}",
+            stats.by_operation
+        );
+    }
+
+    #[tokio::test]
     async fn test_list_open_pull_requests_empty_response() {
         let mock_server = MockServer::start().await;
 
@@ -1313,6 +1654,66 @@ mod tests {
         assert!(
             err_msg.contains("token is expired or lacks access"),
             "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.list_open_pull_requests(30).await;
+
+        assert!(result.is_err(), "Expected error on 404");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("token is expired or lacks access"),
+            "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("stax auth --from-gh"),
+            "Expected auth remediation hint in 404 error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.list_open_issues(30).await;
+
+        assert!(result.is_err(), "Expected error on 404");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("token is expired or lacks access"),
+            "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("stax auth --from-gh"),
+            "Expected auth remediation hint in 404 error, got: {}",
             err_msg
         );
     }

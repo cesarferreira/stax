@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -6,11 +6,13 @@ RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
 GIT_CLIFF_VERSION ?= 2.13.1
-STAX_TEST_IMAGE ?= stax-test
+TEST_IMAGE_HASH := $(shell git hash-object Dockerfile | cut -c1-12)
+STAX_TEST_IMAGE ?= stax-test:$(TEST_IMAGE_HASH)
 CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
 CONTAINER_MEMORY ?= 8G
 CONTAINER_CARGO_BUILD_JOBS ?= 4
 CONTAINER_CARGO_PROFILE ?= test-container
+NATIVE_CARGO_PROFILE ?= test-container
 
 # Default target
 all: check build test
@@ -49,28 +51,30 @@ test:
 	@if [ "$$(uname)" = "Darwin" ] && command -v docker >/dev/null 2>&1; then \
 		$(MAKE) test-docker; \
 	else \
-		cargo nextest run; \
+		$(MAKE) test-local-fast; \
 	fi
 
 # Run all tests natively on host
-test-native:
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		$(MAKE) test-local-fast; \
-	else \
-		cargo nextest run; \
-	fi
+test-native: test-native-script
+	$(MAKE) test-local-fast
 
-# Run tests with macOS-friendly defaults (custom temp root + capped concurrency)
+# Verify the native test runner's guards and phase selection.
+test-native-script:
+	./scripts/native-tests-tests.sh
+
+# Run tests with automation-friendly native defaults (custom temp root, token-free env, optimized profile)
 test-local-fast:
 	mkdir -p .test-tmp
-	@threads="$${NEXTEST_TEST_THREADS:-}"; \
-	if [ -z "$$threads" ] && [ "$$(uname)" = "Darwin" ]; then \
-		threads="$(MAC_LOCAL_TEST_THREADS)"; \
-	fi; \
-	if [ -z "$$threads" ]; then \
-		threads="num-cpus"; \
-	fi; \
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		NEXTEST_TEST_THREADS="$${NEXTEST_TEST_THREADS:-$(MAC_LOCAL_TEST_THREADS)}" \
+		NATIVE_CARGO_PROFILE="$(NATIVE_CARGO_PROFILE)" \
+		STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" \
+		TMPDIR="$$(pwd)/.test-tmp" \
+		./scripts/native-tests.sh; \
+	else \
+		threads="$${NEXTEST_TEST_THREADS:-num-cpus}"; \
+		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
+	fi
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
 ramdisk-up:
@@ -116,11 +120,13 @@ test-local-ramdisk: ramdisk-up
 
 # Build the pre-baked Linux test image (nextest + mold linker).
 test-image:
-	docker build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+	@docker image inspect $(STAX_TEST_IMAGE) >/dev/null 2>&1 || \
+		docker build -t $(STAX_TEST_IMAGE) -f Dockerfile .
 
 # Build the same image into Apple Container's local store.
 test-container-image:
-	$(CONTAINER) build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+	@$(CONTAINER) image inspect $(STAX_TEST_IMAGE) >/dev/null 2>&1 || \
+		$(CONTAINER) build -t $(STAX_TEST_IMAGE) -f Dockerfile .
 
 # Shared container test env (Docker and Apple Container).
 define CONTAINER_TEST_RUN
@@ -143,13 +149,13 @@ endef
 
 # Run tests in Linux Docker (fast path on macOS)
 test-docker: test-image
-	mkdir -p .docker-cache/cargo .docker-cache/target
-	$(call CONTAINER_TEST_RUN,docker,,.docker-cache,)
+	mkdir -p .docker-cache/$(TEST_IMAGE_HASH)/cargo .docker-cache/$(TEST_IMAGE_HASH)/target
+	$(call CONTAINER_TEST_RUN,docker,,.docker-cache/$(TEST_IMAGE_HASH),)
 
 # Run tests with Apple container (experimental macOS fast path)
 test-container: test-container-image
-	mkdir -p .container-cache/cargo .container-cache/target
-	$(call CONTAINER_TEST_RUN,$(CONTAINER),-m "$(CONTAINER_MEMORY)",.container-cache,)
+	mkdir -p .container-cache/$(TEST_IMAGE_HASH)/cargo .container-cache/$(TEST_IMAGE_HASH)/target
+	$(call CONTAINER_TEST_RUN,$(CONTAINER),-m "$(CONTAINER_MEMORY)",.container-cache/$(TEST_IMAGE_HASH),)
 
 # Run fast unit tests only
 test-unit:
@@ -161,8 +167,8 @@ test-integration:
 
 # Run clippy and check
 check:
-	cargo check
-	cargo clippy -- -D warnings
+	cargo check --all-targets --all-features
+	./scripts/lint.sh full
 
 # Format code
 fmt:
@@ -171,7 +177,16 @@ fmt:
 # Lint (check formatting)
 lint:
 	cargo fmt -- --check
-	cargo clippy -- -D warnings
+	./scripts/lint.sh full
+
+# Fast lint for local iteration (library and binary targets only)
+lint-fast:
+	cargo fmt -- --check
+	./scripts/clippy-lint.sh fast
+
+# Benchmark cold JSON status across deterministic stack sizes.
+benchmark-status:
+	./scripts/benchmark-status.sh
 
 # Run with arguments (usage: make run ARGS="status")
 run:

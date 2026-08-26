@@ -1,3 +1,6 @@
+use crate::application::{
+    CheckoutOutcome, NoopOperationReporter, OperationOutcome, RepositorySession,
+};
 use crate::commands::stack_palette;
 use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
@@ -19,9 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::path::Path;
 
-const LINKED_WORKTREE_GLYPH: &str = "↳";
 const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
-const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
 const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
 const ACTIVE_ROW_BACKGROUND: &str = "\u{1b}[48;5;236m";
 const CHECKOUT_BRANCH_STYLE: &str = "\u{1b}[1;96m";
@@ -207,10 +208,10 @@ pub fn run(
     }
 
     // Parse "#123" from branch string
-    if let Some(ref branch_str) = branch {
-        if let Some(pr_num) = parse_pr_number(branch_str)? {
-            return checkout_by_pr(&repo, pr_num, shell_output);
-        }
+    if let Some(ref branch_str) = branch
+        && let Some(pr_num) = parse_pr_number(branch_str)?
+    {
+        return checkout_by_pr(&repo, pr_num, shell_output);
     }
 
     if branch.is_some() && (trunk || parent || child.is_some()) {
@@ -222,12 +223,11 @@ pub fn run(
         if trunk {
             stack.trunk.clone()
         } else if parent {
-            let parent_branch = stack
+            stack
                 .branches
                 .get(&current)
                 .and_then(|b| b.parent.clone())
-                .ok_or_else(|| anyhow::anyhow!("Branch '{}' has no tracked parent.", current))?;
-            parent_branch
+                .ok_or_else(|| anyhow::anyhow!("Branch '{}' has no tracked parent.", current))?
         } else {
             let children: Vec<String> = stack
                 .branches
@@ -348,12 +348,19 @@ pub fn run(
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
         let timer = LiveTimer::maybe_new(true, &format!("Checking out {}...", target));
-        checkout_branch_in(&workdir, &target)?;
+        let receipt = RepositorySession::open(&workdir)?
+            .checkout(&target, &mut NoopOperationReporter)
+            .map_err(anyhow::Error::from)?;
         LiveTimer::maybe_finish_ok(timer, "done");
+        let checked_out_branch = match receipt.outcome {
+            OperationOutcome::Checkout(CheckoutOutcome::CheckedOut { branch }) => branch,
+            OperationOutcome::Checkout(CheckoutOutcome::AlreadyCurrent { branch }) => branch,
+            _ => target.clone(),
+        };
         if shell_output {
-            emit_shell_message(&checkout_completion_shell_message(&target));
+            emit_shell_message(&checkout_completion_shell_message(&checked_out_branch));
         } else {
-            println!("{}", checkout_completion_message(&target));
+            println!("{}", checkout_completion_message(&checked_out_branch));
         }
     }
 
@@ -385,6 +392,7 @@ fn route_checkout_to_worktree(
 
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
     let config = Config::load()?;
+    let worktree_glyph = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
     let linked_worktrees_by_branch: HashSet<String> = repo
         .list_worktrees()?
         .into_iter()
@@ -498,8 +506,12 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             visual_width += 1;
         }
 
-        let mut info_str =
-            render_presence_markers(has_remote, show_worktree_column, has_linked_worktree);
+        let mut info_str = render_presence_markers(
+            has_remote,
+            show_worktree_column,
+            has_linked_worktree,
+            worktree_glyph,
+        );
 
         let branch_color = checkout_lane_color(db.column);
         if is_current {
@@ -565,6 +577,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         remote_branches.contains(&*stack.trunk),
         show_worktree_column,
         linked_worktrees_by_branch.contains(&stack.trunk),
+        worktree_glyph,
     );
     if is_trunk_current {
         trunk_info.push_str(&render_stderr(
@@ -605,6 +618,7 @@ fn render_presence_markers(
     has_remote: bool,
     show_worktree_column: bool,
     has_linked_worktree: bool,
+    worktree_glyph: stack_palette::WorktreeGlyphMode,
 ) -> String {
     let mut info_str = String::new();
     info_str.push(' ');
@@ -616,14 +630,15 @@ fn render_presence_markers(
     }
 
     if show_worktree_column {
+        let marker = stack_palette::linked_worktree_marker(worktree_glyph);
         if has_linked_worktree {
             info_str.push_str(&render_stderr(
-                LINKED_WORKTREE_GLYPH,
-                checkout_style(BRIGHT_CYAN),
+                &marker.plain,
+                stack_palette::linked_worktree_marker_console_style(),
             ));
             info_str.push(' ');
         } else {
-            info_str.push_str("  ");
+            info_str.push_str(&" ".repeat(marker.slot_width()));
         }
     }
 
@@ -867,7 +882,7 @@ mod tests {
         let stack = test_stack();
         let mut display_branches = Vec::new();
         let mut max_column = 0;
-        let mut roots = vec!["auth".to_string(), "hotfix".to_string()];
+        let mut roots = ["auth".to_string(), "hotfix".to_string()];
         roots.sort();
         for (i, root) in roots.iter().enumerate() {
             collect_display_branches_with_nesting(
@@ -926,14 +941,38 @@ mod tests {
     }
 
     #[test]
-    fn test_render_presence_markers_aligns_worktree_column() {
+    fn test_render_presence_markers_aligns_worktree_column_wt() {
         assert_eq!(
-            strip_ansi(&render_presence_markers(true, true, true)),
-            " ☁️ ↳ "
+            strip_ansi(&render_presence_markers(
+                true,
+                true,
+                true,
+                stack_palette::WorktreeGlyphMode::Wt
+            )),
+            " ☁️ wt "
         );
         assert_eq!(
-            strip_ansi(&render_presence_markers(false, true, false)),
-            "      "
+            strip_ansi(&render_presence_markers(
+                false,
+                true,
+                false,
+                stack_palette::WorktreeGlyphMode::Wt
+            )),
+            "       "
+        );
+    }
+
+    #[test]
+    fn test_render_presence_markers_aligns_worktree_column_tree() {
+        let marker = stack_palette::linked_worktree_marker(stack_palette::WorktreeGlyphMode::Tree);
+        assert_eq!(
+            strip_ansi(&render_presence_markers(
+                true,
+                true,
+                true,
+                stack_palette::WorktreeGlyphMode::Tree
+            )),
+            format!(" ☁️ {} ", marker.plain)
         );
     }
 

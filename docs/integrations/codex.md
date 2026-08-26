@@ -3,7 +3,10 @@
 Install the stax skill file so Codex can drive stax workflows correctly.
 
 ```bash
+st setup --install-skills --skills codex   # recommended
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/stax"
+st --skill > "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md"
+# or fetch the markdown body only from GitHub:
 curl -o "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md" https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 
@@ -24,5 +27,5 @@ When `codex` is selected, stax tries OpenAI's live Models API first (using `OPEN
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)

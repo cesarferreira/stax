@@ -1,4 +1,5 @@
 pub mod history;
+pub mod normalize;
 
 use serde::{Deserialize, Serialize};
 

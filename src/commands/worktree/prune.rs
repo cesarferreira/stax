@@ -1,9 +1,13 @@
+use super::pool;
+use super::shared::managed_worktrees_dir;
+use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 
 pub fn run() -> Result<()> {
     let repo = GitRepo::open()?;
+    let config = Config::load()?;
     let before = repo.list_worktrees()?;
     let prunable_before: Vec<_> = before
         .iter()
@@ -17,6 +21,10 @@ pub fn run() -> Result<()> {
     }
 
     repo.worktree_prune()?;
+
+    if config.worktree.reuse_slots {
+        reconcile_pool_manifest(&repo, &config)?;
+    }
 
     let after = repo.list_worktrees()?;
     let remaining_prunable: Vec<_> = after
@@ -48,4 +56,17 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Drop pool slots whose directory no longer exists on disk.
+fn reconcile_pool_manifest(repo: &GitRepo, config: &Config) -> Result<()> {
+    let worktrees_dir = managed_worktrees_dir(repo, config)?;
+    if !worktrees_dir.exists() {
+        return Ok(());
+    }
+
+    pool::with_lock(&worktrees_dir, |pool| {
+        pool.slots.retain(|slot| slot.path.exists());
+        Ok(())
+    })
 }

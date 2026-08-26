@@ -505,9 +505,8 @@ fn mv_metadata_parent_updated_after_restack() {
     );
 
     // b should not need a restack (git and metadata are in sync)
-    assert_ne!(
-        b_entry["needs_restack"].as_bool().unwrap_or(false),
-        true,
+    assert!(
+        !b_entry["needs_restack"].as_bool().unwrap_or(false),
         "b should not need restack after mv — git and metadata must already agree"
     );
 }

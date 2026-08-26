@@ -7,6 +7,38 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use std::fs;
+use std::path::Path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn write_test_config(home: &Path, api_base_url: &str) {
+    let config_dir = home.join(".config").join("stax");
+    fs::create_dir_all(&config_dir).expect("config directory");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!("[remote]\napi_base_url = \"{api_base_url}\"\n"),
+    )
+    .expect("test config");
+}
+
+fn write_branch_pr_metadata(repo: &TestRepo, branch: &str, parent: &str, pr_number: u64) {
+    let metadata = serde_json::json!({
+        "parentBranchName": parent,
+        "parentBranchRevision": repo.get_commit_sha(parent),
+        "prInfo": { "number": pr_number, "state": "OPEN" }
+    });
+    let file = tempfile::NamedTempFile::new().expect("metadata file");
+    fs::write(file.path(), metadata.to_string()).expect("metadata contents");
+    let hash = repo.git(&["hash-object", "-w", file.path().to_str().unwrap()]);
+    hash.assert_success();
+    repo.git(&[
+        "update-ref",
+        &format!("refs/branch-metadata/{branch}"),
+        TestRepo::stdout(&hash).trim(),
+    ])
+    .assert_success();
+}
 
 // =============================================================================
 // Help Tests
@@ -106,4 +138,146 @@ fn test_comments_from_deep_stack_no_pr() {
         "Expected message about missing PR, got: {}",
         stderr
     );
+}
+
+#[tokio::test]
+async fn reviews_alias_lists_a_stack_inbox_as_json() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &server.uri());
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/test/repo.git",
+    ])
+    .assert_success();
+    let branches = repo.create_stack(&["review-parent", "review-child"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 41);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 42);
+
+    for (number, body) in [(41, "Please add a test"), (42, "Looks good")] {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/issues/{number}/comments")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "id": number,
+                    "body": body,
+                    "user": { "login": "reviewer" },
+                    "created_at": "2026-07-10T12:00:00Z"
+                }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{number}/comments")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+    }
+
+    let output = repo.run_stax_with_env(
+        &["reviews", "--stack", "--json"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+    output.assert_success();
+    let inbox: serde_json::Value = serde_json::from_slice(&output.stdout).expect("inbox JSON");
+    assert_eq!(inbox["scope"], "stack");
+    assert_eq!(inbox["total_comments"], 2);
+    assert_eq!(inbox["pull_requests"][0]["branch"], branches[0]);
+    assert_eq!(
+        inbox["pull_requests"][0]["comments"][0]["body"],
+        "Please add a test"
+    );
+    assert_eq!(inbox["pull_requests"][1]["branch"], branches[1]);
+}
+
+#[tokio::test]
+async fn reviews_inbox_renders_inline_comment_location() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &server.uri());
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/test/repo.git",
+    ])
+    .assert_success();
+    let branch = repo.create_stack(&["inline-review"]).remove(0);
+    write_branch_pr_metadata(&repo, &branch, "main", 43);
+
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/issues/43/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/pulls/43/comments"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "id": 430,
+                "body": "Please simplify this block",
+                "user": { "login": "reviewer" },
+                "path": "src/lib.rs",
+                "line": 14,
+                "start_line": 12,
+                "created_at": "2026-07-10T12:00:00Z",
+                "diff_hunk": "@@ -12,3 +12,3 @@"
+            }])),
+        )
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(
+        &["reviews", "--stack", "--plain"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+
+    output.assert_success();
+    output.assert_stdout_contains("src/lib.rs:12-14");
+    output.assert_stdout_contains("Please simplify this block");
+}
+
+#[tokio::test]
+async fn reviews_inbox_reports_comment_api_failures() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &server.uri());
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/test/repo.git",
+    ])
+    .assert_success();
+    let branch = repo.create_stack(&["failed-review-fetch"]).remove(0);
+    write_branch_pr_metadata(&repo, &branch, "main", 44);
+
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/issues/44/comments"))
+        .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+            "message": "temporary failure"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/pulls/44/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(
+        &["reviews", "--stack", "--json"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+
+    output.assert_failure();
+    output.assert_stderr_contains("Failed to list issue comments");
 }

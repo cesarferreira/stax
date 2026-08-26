@@ -4,6 +4,7 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use regex::Regex;
 
 // =============================================================================
 // Checkout Command Tests
@@ -114,6 +115,118 @@ fn test_get_help() {
         .assert_stdout_contains("--parent")
         .assert_stdout_contains("--no-checkout")
         .assert_stdout_contains("--force");
+}
+
+#[test]
+fn test_full_command_reference_mentions_visible_top_level_commands() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["--help"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    let docs = include_str!("../docs/commands/reference.md");
+    let mut in_commands = false;
+    let mut missing = Vec::new();
+
+    for line in stdout.lines() {
+        if line.starts_with("Commands:") {
+            in_commands = true;
+            continue;
+        }
+        if line.starts_with("Options:") {
+            in_commands = false;
+        }
+        if !in_commands || line.trim().is_empty() {
+            continue;
+        }
+
+        let Some(command) = line.split_whitespace().next() else {
+            continue;
+        };
+        if command == "help" {
+            continue;
+        }
+
+        let documented = docs.contains(&format!("`st {command}"))
+            || docs.contains(&format!("`stax {command}"))
+            || docs.contains(&format!("### `{command}`"));
+        if !documented {
+            missing.push(command.to_string());
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "docs/commands/reference.md is missing visible top-level commands: {}",
+        missing.join(", ")
+    );
+}
+
+#[test]
+fn documented_cli_commands_and_aliases_resolve_from_help() {
+    let repo = TestRepo::new();
+    let command_references =
+        Regex::new(r"`(?:st|stax) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?").unwrap();
+    let docs = [
+        ("README.md", include_str!("../README.md")),
+        (
+            "docs/commands/reference.md",
+            include_str!("../docs/commands/reference.md"),
+        ),
+        ("skills.md", include_str!("../skills.md")),
+    ];
+    let mut invalid = Vec::new();
+
+    for (path, content) in docs {
+        for captures in command_references.captures_iter(content) {
+            let command = captures.get(1).unwrap().as_str();
+            let mut args = vec![command];
+            if let Some(subcommand) = captures.get(2).map(|capture| capture.as_str()) {
+                args.push(subcommand);
+            }
+            args.push("--help");
+
+            let output = repo.run_stax(&args);
+            if !output.status.success() {
+                invalid.push(format!("{path}: st {}", args[..args.len() - 1].join(" ")));
+            }
+        }
+    }
+
+    assert!(
+        invalid.is_empty(),
+        "documented CLI commands or aliases not accepted by help: {}",
+        invalid.join(", ")
+    );
+}
+
+#[test]
+fn docs_cover_numbered_remote_and_active_local_stack_unlink() {
+    let docs = [
+        ("README.md", include_str!("../README.md")),
+        (
+            "docs/commands/core.md",
+            include_str!("../docs/commands/core.md"),
+        ),
+        (
+            "docs/commands/reference.md",
+            include_str!("../docs/commands/reference.md"),
+        ),
+        ("skills.md", include_str!("../skills.md")),
+    ];
+
+    for (path, content) in docs {
+        assert!(
+            content.contains("stack unlink <stack-number>")
+                || content.contains("stack unlink [<stack-number>]")
+                || content.contains("stack unlink 7"),
+            "{path} should document numbered remote `st stack unlink`"
+        );
+        assert!(
+            content.contains("locally tracked") || content.contains("active local"),
+            "{path} should retain the argument-free active local behavior"
+        );
+    }
 }
 
 // =============================================================================

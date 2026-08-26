@@ -5,6 +5,7 @@ st config                     # show current configuration
 st config --set-ai            # interactively pick AI agent/model
 st config --reset-ai          # clear saved AI defaults and re-prompt
 st config --reset-ai --no-prompt
+st --default-config          # print annotated config template (all options + allowed values)
 ```
 
 Config is loaded as follows:
@@ -14,6 +15,19 @@ Config is loaded as follows:
 3. If present, `stax.toml` at the current git repository root overlays only the values it sets.
 
 ## Example config
+
+Run `st --default-config` for the full annotated template (every section, with allowed values in comments). Copy the output to `~/.config/stax/config.toml` and uncomment only the keys you want to override.
+
+Common overrides:
+
+```toml
+[submit]
+stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off"
+```
+
+<details>
+<summary>Full template (same as <code>st --default-config</code>)</summary>
 
 ```toml
 [branch]
@@ -35,6 +49,8 @@ Config is loaded as follows:
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
+# native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
+# stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
 
 [ci]
 # alert = false
@@ -49,14 +65,21 @@ Config is loaded as follows:
 [ui]
 # tips = true
 
+[display]
+# worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)
+
 [restack]
 # preflight_auto_repair = true # automatically use merge-base when stored parent
                                # boundary would replay a much larger range
 # preflight_warn = true        # print a notice when that automatic repair happens
 
+[skills]
+# harnesses = ["claude", "codex"] # agent harnesses that receive skill files
+#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+
 [ai]
-# agent = "claude" # "codex" | "gemini" | "opencode" — global default
-# model = "claude-sonnet-4-5-20250929"
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
+# model = "claude-opus-4-8"
 
 # Per-feature overrides — optional, fall back to [ai] above
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai
@@ -77,6 +100,19 @@ Config is loaded as follows:
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
+# root_dir = ".." # optional: keep lanes beside a nested trunk clone
+# reuse_slots = true
+#   Warm-slot recycling. Removing a clean, merged-equivalent worktree parks it
+#   (reset --hard trunk + `git clean -fd`, keeping gitignored deps like
+#   node_modules / .venv) instead of deleting it, and the next create/lane adopts
+#   that slot instead of a cold `git worktree add`. Set false to always
+#   cold-create and real-remove (no pool manifest).
+# max_idle_slots = 4
+#   Maximum idle slots kept parked. Parking beyond the cap does a real remove;
+#   `worktree cleanup` evicts the oldest excess slots.
+# reconcile = "pnpm install"
+#   Optional command run (non-fatally) inside a slot after it is adopted, to
+#   re-sync dependencies. A missing or failing command only warns.
 
 [worktree.hooks]
 # post_create = "" # blocking hook run in a new worktree before launch
@@ -90,6 +126,8 @@ Config is loaded as follows:
 #   post_go    = "code --add ."
 ```
 
+</details>
+
 ## AI configuration
 
 ### Set agent + model
@@ -101,6 +139,8 @@ st config --set-ai
 ```
 
 You're asked which feature to configure (`generate`, `standup`, `resolve`, `lane`, or global default), then prompted for agent and model. The choice is written to the appropriate `[ai.*]` section.
+
+The final model choice, **Edit config file to use another model**, opens the global user config and accepts arbitrary or provider-qualified model IDs that are not in stax's built-in or live provider lists. Set `[ai].model` for the global selection, or `model` in the exact selected feature section such as `[ai.generate]` or `[ai.lane]`. A global model is not copied into a per-feature section when that feature's model remains unset.
 
 ### First-use prompting
 
@@ -191,6 +231,39 @@ Stack-link entries use compact PR/MR references and mark the PR being rendered w
 
 `single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
 
+## Native GitHub Stacked PRs (gh-stack)
+
+```toml
+[submit]
+native_stack = "auto"              # "auto" | "off" | "link"
+stack_links_when_native = "keep"   # "keep" | "off"
+```
+
+`native_stack = "auto"` is the default. On GitHub remotes, stax checks for the `github/gh-stack` extension and tries to register submitted multi-PR stacks with GitHub's native Stacked PRs feature. If the extension is missing, the repo does not have private-preview access, or the remote is not GitHub, submit silently keeps the existing stax behavior.
+
+### Disable gh-stack registration
+
+To stop stax from calling `gh stack link` on submit (while keeping normal stax submit and PR body/comment stack links):
+
+```toml
+[submit]
+native_stack = "off"
+```
+
+Per run only: `st submit --no-native-stack`. To force registration once: `st submit --native-stack`.
+
+Use `native_stack = "link"` to always attempt registration even when the repo's feature cache says the feature is disabled.
+
+`stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
+
+`st doctor` reports the installed `gh-stack` version, marks versions below v0.1.0 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`. `native_stack = "off"` also disables `st merge --stack`'s atomic `gh stack merge` delegation (see below), falling back to the forge-API stack merge for every run.
+
+### Atomic stack merge (`gh stack merge`)
+
+With `github/gh-stack` v0.1.0+ and a confirmed-enabled native GitHub Stack, `st merge --stack` delegates to `gh stack merge` to land the selected range atomically instead of retargeting and merging PRs individually. This has no separate config flag — it follows `native_stack` (skipped when `"off"`) and the repo's native-stack feature cache.
+
+→ [Native GitHub Stacks guide](../integrations/github-native-stacks.md)
+
 ## Forge type override
 
 By default stax detects the forge from the remote hostname. If your self-hosted instance has a generic hostname like `git.mycompany.com`, override it:
@@ -204,6 +277,21 @@ forge = "gitlab"
 Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (Forgejo is treated as Gitea).
 
 Auto-detection fallback: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, otherwise → GitHub.
+
+### Automatic CI hydration trust
+
+The TUI and desktop app may refresh CI automatically after opening a repository.
+For those credential-bearing requests, repository-local `stax.toml` may select
+only `remote.name`. The following values are accepted only from global
+`~/.config/stax/config.toml`: `remote.base_url`, `remote.api_base_url`,
+`remote.forge`, and all `[auth]` settings.
+
+GitHub.com, GitLab.com, and Gitea.com use built-in trusted API mappings.
+Self-hosted or enterprise remotes must set a matching global
+`remote.base_url`; if the API uses a different hostname, set the relationship
+explicitly with global `remote.api_base_url`. For GitHub Enterprise,
+`auth.gh_hostname` must match the Git remote hostname. Automatic hydration
+rejects mismatches before looking up a token or making a request.
 
 ## Auth tokens by forge
 

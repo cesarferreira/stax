@@ -1,8 +1,10 @@
 use crate::commands::generate;
+use crate::commands::worktree::pool;
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use crate::git::repo::WorktreeInfo;
+use crate::progress::LiveTimer;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
@@ -239,18 +241,39 @@ pub fn ensure_managed_worktrees_root(
     Ok(())
 }
 
-pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &str) -> Result<()> {
-    if worktrees_dir.trim().is_empty() {
-        return Ok(());
+pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &Path) -> Result<()> {
+    let repo_root = fs::canonicalize(repo_root).with_context(|| {
+        format!(
+            "Failed to resolve repository root '{}'",
+            repo_root.display()
+        )
+    })?;
+    let worktrees_dir = fs::canonicalize(worktrees_dir).with_context(|| {
+        format!(
+            "Failed to resolve configured worktree root '{}'",
+            worktrees_dir.display()
+        )
+    })?;
+
+    if worktrees_dir == repo_root {
+        bail!(
+            "Worktree root cannot be the main repository directory '{}'. \
+             Configure a subdirectory or an external directory instead.",
+            repo_root.display()
+        );
     }
 
-    let expanded = expand_home_path(worktrees_dir)?;
-    if expanded.is_absolute() {
+    let Ok(relative_dir) = worktrees_dir.strip_prefix(&repo_root) else {
         return Ok(());
-    }
+    };
 
     let gitignore = repo_root.join(".gitignore");
-    let entry = format!("{}/", worktrees_dir.trim_end_matches('/'));
+    let relative_dir = relative_dir
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    let entry = format!("{relative_dir}/");
 
     if gitignore.exists() {
         let content = fs::read_to_string(&gitignore)?;
@@ -356,10 +379,10 @@ fn expand_home_path(path: &str) -> Result<PathBuf> {
 }
 
 pub fn default_create_base(repo: &GitRepo) -> Result<String> {
-    if let Ok(current) = repo.current_branch() {
-        if BranchMetadata::read(repo.inner(), &current)?.is_some() {
-            return Ok(current);
-        }
+    if let Ok(current) = repo.current_branch()
+        && BranchMetadata::read(repo.inner(), &current)?.is_some()
+    {
+        return Ok(current);
     }
 
     repo.trunk_branch()
@@ -862,13 +885,18 @@ pub fn build_launch_spec(
 /// `opencode run`, but stax launches the top-level `opencode` command. Until
 /// that invocation path is updated (or we confirm the flag is accepted on the
 /// top-level CLI), treat opencode yolo as unsupported.
+///
+/// Note on pi: permission bypass is provided by opt-in permission-mode
+/// extensions (configured via mode cycling / settings), not a stable core CLI
+/// flag, so there is no universal yolo flag to inject; treat pi yolo as
+/// unsupported and let users pass a flag manually via `--agent-arg`.
 pub fn yolo_flag_for_agent(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("--dangerously-skip-permissions"),
         "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
         "gemini" => Some("--yolo"),
-        // "opencode" intentionally unsupported until the top-level CLI accepts
-        // the flag; see function-level docstring.
+        // "opencode" and "pi" intentionally unsupported; see function-level
+        // docstring.
         _ => None,
     }
 }
@@ -885,7 +913,7 @@ pub fn build_agent_launch_spec_with_options(
 
     let mut args = Vec::new();
     match agent {
-        "claude" | "codex" | "opencode" => {
+        "claude" | "codex" | "opencode" | "pi" => {
             if let Some(ref model) = model {
                 args.extend(["--model".to_string(), model.clone()]);
             }
@@ -1076,6 +1104,183 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
         .spawn()
         .with_context(|| format!("Failed to start {} hook", label))?;
 
+    Ok(())
+}
+
+/// Run the standard post-create setup for a freshly created worktree: run the
+/// `post_create` (blocking) and `post_start` (background) hooks. Skipped
+/// entirely when `no_verify` is set.
+pub fn run_post_create_setup(
+    config: &Config,
+    _main_workdir: &Path,
+    worktree_path: &Path,
+    no_verify: bool,
+) -> Result<()> {
+    if no_verify {
+        return Ok(());
+    }
+
+    run_blocking_hook(
+        config.worktree.hooks.post_create.as_deref(),
+        worktree_path,
+        "post_create",
+    )?;
+    spawn_background_hook(
+        config.worktree.hooks.post_start.as_deref(),
+        worktree_path,
+        "post_start",
+    )?;
+
+    Ok(())
+}
+
+/// Run the configured `worktree.reconcile` command inside `cwd` to re-sync
+/// dependencies for a recycled warm slot. Non-fatal: a missing command is a
+/// no-op and a failing command only warns, so adoption never fails because a
+/// dependency re-sync failed.
+pub fn run_reconcile_hook(config: &Config, cwd: &Path) -> Result<()> {
+    let Some(command) = config
+        .worktree
+        .reconcile
+        .as_deref()
+        .filter(|cmd| !cmd.trim().is_empty())
+    else {
+        return Ok(());
+    };
+
+    let timer = LiveTimer::new("Reconciling dependencies...");
+    let status = platform_shell(command)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    match status {
+        Ok(status) if status.success() => timer.finish_ok("done"),
+        Ok(status) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: reconcile hook exited with status {}", status).yellow()
+            );
+        }
+        Err(error) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: could not run reconcile hook: {}", error).yellow()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Outcome of resolving a worktree directory for a new lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptOutcome {
+    /// An idle warm slot at this path was recycled.
+    Adopted(PathBuf),
+    /// A fresh worktree was created cold at this path.
+    Cold(PathBuf),
+}
+
+impl AdoptOutcome {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Adopted(path) | Self::Cold(path) => path.as_path(),
+        }
+    }
+}
+
+/// Materialize a worktree for `resolved_branch`. When `worktree.reuse_slots` is
+/// enabled and an idle warm slot is available, adopt it (switch to the fresh
+/// lane branch, reset to base, clean untracked files but keep gitignored deps,
+/// run the reconcile hook) and record the new branch in the manifest. Otherwise
+/// fall back to a cold `git worktree add` at `cold_path`.
+pub fn adopt_or_create_worktree(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    cold_path: &Path,
+    base_branch: Option<&str>,
+    worktrees_dir: &Path,
+) -> Result<AdoptOutcome> {
+    if config.worktree.reuse_slots
+        && let Some(slot) = pool::acquire_idle_slot(worktrees_dir)?
+    {
+        if slot.path.exists() {
+            match adopt_slot(repo, config, resolved_branch, &slot.path, base_branch) {
+                Ok(()) => {
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                    return Ok(AdoptOutcome::Adopted(slot.path.clone()));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "Warning: could not adopt warm slot '{}': {}. Falling back to a cold worktree.",
+                            slot.path.display(),
+                            error
+                        )
+                        .yellow()
+                    );
+                    // Drop the unusable slot from the manifest so it isn't
+                    // handed out again.
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                }
+            }
+        } else {
+            // Slot directory vanished from disk; forget it.
+            pool::with_lock(worktrees_dir, |pool| {
+                pool.remove_path(&slot.path);
+                Ok(())
+            })?;
+        }
+    }
+
+    let timer = LiveTimer::new("Creating worktree...");
+    create_worktree_for_resolved_branch(repo, resolved_branch, cold_path, base_branch)?;
+    timer.finish_ok("done");
+    Ok(AdoptOutcome::Cold(cold_path.to_path_buf()))
+}
+
+/// Recycle an existing (parked) slot directory into a worktree for
+/// `resolved_branch`. Switches the slot to the lane branch, resets it hard onto
+/// the base, removes untracked files (keeping gitignored deps), and runs the
+/// non-fatal reconcile hook.
+fn adopt_slot(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    slot_path: &Path,
+    base_branch: Option<&str>,
+) -> Result<()> {
+    let timer = LiveTimer::new("Adopting warm worktree...");
+    match &resolved_branch.source {
+        ResolvedBranchSource::New => {
+            let from_branch = base_branch.context("Base branch is required for a new branch")?;
+            repo.switch_new_branch_in(slot_path, &resolved_branch.name, from_branch)?;
+            repo.git_clean_fd(slot_path)?;
+            let parent_rev = repo.branch_commit(from_branch)?;
+            let meta = BranchMetadata::new(from_branch, &parent_rev);
+            meta.write(repo.inner(), &resolved_branch.name)?;
+        }
+        ResolvedBranchSource::Local | ResolvedBranchSource::Remote { .. } => {
+            repo.switch_branch_in(slot_path, &resolved_branch.name)?;
+            repo.git_clean_fd(slot_path)?;
+        }
+    }
+    timer.finish_ok("done");
+
+    run_reconcile_hook(config, slot_path)?;
     Ok(())
 }
 
@@ -1405,10 +1610,43 @@ mod tests {
             Some("--dangerously-bypass-approvals-and-sandbox")
         );
         assert_eq!(yolo_flag_for_agent("gemini"), Some("--yolo"));
-        // opencode is intentionally unsupported for --yolo right now
+        // opencode and pi are intentionally unsupported for --yolo right now
         // (see yolo_flag_for_agent docstring).
         assert_eq!(yolo_flag_for_agent("opencode"), None);
+        assert_eq!(yolo_flag_for_agent("pi"), None);
         assert_eq!(yolo_flag_for_agent("unknown"), None);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_pi_uses_model_flag() {
+        let launch = build_agent_launch_spec_with_options(
+            "pi",
+            Some("anthropic/claude-opus-4-8".to_string()),
+            vec!["fix flaky tests".to_string()],
+            false,
+            &[],
+        )
+        .expect("agent launch");
+
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "pi");
+                assert_eq!(
+                    args,
+                    vec![
+                        "--model".to_string(),
+                        "anthropic/claude-opus-4-8".to_string(),
+                        "fix flaky tests".to_string(),
+                    ]
+                );
+                assert_eq!(display, "pi (anthropic/claude-opus-4-8)");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
     }
 
     #[test]
@@ -1543,6 +1781,55 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("--agent-arg requires --agent"));
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_agent_with_run() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                agent: Some("claude".to_string()),
+                run: Some("npm test".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--agent and --run cannot be used together")
+        );
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_model_without_agent() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                model: Some("gpt-5".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--model requires --agent"));
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_tmux_session_without_tmux() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                tmux_session: Some("my-session".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--tmux-session requires --tmux"));
     }
 
     #[test]

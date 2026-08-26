@@ -45,28 +45,22 @@ pub fn run(options: GetOptions) -> Result<()> {
     let remote = config.remote_name().to_string();
     let trunk = repo.trunk_branch()?;
 
-    if options.unfrozen {
-        println!(
-            "{} {} is accepted for Graphite compatibility; Stax does not freeze branches.",
-            "Note:".yellow().bold(),
-            "--unfrozen".cyan()
-        );
-    }
-
     let Some(requested) = options.branch.as_deref() else {
         return crate::commands::sync::run(
             !options.no_restack,
-            false,
-            false,
-            true,
-            false,
+            false, // full
+            true,  // delete_merged
+            false, // delete_upstream_gone
             options.force,
-            false,
-            false,
-            false,
-            false,
-            false,
+            false, // safe
+            false, // continue
+            false, // quiet
+            false, // verbose
+            false, // auto_stash_pop
+            crate::commands::sync::StashPolicy::Prompt,
+            false, // json
             &[],
+            false,
         );
     };
 
@@ -85,7 +79,14 @@ pub fn run(options: GetOptions) -> Result<()> {
     let mut skipped = Vec::new();
 
     for target in &targets {
-        let outcome = sync_branch(&repo, &workdir, &remote, target, options.force)?;
+        let outcome = sync_branch(
+            &repo,
+            &workdir,
+            &remote,
+            target,
+            options.force,
+            options.unfrozen,
+        )?;
         if outcome != BranchSyncOutcome::Synced {
             skipped.push(target.branch.clone());
         }
@@ -144,24 +145,34 @@ fn sync_branch(
     remote: &str,
     target: &GetTarget,
     force: bool,
+    unfrozen: bool,
 ) -> Result<BranchSyncOutcome> {
     let branch = &target.branch;
     let parent_branch = &target.parent;
+
+    if !unfrozen && BranchMetadata::is_frozen(repo.inner(), branch)? {
+        println!(
+            "{} frozen branch {} (pass --unfrozen to sync it).",
+            "Skipped".yellow().bold(),
+            branch.cyan()
+        );
+        return Ok(BranchSyncOutcome::Skipped);
+    }
 
     if repo.branch_commit(parent_branch).is_err() {
         anyhow::bail!("Parent branch '{}' does not exist locally.", parent_branch);
     }
 
-    if let Some(worktree) = repo.branch_worktree(branch)? {
-        if !same_path(&worktree.path, workdir) {
-            println!(
-                "{} {} because it is checked out in another worktree: {}",
-                "Skipped".yellow().bold(),
-                branch.cyan(),
-                worktree.path.display()
-            );
-            return Ok(BranchSyncOutcome::SkippedWorktree);
-        }
+    if let Some(worktree) = repo.branch_worktree(branch)?
+        && !same_path(&worktree.path, workdir)
+    {
+        println!(
+            "{} {} because it is checked out in another worktree: {}",
+            "Skipped".yellow().bold(),
+            branch.cyan(),
+            worktree.path.display()
+        );
+        return Ok(BranchSyncOutcome::SkippedWorktree);
     }
 
     println!(
@@ -232,7 +243,14 @@ fn sync_branch(
     }
 
     let repo = GitRepo::open()?;
-    write_tracking_metadata(&repo, branch, parent_branch, remote, target.pr_info.clone())?;
+    write_tracking_metadata(
+        &repo,
+        branch,
+        parent_branch,
+        remote,
+        target.pr_info.clone(),
+        unfrozen,
+    )?;
 
     println!(
         "{} {} with parent {}.",
@@ -447,6 +465,7 @@ fn write_tracking_metadata(
     parent_branch: &str,
     remote: &str,
     pr_info: Option<PrInfo>,
+    unfrozen: bool,
 ) -> Result<()> {
     if let Some(existing) = BranchMetadata::read(repo.inner(), branch)? {
         if existing.parent_branch_name != parent_branch {
@@ -458,9 +477,10 @@ fn write_tracking_metadata(
                 "stax branch reparent".cyan()
             );
         }
-        if let Some(pr_info) = pr_info {
+        if pr_info.is_some() || (unfrozen && existing.frozen) {
             let updated = BranchMetadata {
-                pr_info: Some(pr_info),
+                pr_info: pr_info.or(existing.pr_info.clone()),
+                frozen: if unfrozen { false } else { existing.frozen },
                 ..existing
             };
             updated.write(repo.inner(), branch)?;
@@ -607,10 +627,9 @@ fn rebase_local_branch(workdir: &Path, branch: &str, remote_ref: &str) -> Result
         if original_branch
             .as_deref()
             .is_some_and(|original| original != branch)
+            && let Some(original) = original_branch
         {
-            if let Some(original) = original_branch {
-                checkout_branch(workdir, &original)?;
-            }
+            checkout_branch(workdir, &original)?;
         }
         return Ok(());
     }

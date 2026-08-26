@@ -115,18 +115,17 @@ pub fn run(branch: Option<String>, parent: Option<String>, restack: bool) -> Res
 
     let config = crate::config::Config::load()?;
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
+        && !remote_branches.contains(&parent_branch)
     {
-        if !remote_branches.contains(&parent_branch) {
-            println!(
-                "{}",
-                format!(
-                    "Warning: parent '{}' is not on remote '{}'.",
-                    parent_branch,
-                    config.remote_name()
-                )
-                .yellow()
-            );
-        }
+        println!(
+            "{}",
+            format!(
+                "Warning: parent '{}' is not on remote '{}'.",
+                parent_branch,
+                config.remote_name()
+            )
+            .yellow()
+        );
     }
 
     if !restack {
@@ -198,10 +197,10 @@ fn resolve_reparent_rebase_upstream(
         return Ok(merge_base.to_string());
     }
 
-    if let Ok(tip) = repo.branch_commit(old_parent) {
-        if repo.is_ancestor(&tip, target)? {
-            return Ok(tip);
-        }
+    if let Ok(tip) = repo.branch_commit(old_parent)
+        && repo.is_ancestor(&tip, target)?
+    {
+        return Ok(tip);
     }
 
     let stored = meta.parent_branch_revision.trim();

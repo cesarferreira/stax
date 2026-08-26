@@ -73,6 +73,10 @@ fn resolve_value(target: CopyTarget) -> Result<String> {
 /// Returns an error describing why the clipboard could not be used (e.g. no
 /// desktop clipboard in a headless/SSH/CI session).
 fn write_to_clipboard(text: &str) -> Result<()> {
+    if std::env::var_os("STAX_TEST_FORCE_CLIPBOARD_UNAVAILABLE").is_some() {
+        anyhow::bail!("clipboard unavailable by test request");
+    }
+
     let mut clipboard =
         Clipboard::new().map_err(|e| anyhow::anyhow!("Failed to access clipboard: {}", e))?;
     clipboard
@@ -131,7 +135,7 @@ mod tests {
     #[test]
     fn test_copy_target_clone() {
         let target = CopyTarget::Pr;
-        let cloned = target.clone();
+        let cloned = target;
         assert_eq!(target, cloned);
     }
 

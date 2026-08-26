@@ -18,6 +18,10 @@ mod abort_tests;
 mod absorb_tests;
 #[path = "additional_coverage_tests.rs"]
 mod additional_coverage_tests;
+#[path = "application_operation_tests.rs"]
+mod application_operation_tests;
+#[path = "application_session_tests.rs"]
+mod application_session_tests;
 #[path = "auth_tests.rs"]
 mod auth_tests;
 #[path = "changelog_tests.rs"]
@@ -44,6 +48,8 @@ mod create_ai_tests;
 mod create_below_tests;
 #[path = "create_insert_tests.rs"]
 mod create_insert_tests;
+#[path = "create_message_tests.rs"]
+mod create_message_tests;
 #[path = "create_rollback_tests.rs"]
 mod create_rollback_tests;
 #[path = "demo_tests.rs"]
@@ -60,20 +66,42 @@ mod edge_cases_tests;
 mod edit_tests;
 #[path = "fix_tests.rs"]
 mod fix_tests;
+#[path = "flag_validation_tests.rs"]
+mod flag_validation_tests;
 #[path = "fold_tests.rs"]
 mod fold_tests;
+#[path = "freeze_tests.rs"]
+mod freeze_tests;
 #[path = "get_tests.rs"]
 mod get_tests;
+#[path = "gh_stack_tests.rs"]
+mod gh_stack_tests;
+#[path = "github_failure_tests.rs"]
+mod github_failure_tests;
 #[path = "github_list_tests.rs"]
 mod github_list_tests;
+#[path = "guard_rail_tests.rs"]
+mod guard_rail_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "performance_tests.rs"]
+mod performance_tests;
 #[path = "pr_body_tests.rs"]
 mod pr_body_tests;
+#[path = "pr_open_tests.rs"]
+mod pr_open_tests;
 #[path = "pr_template_tests.rs"]
 mod pr_template_tests;
+#[path = "prev_watch_tmux_tests.rs"]
+mod prev_watch_tmux_tests;
+#[path = "ready_tests.rs"]
+mod ready_tests;
+#[path = "refresh_all_stacks_tests.rs"]
+mod refresh_all_stacks_tests;
+#[path = "refresh_visual_tests.rs"]
+mod refresh_visual_tests;
 #[path = "reorder_tests.rs"]
 mod reorder_tests;
 #[path = "rerequest_review_tests.rs"]
@@ -82,8 +110,12 @@ mod rerequest_review_tests;
 mod resolve_tests;
 #[path = "restack_provenance_tests.rs"]
 mod restack_provenance_tests;
+#[path = "runtime_safety_tests.rs"]
+mod runtime_safety_tests;
 #[path = "scoped_submit_tests.rs"]
 mod scoped_submit_tests;
+#[path = "skills_selection_tests.rs"]
+mod skills_selection_tests;
 #[path = "split_hunk_tests.rs"]
 mod split_hunk_tests;
 #[path = "split_tests.rs"]
@@ -92,25 +124,51 @@ mod split_tests;
 mod stack_test_tests;
 #[path = "staging_menu_tests.rs"]
 mod staging_menu_tests;
+#[path = "standup_tests.rs"]
+mod standup_tests;
 #[path = "status_tests.rs"]
 mod status_tests;
 #[path = "submit_fetch_failure_tests.rs"]
 mod submit_fetch_failure_tests;
 #[path = "submit_no_verify_tests.rs"]
 mod submit_no_verify_tests;
+#[path = "submit_plan_completions_tests.rs"]
+mod submit_plan_completions_tests;
+#[path = "submit_pr_base_tests.rs"]
+mod submit_pr_base_tests;
+#[path = "submit_temp_restack_tests.rs"]
+mod submit_temp_restack_tests;
 #[path = "sweep_tests.rs"]
 mod sweep_tests;
+#[path = "sync_confirm_tests.rs"]
+mod sync_confirm_tests;
+#[path = "sync_dry_run_tests.rs"]
+mod sync_dry_run_tests;
+#[path = "sync_json_tests.rs"]
+mod sync_json_tests;
+#[path = "sync_stash_tests.rs"]
+mod sync_stash_tests;
+#[path = "sync_undo_tests.rs"]
+mod sync_undo_tests;
 #[path = "track_all_prs_tests.rs"]
 mod track_all_prs_tests;
 #[path = "track_merge_base_tests.rs"]
 mod track_merge_base_tests;
+#[path = "track_plan_tests.rs"]
+mod track_plan_tests;
 #[path = "tui_commands_tests.rs"]
 mod tui_commands_tests;
 #[path = "upstack_onto_tests.rs"]
 mod upstack_onto_tests;
 #[path = "validate_tests.rs"]
 mod validate_tests;
+#[path = "web_tests.rs"]
+mod web_tests;
 #[path = "worktree_cli_tests.rs"]
 mod worktree_cli_tests;
+#[path = "worktree_pool_tests.rs"]
+mod worktree_pool_tests;
+#[path = "worktree_promote_tests.rs"]
+mod worktree_promote_tests;
 #[path = "worktree_tests.rs"]
 mod worktree_tests;

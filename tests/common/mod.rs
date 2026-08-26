@@ -5,6 +5,9 @@
 //! - Helper methods for common test scenarios
 //! - Assertion utilities for test output
 
+mod git_fixture;
+pub(crate) use git_fixture::{commit_all, init_test_repo};
+
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -23,17 +26,67 @@ pub fn stax_bin() -> PathBuf {
 
     candidates.push(PathBuf::from(env!("CARGO_BIN_EXE_stax")));
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(debug_dir) = current_exe.parent().and_then(|p| p.parent()) {
-            candidates.push(debug_dir.join(&exe_name));
-            candidates.push(debug_dir.join("deps").join(&exe_name));
-        }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(debug_dir) = current_exe.parent().and_then(|p| p.parent())
+    {
+        candidates.push(debug_dir.join(&exe_name));
+        candidates.push(debug_dir.join("deps").join(&exe_name));
     }
 
     candidates
         .into_iter()
         .find(|path| path.is_file())
         .unwrap_or_else(|| panic!("Failed to locate compiled stax binary"))
+}
+
+#[allow(dead_code)]
+pub struct IsolatedProcessEnv {
+    _temp: tempfile::TempDir,
+    home_dir: PathBuf,
+    config_dir: PathBuf,
+    gh_config_dir: PathBuf,
+}
+
+#[allow(dead_code)]
+impl IsolatedProcessEnv {
+    pub fn with_config(config_toml: &str) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let home_dir = temp.path().join("home");
+        let config_dir = temp.path().join("config");
+        let gh_config_dir = temp.path().join("gh");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&gh_config_dir).unwrap();
+        std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
+        Self {
+            home_dir,
+            gh_config_dir,
+            _temp: temp,
+            config_dir,
+        }
+    }
+
+    pub fn command(&self, repository: &Path) -> Command {
+        let mut command = Command::new(stax_bin());
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        command
+            .current_dir(repository)
+            .env("HOME", &self.home_dir)
+            .env("STAX_CONFIG_DIR", &self.config_dir)
+            .env("GH_CONFIG_DIR", &self.gh_config_dir)
+            .env("GIT_CONFIG_GLOBAL", null)
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env_remove("STAX_GITHUB_TOKEN")
+            .env_remove("STAX_GITLAB_TOKEN")
+            .env_remove("STAX_GITEA_TOKEN")
+            .env_remove("STAX_FORGE_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
+            .env_remove("GITLAB_TOKEN")
+            .env_remove("GITEA_TOKEN")
+            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        command
+    }
 }
 
 /// Create temporary directories in STAX_TEST_TMPDIR when set.
@@ -47,6 +100,18 @@ fn test_tempdir() -> TempDir {
     } else {
         TempDir::new().expect("Failed to create temp dir")
     }
+}
+
+#[cfg(unix)]
+fn unavailable_gh_bin() -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin_dir = test_tempdir();
+    let gh_path = bin_dir.path().join("gh");
+    fs::write(&gh_path, "#!/bin/sh\nexit 127\n").expect("Failed to write unavailable gh stub");
+    fs::set_permissions(&gh_path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to make unavailable gh stub executable");
+    bin_dir
 }
 
 fn sanitized_stax_command() -> Command {
@@ -77,13 +142,10 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Delay before the first TUI keystrokes in `script`-based integration tests.
-///
-/// Keep this conservative: the `script` PTY helper does not provide a readiness
-/// signal, so sending input too early races the TUI startup/re-render path and
-/// can make multi-round flows silently accept the wrong branch name.
+/// Conservative fallback before the first TUI keystrokes when no stable text
+/// prompt is available for readiness detection.
 pub const TUI_SCRIPT_LEAD_DELAY: &str = "sleep 1";
-/// Pause between TUI interaction rounds.
+/// Conservative fallback between TUI rounds without a stable text prompt.
 pub const TUI_SCRIPT_STEP_DELAY: &str = "sleep 2";
 
 #[allow(dead_code)]
@@ -98,18 +160,54 @@ pub fn run_stax_in_script_with_env(
     env: &[(&str, &str)],
 ) -> Output {
     let stax_bin = stax_bin();
-    let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
+    let transcript_dir = test_tempdir();
+    let transcript_path = transcript_dir.path().join("tui-transcript");
+    let input_status_path = transcript_dir.path().join("input-status");
+    fs::write(&transcript_path, "").expect("create TUI transcript");
+    let quoted_transcript = sh_quote(&transcript_path.to_string_lossy());
+    let quoted_input_status = sh_quote(&input_status_path.to_string_lossy());
+    let stax_command = std::iter::once(stax_bin.to_string_lossy().into_owned())
         .chain(args.iter().map(|arg| (*arg).to_string()))
         .map(|part| sh_quote(&part))
         .collect::<Vec<_>>()
         .join(" ");
+    // Linux `script -qefc` can re-import PATH from system init files after startup,
+    // so re-export test PATH overrides inside the recorded command shell.
+    let command = env
+        .iter()
+        .find(|(key, _)| *key == "PATH")
+        .map(|(_, path)| format!("export PATH={}; {stax_command}", sh_quote(path)))
+        .unwrap_or(stax_command);
 
+    let input_with_readiness = format!(
+        r#"set -e
+STAX_TUI_TRANSCRIPT={quoted_transcript}
+wait_for_tui_text() {{
+  expected=$1
+  wait_attempts=${{STAX_TUI_WAIT_ATTEMPTS:-200}}
+  attempts=0
+  while [ "$attempts" -lt "$wait_attempts" ]; do
+    if grep -Fq "$expected" "$STAX_TUI_TRANSCRIPT" 2>/dev/null; then return 0; fi
+    attempts=$((attempts + 1))
+    sleep 0.05
+  done
+  echo "timed out waiting for TUI text: $expected" >&2
+  return 1
+}}
+{input_script}"#
+    );
+
+    let input_pipeline = format!(
+        "(set +e; ({input_with_readiness}); input_status=$?; printf '%s\\n' \"$input_status\" > {quoted_input_status}; exit \"$input_status\")"
+    );
     let shell_script = if cfg!(target_os = "macos") {
-        format!("({input_script}) | script -q /dev/null {command}")
+        format!(
+            "{input_pipeline} | script -qF /dev/null {command} > {quoted_transcript}; script_status=$?; input_status=$(cat {quoted_input_status} 2>/dev/null || printf 1); cat {quoted_transcript}; if [ \"$input_status\" -ne 0 ]; then exit \"$input_status\"; fi; exit \"$script_status\""
+        )
     } else {
         format!(
-            "({input_script}) | script -qefc {} /dev/null",
-            sh_quote(&command)
+            "{input_pipeline} | script -qefc {} /dev/null > {quoted_transcript}; script_status=$?; input_status=$(cat {quoted_input_status} 2>/dev/null || printf 1); cat {quoted_transcript}; if [ \"$input_status\" -ne 0 ]; then exit \"$input_status\"; fi; exit \"$script_status\"",
+            sh_quote(&command),
         )
     };
 
@@ -134,6 +232,9 @@ fn hermetic_git_command() -> Command {
 pub struct TestRepo {
     dir: TempDir,
     home_dir: TempDir,
+    gh_config_dir: TempDir,
+    #[cfg(unix)]
+    gh_bin_dir: TempDir,
     /// Optional bare repository acting as "origin" remote
     #[allow(dead_code)]
     remote_dir: Option<TempDir>,
@@ -144,47 +245,14 @@ impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     pub fn new() -> Self {
         let dir = test_tempdir();
-        let path = dir.path();
-
-        // Initialize git repo
-        hermetic_git_command()
-            .args(["init", "-b", "main"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to init git repo");
-
-        // Configure git user for commits
-        hermetic_git_command()
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git email");
-
-        hermetic_git_command()
-            .args(["config", "user.name", "Test User"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git name");
-
-        // Create initial commit
-        let readme = path.join("README.md");
-        fs::write(&readme, "# Test Repo\n").expect("Failed to write README");
-
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to create initial commit");
+        init_test_repo(dir.path()).expect("Failed to initialize test repository");
 
         Self {
             dir,
             home_dir: test_tempdir(),
+            gh_config_dir: test_tempdir(),
+            #[cfg(unix)]
+            gh_bin_dir: unavailable_gh_bin(),
             remote_dir: None,
         }
     }
@@ -419,7 +487,16 @@ impl TestRepo {
     }
 
     fn apply_default_stax_env(&self, cmd: &mut Command) {
-        cmd.env("HOME", self.home_dir.path());
+        cmd.env("HOME", self.home_dir.path())
+            .env("GH_CONFIG_DIR", self.gh_config_dir.path());
+        #[cfg(unix)]
+        cmd.env(
+            "PATH",
+            std::env::join_paths(std::iter::once(self.gh_bin_dir.path().to_path_buf()).chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .expect("Failed to construct PATH with unavailable gh stub"),
+        );
     }
 
     /// Run a stax command in this repository
@@ -495,17 +572,7 @@ impl TestRepo {
 
     /// Create a commit with all staged changes
     pub fn commit(&self, message: &str) {
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to commit");
+        commit_all(&self.path(), message).expect("Failed to commit fixture changes");
     }
 
     /// Get the current branch name
@@ -831,5 +898,46 @@ mod tests {
 
         let output = repo.run_stax(&["checkout", "nonexistent"]);
         output.assert_failure();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tui_readiness_timeout_fails_the_scripted_command() {
+        let repo = TestRepo::new();
+        let output = run_stax_in_script_with_env(
+            &repo.path(),
+            &["--version"],
+            "wait_for_tui_text 'prompt that will never appear'",
+            &[("STAX_TUI_WAIT_ATTEMPTS", "1")],
+        );
+
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("timed out waiting for TUI text"));
+    }
+
+    #[test]
+    fn isolated_process_env_removes_all_forge_token_sources() {
+        let repo = TestRepo::new();
+        let env = IsolatedProcessEnv::with_config("");
+        let command = env.command(&repo.path());
+        let removed = command.get_envs().collect::<Vec<_>>();
+
+        for token in [
+            "STAX_GITHUB_TOKEN",
+            "STAX_GITLAB_TOKEN",
+            "STAX_GITEA_TOKEN",
+            "STAX_FORGE_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITLAB_TOKEN",
+            "GITEA_TOKEN",
+        ] {
+            assert!(
+                removed
+                    .iter()
+                    .any(|(key, value)| key.to_string_lossy() == token && value.is_none()),
+                "expected {token} to be explicitly removed"
+            );
+        }
     }
 }

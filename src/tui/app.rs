@@ -1,14 +1,13 @@
-use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
-use crate::ci::{CheckRunInfo, history};
-use crate::config::Config;
-use crate::engine::{Stack, build_parent_candidates};
-use crate::forge::ForgeClient;
+use crate::application::{
+    BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffStatLine, OperationRequest,
+    RepositorySession,
+};
+use crate::cache::{TuiPaneVisibilityState, TuiStateCache};
+use crate::engine::{Stack, StackSnapshot, build_parent_candidates};
 use crate::git::GitRepo;
-use crate::remote::RemoteInfo;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -17,36 +16,6 @@ use std::time::{Duration, Instant};
 const CI_ACTIVE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 const CI_IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 const CI_ERROR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
-
-/// A line in a diff with its type
-#[derive(Debug, Clone)]
-pub struct DiffLine {
-    pub content: String,
-    pub line_type: DiffLineType,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DiffLineType {
-    Header,
-    Addition,
-    Deletion,
-    Context,
-    Hunk,
-}
-
-/// A line in diff stat output
-#[derive(Debug, Clone)]
-pub struct DiffStatLine {
-    pub file: String,
-    pub additions: usize,
-    pub deletions: usize,
-}
-
-#[derive(Debug, Clone)]
-struct CachedDiff {
-    stat: Vec<DiffStatLine>,
-    lines: Vec<DiffLine>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiffRequest {
@@ -70,27 +39,11 @@ impl DiffRequest {
 enum DiffUpdate {
     Loaded {
         request: DiffRequest,
-        diff: CachedDiff,
+        diff: BranchDiff,
     },
     Unavailable {
         request: DiffRequest,
     },
-}
-
-#[derive(Debug, Clone)]
-struct BranchDetails {
-    ahead: usize,
-    behind: usize,
-    has_remote: bool,
-    unpushed: usize,
-    unpulled: usize,
-    commits: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct BranchDetailsRequest {
-    name: String,
-    parent: Option<String>,
 }
 
 #[derive(Debug)]
@@ -101,141 +54,16 @@ enum BranchDetailsUpdate {
     },
     Unavailable {
         branch: String,
+        message: String,
     },
     Done,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BranchCiSummary {
-    pub overall_status: Option<String>,
-    pub total: usize,
-    pub passed: usize,
-    pub failed: usize,
-    pub running: usize,
-    pub queued: usize,
-    pub skipped: usize,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub average_secs: Option<u64>,
-}
-
-impl BranchCiSummary {
-    fn from_checks(
-        overall_status: Option<String>,
-        checks: &[CheckRunInfo],
-        average_secs: Option<u64>,
-    ) -> Self {
-        let mut passed = 0;
-        let mut failed = 0;
-        let mut running = 0;
-        let mut queued = 0;
-        let mut skipped = 0;
-
-        for check in checks {
-            match check.status.as_str() {
-                "completed" => match check.conclusion.as_deref() {
-                    Some("success") => passed += 1,
-                    Some("skipped") | Some("neutral") | Some("cancelled") => skipped += 1,
-                    _ => failed += 1,
-                },
-                "in_progress" => running += 1,
-                "queued" | "waiting" | "requested" | "pending" => queued += 1,
-                _ => queued += 1,
-            }
-        }
-
-        let started_at = checks
-            .iter()
-            .filter_map(|check| parse_ci_timestamp(check.started_at.as_deref()))
-            .min();
-        let completed_at = if checks.iter().all(|check| check.status == "completed") {
-            checks
-                .iter()
-                .filter_map(|check| parse_ci_timestamp(check.completed_at.as_deref()))
-                .max()
-        } else {
-            None
-        };
-
-        Self {
-            overall_status,
-            total: checks.len(),
-            passed,
-            failed,
-            running,
-            queued,
-            skipped,
-            started_at,
-            completed_at,
-            average_secs,
-        }
-    }
-
-    pub fn has_checks(&self) -> bool {
-        self.total > 0
-    }
-
-    pub fn is_active(&self) -> bool {
-        !self.is_complete() && (self.running > 0 || self.queued > 0)
-    }
-
-    pub fn is_complete(&self) -> bool {
-        self.total > 0 && self.completed_count() == self.total
-    }
-
-    pub fn completed_count(&self) -> usize {
-        self.passed + self.failed + self.skipped
-    }
-
-    pub fn elapsed_secs(&self, now: DateTime<Utc>) -> Option<u64> {
-        let started_at = self.started_at?;
-        let finished_at = if self.is_complete() {
-            self.completed_at.unwrap_or(now)
-        } else {
-            now
-        };
-        Some(
-            finished_at
-                .signed_duration_since(started_at)
-                .num_seconds()
-                .max(0) as u64,
-        )
-    }
-
-    pub fn progress_percent(&self, now: DateTime<Utc>) -> Option<u8> {
-        if self.is_complete() {
-            return Some(100);
-        }
-
-        let average_secs = self.average_secs?;
-        let elapsed_secs = self.elapsed_secs(now)?;
-        if average_secs == 0 {
-            return Some(99);
-        }
-
-        Some(if elapsed_secs >= average_secs {
-            99
-        } else {
-            ((elapsed_secs * 100) / average_secs).min(99) as u8
-        })
-    }
-
-    pub fn eta_secs(&self, now: DateTime<Utc>) -> Option<u64> {
-        if self.is_complete() {
-            return Some(0);
-        }
-
-        let average_secs = self.average_secs?;
-        let elapsed_secs = self.elapsed_secs(now)?;
-        Some(average_secs.saturating_sub(elapsed_secs))
-    }
 }
 
 #[derive(Debug, Clone)]
 pub enum BranchCiState {
     Loading,
     Ready {
-        summary: BranchCiSummary,
+        summary: CiSummary,
         fetched_at: Instant,
     },
     Unavailable {
@@ -246,14 +74,8 @@ pub enum BranchCiState {
 
 #[derive(Debug)]
 enum CiUpdate {
-    Loaded {
-        branch: String,
-        summary: BranchCiSummary,
-    },
-    Unavailable {
-        branch: String,
-        message: String,
-    },
+    Loaded { branch: String, summary: CiSummary },
+    Unavailable { branch: String, message: String },
 }
 
 /// Branch display information for the TUI
@@ -275,9 +97,46 @@ pub struct BranchDisplay {
     pub ci_state: Option<String>,
     pub commits: Vec<String>,
     pub details_loaded: bool,
+    pub details_error: Option<String>,
 }
 
 impl BranchDisplay {
+    fn from_summary(summary: BranchSummary) -> Self {
+        Self {
+            name: summary.name,
+            parent: summary.parent,
+            column: summary.column,
+            is_current: summary.is_current,
+            is_trunk: summary.is_trunk,
+            ahead: 0,
+            behind: 0,
+            needs_restack: summary.needs_restack,
+            has_remote: false,
+            unpushed: 0,
+            unpulled: 0,
+            pr_number: summary.pr_number,
+            pr_state: summary.pr_state,
+            ci_state: summary.ci_state,
+            commits: Vec::new(),
+            details_loaded: summary.is_trunk,
+            details_error: None,
+        }
+    }
+
+    fn summary(&self) -> BranchSummary {
+        BranchSummary {
+            name: self.name.clone(),
+            parent: self.parent.clone(),
+            column: self.column,
+            is_current: self.is_current,
+            is_trunk: self.is_trunk,
+            needs_restack: self.needs_restack,
+            pr_number: self.pr_number,
+            pr_state: self.pr_state.clone(),
+            ci_state: self.ci_state.clone(),
+        }
+    }
+
     fn apply_details(&mut self, details: BranchDetails) {
         self.ahead = details.ahead;
         self.behind = details.behind;
@@ -286,15 +145,89 @@ impl BranchDisplay {
         self.unpulled = details.unpulled;
         self.commits = details.commits;
         self.details_loaded = true;
+        self.details_error = None;
     }
 }
 
 /// Which pane is focused
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusedPane {
     #[default]
     Stack,
+    Summary,
     Diff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiPane {
+    Stack,
+    Summary,
+    Patch,
+}
+
+/// Runtime visibility for dashboard panes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneVisibility {
+    pub stack: bool,
+    pub summary: bool,
+    pub patch: bool,
+}
+
+impl Default for PaneVisibility {
+    fn default() -> Self {
+        Self {
+            stack: true,
+            summary: true,
+            patch: true,
+        }
+    }
+}
+
+impl PaneVisibility {
+    pub fn is_visible(self, pane: TuiPane) -> bool {
+        match pane {
+            TuiPane::Stack => self.stack,
+            TuiPane::Summary => self.summary,
+            TuiPane::Patch => self.patch,
+        }
+    }
+
+    fn set_visible(&mut self, pane: TuiPane, visible: bool) {
+        match pane {
+            TuiPane::Stack => self.stack = visible,
+            TuiPane::Summary => self.summary = visible,
+            TuiPane::Patch => self.patch = visible,
+        }
+    }
+
+    pub fn visible_count(self) -> usize {
+        [self.stack, self.summary, self.patch]
+            .into_iter()
+            .filter(|visible| *visible)
+            .count()
+    }
+
+    fn from_persisted(state: TuiPaneVisibilityState) -> Self {
+        let visibility = Self {
+            stack: state.stack,
+            summary: state.summary,
+            patch: state.patch,
+        };
+
+        if visibility.visible_count() == 0 {
+            Self::default()
+        } else {
+            visibility
+        }
+    }
+
+    fn to_persisted(self) -> TuiPaneVisibilityState {
+        TuiPaneVisibilityState {
+            stack: self.stack,
+            summary: self.summary,
+            patch: self.patch,
+        }
+    }
 }
 
 /// Application mode
@@ -366,17 +299,20 @@ pub struct ReorderState {
 
 #[derive(Debug, Clone)]
 pub struct PendingCommand {
-    pub commands: Vec<Vec<String>>,
-    pub success_message: String,
+    pub action: PendingAction,
     pub preferred_selection: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingAction {
+    Operation(OperationRequest),
 }
 
 /// Main application state
 pub struct App {
     pub stack: Stack,
-    pub cache: CiCache,
     pub repo: GitRepo,
-    git_dir: PathBuf,
+    session: RepositorySession,
     diff_cache_dir: PathBuf,
     pub current_branch: String,
     pub selected_index: usize,
@@ -389,6 +325,7 @@ pub struct App {
     pub selected_diff: Vec<DiffLine>,
     pub diff_scroll: usize,
     pub focused_pane: FocusedPane,
+    pub pane_visibility: PaneVisibility,
     pub diff_stat: Vec<DiffStatLine>,
     pub status_message: Option<String>,
     pub status_set_at: Option<Instant>,
@@ -406,7 +343,7 @@ pub struct App {
     pub move_picker_query: String,
     /// Index into the filtered view (see `move_picker_filtered_indices`).
     pub move_picker_selected: usize,
-    diff_cache: HashMap<String, CachedDiff>,
+    diff_cache: HashMap<String, BranchDiff>,
     ci_states: HashMap<String, BranchCiState>,
     ci_loader: Option<Receiver<CiUpdate>>,
     ci_loading_branch: Option<String>,
@@ -424,23 +361,29 @@ impl App {
         preferred_selection: Option<String>,
     ) -> Result<Self> {
         let repo = GitRepo::open()?;
-        let stack = Stack::load(&repo)?;
-        let current_branch = repo.current_branch()?;
-        let git_dir = repo.git_dir()?;
-        let cache = CiCache::load(git_dir);
+        let session = RepositorySession::open(repo.workdir()?)?;
+        let repository_snapshot = session.snapshot()?;
+        let snapshot = StackSnapshot::load(&repo)?;
         let diff_cache_dir = repo.common_git_dir()?;
-        let git_dir = git_dir.to_path_buf();
+        let pane_visibility = TuiStateCache::load(&diff_cache_dir)
+            .panes
+            .map(PaneVisibility::from_persisted)
+            .unwrap_or_default();
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
+        let branches = repository_snapshot
+            .branches
+            .into_iter()
+            .map(BranchDisplay::from_summary)
+            .collect();
 
         let mut app = Self {
-            stack,
-            cache,
+            stack: snapshot.stack,
             repo,
-            git_dir,
+            session,
             diff_cache_dir,
-            current_branch,
+            current_branch: repository_snapshot.current_branch,
             selected_index: 0,
-            branches: Vec::new(),
+            branches,
             mode: Mode::Normal,
             search_query: String::new(),
             filtered_indices: Vec::new(),
@@ -449,6 +392,7 @@ impl App {
             selected_diff: Vec::new(),
             diff_scroll: 0,
             focused_pane: FocusedPane::Stack,
+            pane_visibility,
             diff_stat: Vec::new(),
             status_message: initial_status,
             status_set_at,
@@ -472,7 +416,8 @@ impl App {
             diff_queued: None,
         };
 
-        app.refresh_branches()?;
+        app.needs_refresh = false;
+        app.branch_details_queued = true;
         if let Some(branch) = preferred_selection {
             app.select_branch(&branch);
         } else {
@@ -486,138 +431,35 @@ impl App {
 
     /// Refresh the branch list from the repository
     pub fn refresh_branches(&mut self) -> Result<()> {
-        self.stack = Stack::load(&self.repo)?;
-        self.current_branch = self.repo.current_branch()?;
-        self.branches = self.build_branch_list()?;
+        let snapshot = StackSnapshot::load(&self.repo)?;
+        let repository_snapshot = self.session.snapshot()?;
+        let details_errors = self
+            .branches
+            .iter()
+            .filter_map(|branch| {
+                branch
+                    .details_error
+                    .as_ref()
+                    .map(|message| (branch.name.clone(), message.clone()))
+            })
+            .collect::<HashMap<_, _>>();
+        self.stack = snapshot.stack;
+        self.current_branch = repository_snapshot.current_branch;
+        self.branches = repository_snapshot
+            .branches
+            .into_iter()
+            .map(|summary| {
+                let mut branch = BranchDisplay::from_summary(summary);
+                branch.details_error = details_errors.get(&branch.name).cloned();
+                branch
+            })
+            .collect();
         self.diff_cache.clear();
         self.needs_refresh = false;
         self.branch_details_queued = true;
         self.queue_diff_refresh_for_selected();
         self.queue_ci_refresh_for_selected();
         Ok(())
-    }
-
-    /// Build the ordered list of branches for display
-    fn build_branch_list(&self) -> Result<Vec<BranchDisplay>> {
-        let mut branches = Vec::new();
-        let trunk = &self.stack.trunk;
-
-        // Get trunk children (each starts a chain)
-        let trunk_info = self.stack.branches.get(trunk);
-        let trunk_children: Vec<String> =
-            trunk_info.map(|b| b.children.clone()).unwrap_or_default();
-
-        if trunk_children.is_empty() {
-            // Only trunk exists
-            branches.push(self.create_branch_display(trunk, 0, true));
-            return Ok(branches);
-        }
-
-        let mut max_column = 0;
-        let mut sorted_trunk_children = trunk_children;
-        sorted_trunk_children.sort();
-
-        // Build each stack
-        for (i, root) in sorted_trunk_children.iter().enumerate() {
-            self.collect_branches(&mut branches, root, i, &mut max_column)?;
-        }
-
-        // Add trunk at the end
-        branches.push(self.create_branch_display(trunk, 0, true));
-
-        Ok(branches)
-    }
-
-    fn collect_branches(
-        &self,
-        result: &mut Vec<BranchDisplay>,
-        branch: &str,
-        base_column: usize,
-        max_column: &mut usize,
-    ) -> Result<()> {
-        #[derive(Clone)]
-        struct Frame {
-            branch: String,
-            column: usize,
-            expanded: bool,
-        }
-
-        let mut stack_frames = vec![Frame {
-            branch: branch.to_string(),
-            column: base_column,
-            expanded: false,
-        }];
-        let mut visiting = std::collections::HashSet::new();
-        let mut emitted = std::collections::HashSet::new();
-
-        while let Some(frame) = stack_frames.pop() {
-            if frame.expanded {
-                visiting.remove(&frame.branch);
-                if emitted.insert(frame.branch.clone()) {
-                    result.push(self.create_branch_display(&frame.branch, frame.column, false));
-                }
-                continue;
-            }
-
-            if emitted.contains(&frame.branch) || !visiting.insert(frame.branch.clone()) {
-                continue;
-            }
-
-            *max_column = (*max_column).max(frame.column);
-            stack_frames.push(Frame {
-                branch: frame.branch.clone(),
-                column: frame.column,
-                expanded: true,
-            });
-
-            if let Some(info) = self.stack.branches.get(&frame.branch) {
-                let mut children: Vec<&String> = info.children.iter().collect();
-                children.sort();
-
-                for (i, child) in children.into_iter().enumerate().rev() {
-                    if emitted.contains(child) || visiting.contains(child) {
-                        continue;
-                    }
-
-                    stack_frames.push(Frame {
-                        branch: child.clone(),
-                        column: frame.column + i,
-                        expanded: false,
-                    });
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn create_branch_display(&self, branch: &str, column: usize, is_trunk: bool) -> BranchDisplay {
-        let is_current = branch == self.current_branch;
-        let info = self.stack.branches.get(branch);
-        let needs_restack = info.map(|i| i.needs_restack).unwrap_or(false);
-        let pr_number = info.and_then(|i| i.pr_number);
-        let pr_state = info.and_then(|i| i.pr_state.clone());
-        let parent = info.and_then(|i| i.parent.clone());
-        let ci_state = self.cache.get_ci_state(branch);
-
-        BranchDisplay {
-            name: branch.to_string(),
-            parent,
-            column,
-            is_current,
-            is_trunk,
-            ahead: 0,
-            behind: 0,
-            needs_restack,
-            has_remote: false,
-            unpushed: 0,
-            unpulled: 0,
-            pr_number,
-            pr_state,
-            ci_state,
-            commits: Vec::new(),
-            details_loaded: is_trunk,
-        }
     }
 
     /// Select the current branch in the list
@@ -799,7 +641,7 @@ impl App {
             return;
         }
 
-        if let Some(cached) = self.load_persisted_diff(&request) {
+        if let Ok(Some(cached)) = self.session.cached_diff(&request.branch, &request.parent) {
             self.diff_cache.insert(request.key.clone(), cached.clone());
             self.diff_stat = cached.stat;
             self.selected_diff = cached.lines;
@@ -832,33 +674,96 @@ impl App {
         self.selected_diff.len()
     }
 
+    pub fn toggle_pane_visibility(&mut self, pane: TuiPane) {
+        let currently_visible = self.pane_visibility.is_visible(pane);
+        if currently_visible && self.pane_visibility.visible_count() == 1 {
+            self.set_status("At least one pane must remain visible");
+            return;
+        }
+
+        self.pane_visibility.set_visible(pane, !currently_visible);
+        self.ensure_focus_visible();
+        self.persist_tui_state();
+
+        let pane_name = match pane {
+            TuiPane::Stack => "Stack",
+            TuiPane::Summary => "Summary",
+            TuiPane::Patch => "Patch",
+        };
+        let state = if currently_visible { "hidden" } else { "shown" };
+        self.set_status(format!("{} pane {}", pane_name, state));
+    }
+
+    fn persist_tui_state(&self) {
+        let mut state = TuiStateCache::load(&self.diff_cache_dir);
+        state.panes = Some(self.pane_visibility.to_persisted());
+        let _ = state.save(&self.diff_cache_dir);
+    }
+
+    fn focused_pane_is_visible(&self) -> bool {
+        match self.focused_pane {
+            FocusedPane::Stack => self.pane_visibility.stack,
+            FocusedPane::Summary => self.pane_visibility.summary,
+            FocusedPane::Diff => self.pane_visibility.patch,
+        }
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        if self.focused_pane_is_visible() {
+            return;
+        }
+
+        self.focused_pane = if self.pane_visibility.stack {
+            FocusedPane::Stack
+        } else if self.pane_visibility.patch {
+            FocusedPane::Diff
+        } else {
+            FocusedPane::Summary
+        };
+    }
+
+    pub fn focus_next_visible_pane(&mut self) {
+        let panes = [FocusedPane::Stack, FocusedPane::Summary, FocusedPane::Diff];
+        let current = panes
+            .iter()
+            .position(|pane| *pane == self.focused_pane)
+            .unwrap_or(0);
+
+        for offset in 1..=panes.len() {
+            let next = panes[(current + offset) % panes.len()];
+            let is_visible = match next {
+                FocusedPane::Stack => self.pane_visibility.stack,
+                FocusedPane::Summary => self.pane_visibility.summary,
+                FocusedPane::Diff => self.pane_visibility.patch,
+            };
+            if is_visible {
+                self.focused_pane = next;
+                return;
+            }
+        }
+    }
+
     /// Set a status message (auto-clears after timeout)
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = Some(msg.into());
         self.status_set_at = Some(Instant::now());
     }
 
-    pub fn queue_command(
-        &mut self,
-        commands: Vec<Vec<String>>,
-        success_message: impl Into<String>,
-        preferred_selection: Option<String>,
-    ) {
+    pub fn queue_operation(&mut self, request: OperationRequest) {
         self.pending_command = Some(PendingCommand {
-            commands,
-            success_message: success_message.into(),
-            preferred_selection,
+            action: PendingAction::Operation(request),
+            preferred_selection: None,
         });
         self.should_quit = true;
     }
 
     /// Clear status message if it's been shown long enough
     pub fn clear_stale_status(&mut self) {
-        if let Some(set_at) = self.status_set_at {
-            if set_at.elapsed().as_secs() >= 2 {
-                self.status_message = None;
-                self.status_set_at = None;
-            }
+        if let Some(set_at) = self.status_set_at
+            && set_at.elapsed().as_secs() >= 2
+        {
+            self.status_message = None;
+            self.status_set_at = None;
         }
     }
 
@@ -882,6 +787,10 @@ impl App {
     }
 
     pub fn ci_summary_line(&self, branch: &BranchDisplay) -> (String, bool) {
+        if let Some(message) = branch.details_error.as_ref() {
+            return (format!("Live CI: {message}"), true);
+        }
+
         match self.ci_states.get(&branch.name) {
             Some(BranchCiState::Loading) => ("Live CI: fetching latest checks…".to_string(), false),
             Some(BranchCiState::Unavailable { message, .. }) => {
@@ -912,6 +821,20 @@ impl App {
         };
 
         if !selected.details_loaded {
+            return;
+        }
+
+        if let Some(message) = selected.details_error.clone() {
+            if self.ci_queued_branch.as_deref() == Some(branch.as_str()) {
+                self.ci_queued_branch = None;
+            }
+            self.ci_states.insert(
+                branch,
+                BranchCiState::Unavailable {
+                    message,
+                    fetched_at: Instant::now(),
+                },
+            );
             return;
         }
 
@@ -959,15 +882,12 @@ impl App {
             .branches
             .iter()
             .filter(|branch| !branch.is_trunk)
-            .map(|branch| BranchDetailsRequest {
-                name: branch.name.clone(),
-                parent: branch.parent.clone(),
-            })
+            .map(BranchDisplay::summary)
             .collect::<Vec<_>>();
 
         self.branch_details_queued = false;
         self.branch_details_loader = (!requests.is_empty())
-            .then(|| spawn_branch_details_loader(self.git_dir.clone(), requests));
+            .then(|| spawn_branch_details_loader(self.session.clone(), requests));
     }
 
     fn poll_branch_details_updates(&mut self) {
@@ -994,17 +914,38 @@ impl App {
     fn apply_branch_details_update(&mut self, update: BranchDetailsUpdate) {
         match update {
             BranchDetailsUpdate::Loaded { branch, details } => {
+                let mut recovered_from_error = false;
                 if let Some(branch_display) =
                     self.branches.iter_mut().find(|item| item.name == branch)
                 {
+                    recovered_from_error = branch_display.details_error.is_some();
                     branch_display.apply_details(details);
                 }
+                if recovered_from_error
+                    && matches!(
+                        self.ci_states.get(&branch),
+                        Some(BranchCiState::Unavailable { .. })
+                    )
+                {
+                    self.ci_states.remove(&branch);
+                }
             }
-            BranchDetailsUpdate::Unavailable { branch } => {
+            BranchDetailsUpdate::Unavailable { branch, message } => {
                 if let Some(branch_display) =
                     self.branches.iter_mut().find(|item| item.name == branch)
                 {
                     branch_display.details_loaded = true;
+                    branch_display.details_error = Some(message.clone());
+                    self.ci_states.insert(
+                        branch.clone(),
+                        BranchCiState::Unavailable {
+                            message,
+                            fetched_at: Instant::now(),
+                        },
+                    );
+                    if self.ci_queued_branch.as_deref() == Some(branch.as_str()) {
+                        self.ci_queued_branch = None;
+                    }
                 }
             }
             BranchDetailsUpdate::Done => {
@@ -1045,17 +986,7 @@ impl App {
         };
 
         self.diff_loading = Some(request.clone());
-        self.diff_loader = Some(spawn_diff_loader(
-            self.git_dir.clone(),
-            self.diff_cache_dir.clone(),
-            request,
-        ));
-    }
-
-    fn load_persisted_diff(&self, request: &DiffRequest) -> Option<CachedDiff> {
-        let key = persistent_diff_cache_key(&self.repo, request)?;
-        let cache = TuiDiffCache::load(&self.diff_cache_dir);
-        cache.get(&key).map(cached_diff_from_disk)
+        self.diff_loader = Some(spawn_diff_loader(self.session.clone(), request));
     }
 
     fn apply_diff_update(&mut self, update: DiffUpdate) {
@@ -1112,7 +1043,7 @@ impl App {
         self.ci_states
             .insert(branch.clone(), BranchCiState::Loading);
         self.ci_loading_branch = Some(branch.clone());
-        self.ci_loader = Some(spawn_ci_loader(self.git_dir.clone(), branch));
+        self.ci_loader = Some(spawn_ci_loader(self.session.clone(), branch));
     }
 
     fn apply_ci_update(&mut self, update: CiUpdate) {
@@ -1138,8 +1069,6 @@ impl App {
                 {
                     branch_display.ci_state = ci_state.clone();
                 }
-                self.cache.update(&branch, ci_state, None);
-                let _ = self.cache.save(&self.git_dir);
             }
             CiUpdate::Unavailable { branch, message } => {
                 self.ci_states.insert(
@@ -1257,61 +1186,61 @@ impl App {
 
     /// Move the selected branch up in the stack (becomes earlier in the chain)
     pub fn reorder_move_up(&mut self) {
-        if let Some(ref mut state) = self.reorder_state {
-            if state.moving_index > 0 {
-                // Swap positions: branch at moving_index moves up
-                let i = state.moving_index;
+        if let Some(ref mut state) = self.reorder_state
+            && state.moving_index > 0
+        {
+            // Swap positions: branch at moving_index moves up
+            let i = state.moving_index;
 
-                // Get the parent of the branch we're swapping with
-                let new_parent = state.pending_chain[i - 1].parent.clone();
-                let moving_branch = state.pending_chain[i].name.clone();
-                let displaced_branch = state.pending_chain[i - 1].name.clone();
+            // Get the parent of the branch we're swapping with
+            let new_parent = state.pending_chain[i - 1].parent.clone();
+            let moving_branch = state.pending_chain[i].name.clone();
+            let displaced_branch = state.pending_chain[i - 1].name.clone();
 
-                // Update parents for the swap
-                state.pending_chain[i - 1].parent = moving_branch.clone();
-                state.pending_chain[i].parent = new_parent;
+            // Update parents for the swap
+            state.pending_chain[i - 1].parent = moving_branch.clone();
+            state.pending_chain[i].parent = new_parent;
 
-                // Update parent of branch after the displaced one (if any)
-                if i + 1 < state.pending_chain.len() {
-                    state.pending_chain[i + 1].parent = displaced_branch.clone();
-                }
-
-                // Swap the entries
-                state.pending_chain.swap(i, i - 1);
-                state.moving_index -= 1;
-
-                self.update_reorder_preview();
+            // Update parent of branch after the displaced one (if any)
+            if i + 1 < state.pending_chain.len() {
+                state.pending_chain[i + 1].parent = displaced_branch.clone();
             }
+
+            // Swap the entries
+            state.pending_chain.swap(i, i - 1);
+            state.moving_index -= 1;
+
+            self.update_reorder_preview();
         }
     }
 
     /// Move the selected branch down in the stack (becomes later in the chain)
     pub fn reorder_move_down(&mut self) {
-        if let Some(ref mut state) = self.reorder_state {
-            if state.moving_index < state.pending_chain.len() - 1 {
-                // Swap positions: branch at moving_index moves down
-                let i = state.moving_index;
+        if let Some(ref mut state) = self.reorder_state
+            && state.moving_index < state.pending_chain.len() - 1
+        {
+            // Swap positions: branch at moving_index moves down
+            let i = state.moving_index;
 
-                // Get info for the swap
-                let moving_branch = state.pending_chain[i].name.clone();
-                let displaced_branch = state.pending_chain[i + 1].name.clone();
-                let moving_parent = state.pending_chain[i].parent.clone();
+            // Get info for the swap
+            let moving_branch = state.pending_chain[i].name.clone();
+            let displaced_branch = state.pending_chain[i + 1].name.clone();
+            let moving_parent = state.pending_chain[i].parent.clone();
 
-                // Update parents for the swap
-                state.pending_chain[i].parent = displaced_branch.clone();
-                state.pending_chain[i + 1].parent = moving_parent;
+            // Update parents for the swap
+            state.pending_chain[i].parent = displaced_branch.clone();
+            state.pending_chain[i + 1].parent = moving_parent;
 
-                // Update parent of branch after the moving one (if any)
-                if i + 2 < state.pending_chain.len() {
-                    state.pending_chain[i + 2].parent = moving_branch.clone();
-                }
-
-                // Swap the entries
-                state.pending_chain.swap(i, i + 1);
-                state.moving_index += 1;
-
-                self.update_reorder_preview();
+            // Update parent of branch after the moving one (if any)
+            if i + 2 < state.pending_chain.len() {
+                state.pending_chain[i + 2].parent = moving_branch.clone();
             }
+
+            // Swap the entries
+            state.pending_chain.swap(i, i + 1);
+            state.moving_index += 1;
+
+            self.update_reorder_preview();
         }
     }
 
@@ -1335,10 +1264,10 @@ impl App {
         // Compare original and pending chains to find what needs reparenting
         for pending in &state.pending_chain {
             // Find this branch in the original chain
-            if let Some(original) = state.original_chain.iter().find(|e| e.name == pending.name) {
-                if original.parent != pending.parent {
-                    ops.push((pending.name.clone(), pending.parent.clone()));
-                }
+            if let Some(original) = state.original_chain.iter().find(|e| e.name == pending.name)
+                && original.parent != pending.parent
+            {
+                ops.push((pending.name.clone(), pending.parent.clone()));
             }
         }
 
@@ -1424,11 +1353,7 @@ fn substring_filter_indices(candidates: &[String], query: &str) -> Vec<usize> {
         .collect()
 }
 
-fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value.and_then(|timestamp| timestamp.parse::<DateTime<Utc>>().ok())
-}
-
-fn live_ci_summary_text(summary: &BranchCiSummary) -> (String, bool) {
+fn live_ci_summary_text(summary: &CiSummary) -> (String, bool) {
     if !summary.has_checks() {
         return (
             "Live CI: no checks reported for the latest push".to_string(),
@@ -1464,10 +1389,10 @@ fn live_ci_summary_text(summary: &BranchCiSummary) -> (String, bool) {
     if summary.skipped > 0 {
         parts.push(format!("{} skipped", summary.skipped));
     }
-    if let Some(percent) = summary.progress_percent(now) {
-        if summary.is_active() {
-            parts.push(format!("{}%", percent));
-        }
+    if let Some(percent) = summary.progress_percent(now)
+        && summary.is_active()
+    {
+        parts.push(format!("{}%", percent));
     }
     if let Some(elapsed_secs) = summary.elapsed_secs(now) {
         if summary.is_complete() {
@@ -1476,10 +1401,11 @@ fn live_ci_summary_text(summary: &BranchCiSummary) -> (String, bool) {
             parts.push(format!("{} elapsed", format_duration_compact(elapsed_secs)));
         }
     }
-    if let Some(eta_secs) = summary.eta_secs(now) {
-        if summary.is_active() && eta_secs > 0 {
-            parts.push(format!("~{} left", format_duration_compact(eta_secs)));
-        }
+    if let Some(eta_secs) = summary.eta_secs(now)
+        && summary.is_active()
+        && eta_secs > 0
+    {
+        parts.push(format!("~{} left", format_duration_compact(eta_secs)));
     }
 
     let is_dimmed = summary.failed == 0 && !summary.is_active();
@@ -1496,161 +1422,23 @@ fn format_duration_compact(secs: u64) -> String {
     }
 }
 
-fn branch_average_secs(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
-    history::estimate_run_average(repo, checks)
-        .or_else(|| checks.iter().filter_map(|check| check.average_secs).max())
-}
-
-fn diff_line_type(line: &str) -> DiffLineType {
-    if line.starts_with("+++") || line.starts_with("---") {
-        DiffLineType::Header
-    } else if line.starts_with('+') {
-        DiffLineType::Addition
-    } else if line.starts_with('-') {
-        DiffLineType::Deletion
-    } else if line.starts_with("@@") {
-        DiffLineType::Hunk
-    } else if line.starts_with("diff ") || line.starts_with("index ") {
-        DiffLineType::Header
-    } else {
-        DiffLineType::Context
-    }
-}
-
-fn diff_line_type_name(line_type: &DiffLineType) -> &'static str {
-    match line_type {
-        DiffLineType::Header => "header",
-        DiffLineType::Addition => "addition",
-        DiffLineType::Deletion => "deletion",
-        DiffLineType::Context => "context",
-        DiffLineType::Hunk => "hunk",
-    }
-}
-
-fn diff_line_type_from_name(name: &str, content: &str) -> DiffLineType {
-    match name {
-        "header" => DiffLineType::Header,
-        "addition" => DiffLineType::Addition,
-        "deletion" => DiffLineType::Deletion,
-        "context" => DiffLineType::Context,
-        "hunk" => DiffLineType::Hunk,
-        _ => diff_line_type(content),
-    }
-}
-
-fn cached_diff_to_disk(diff: &CachedDiff) -> DiskCachedDiff {
-    DiskCachedDiff {
-        stat: diff
-            .stat
-            .iter()
-            .map(|line| DiskDiffStat {
-                file: line.file.clone(),
-                additions: line.additions,
-                deletions: line.deletions,
-            })
-            .collect(),
-        lines: diff
-            .lines
-            .iter()
-            .map(|line| DiskDiffLine {
-                content: line.content.clone(),
-                line_type: diff_line_type_name(&line.line_type).to_string(),
-            })
-            .collect(),
-    }
-}
-
-fn cached_diff_from_disk(diff: &DiskCachedDiff) -> CachedDiff {
-    CachedDiff {
-        stat: diff
-            .stat
-            .iter()
-            .map(|line| DiffStatLine {
-                file: line.file.clone(),
-                additions: line.additions,
-                deletions: line.deletions,
-            })
-            .collect(),
-        lines: diff
-            .lines
-            .iter()
-            .map(|line| DiffLine {
-                content: line.content.clone(),
-                line_type: diff_line_type_from_name(&line.line_type, &line.content),
-            })
-            .collect(),
-    }
-}
-
-fn persistent_diff_cache_key(repo: &GitRepo, request: &DiffRequest) -> Option<String> {
-    let parent_oid = repo.rev_parse(&request.parent).ok()?;
-    let branch_oid = repo.rev_parse(&request.branch).ok()?;
-    let merge_base_oid = repo
-        .merge_base_refs(&request.parent, &request.branch)
-        .ok()?;
-
-    Some(TuiDiffCache::key(
-        &request.parent,
-        &request.branch,
-        &parent_oid,
-        &branch_oid,
-        &merge_base_oid,
-    ))
-}
-
-fn load_branch_details(repo: &GitRepo, request: &BranchDetailsRequest) -> BranchDetails {
-    let (ahead, behind) = request
-        .parent
-        .as_deref()
-        .and_then(|parent| repo.commits_ahead_behind(parent, &request.name).ok())
-        .unwrap_or((0, 0));
-    let has_remote = repo.has_remote(&request.name);
-    let (unpushed, unpulled) = repo.commits_vs_remote(&request.name).unwrap_or((0, 0));
-    let commits = request
-        .parent
-        .as_deref()
-        .and_then(|parent| repo.commits_between(parent, &request.name).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .take(10)
-        .collect();
-
-    BranchDetails {
-        ahead,
-        behind,
-        has_remote,
-        unpushed,
-        unpulled,
-        commits,
-    }
-}
-
 fn spawn_branch_details_loader(
-    repo_path: PathBuf,
-    requests: Vec<BranchDetailsRequest>,
+    session: RepositorySession,
+    requests: Vec<BranchSummary>,
 ) -> Receiver<BranchDetailsUpdate> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        let repo = match GitRepo::open_from_path(&repo_path) {
-            Ok(repo) => repo,
-            Err(_) => {
-                for request in requests {
-                    let _ = sender.send(BranchDetailsUpdate::Unavailable {
-                        branch: request.name,
-                    });
-                }
-                let _ = sender.send(BranchDetailsUpdate::Done);
-                return;
-            }
-        };
-
         for request in requests {
-            let details = load_branch_details(&repo, &request);
-            let _ = sender.send(BranchDetailsUpdate::Loaded {
-                branch: request.name,
-                details,
-            });
+            let branch = request.name.clone();
+            let update = match session.branch_details(&request) {
+                Ok(details) => BranchDetailsUpdate::Loaded { branch, details },
+                Err(error) => BranchDetailsUpdate::Unavailable {
+                    branch,
+                    message: format!("{error:#}"),
+                },
+            };
+            let _ = sender.send(update);
         }
 
         let _ = sender.send(BranchDetailsUpdate::Done);
@@ -1659,137 +1447,32 @@ fn spawn_branch_details_loader(
     receiver
 }
 
-fn spawn_diff_loader(
-    repo_path: PathBuf,
-    diff_cache_dir: PathBuf,
-    request: DiffRequest,
-) -> Receiver<DiffUpdate> {
+fn spawn_diff_loader(session: RepositorySession, request: DiffRequest) -> Receiver<DiffUpdate> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        let repo = match GitRepo::open_from_path(&repo_path) {
-            Ok(repo) => repo,
-            Err(_) => {
-                let _ = sender.send(DiffUpdate::Unavailable { request });
-                return;
-            }
+        let update = match session.diff(&request.branch, &request.parent) {
+            Ok(diff) => DiffUpdate::Loaded { request, diff },
+            Err(_) => DiffUpdate::Unavailable { request },
         };
-
-        let stat = match repo.diff_stat(&request.branch, &request.parent) {
-            Ok(stats) => stats
-                .into_iter()
-                .map(|(file, additions, deletions)| DiffStatLine {
-                    file,
-                    additions,
-                    deletions,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-
-        let lines = match repo.diff_against_parent(&request.branch, &request.parent) {
-            Ok(lines) => lines
-                .into_iter()
-                .map(|line| DiffLine {
-                    line_type: diff_line_type(&line),
-                    content: line,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-
-        let diff = CachedDiff { stat, lines };
-        if let Some(key) = persistent_diff_cache_key(&repo, &request) {
-            let mut cache = TuiDiffCache::load(&diff_cache_dir);
-            cache.insert(key, cached_diff_to_disk(&diff));
-            let _ = cache.save(&diff_cache_dir);
-        }
-
-        let _ = sender.send(DiffUpdate::Loaded { request, diff });
+        let _ = sender.send(update);
     });
 
     receiver
 }
 
-fn run_in_tokio_runtime<T, F, Fut>(operation: F) -> Result<T>
-where
-    F: FnOnce() -> Result<Fut>,
-    Fut: Future<Output = Result<T>>,
-{
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async move {
-        let future = operation()?;
-        future.await
-    })
-}
-
-fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
+fn spawn_ci_loader(session: RepositorySession, branch: String) -> Receiver<CiUpdate> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        let repo = match GitRepo::open_from_path(&repo_path) {
-            Ok(repo) => repo,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "unable to open the repository".to_string(),
-                });
-                return;
-            }
+        let update = match session.load_ci(&branch) {
+            Ok(summary) => CiUpdate::Loaded { branch, summary },
+            Err(error) => CiUpdate::Unavailable {
+                branch,
+                message: format!("{error:#}"),
+            },
         };
-
-        let config = match Config::load() {
-            Ok(config) => config,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "unable to load config".to_string(),
-                });
-                return;
-            }
-        };
-
-        let remote = match RemoteInfo::from_repo(&repo, &config) {
-            Ok(remote) => remote,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "configure a git remote to fetch checks".to_string(),
-                });
-                return;
-            }
-        };
-
-        let sha = match repo.branch_commit(&branch) {
-            Ok(sha) => sha,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "branch commit could not be resolved".to_string(),
-                });
-                return;
-            }
-        };
-
-        let repo_ref = &repo;
-        let sha_ref = sha.as_str();
-        let (overall_status, check_runs) = match run_in_tokio_runtime(|| {
-            let client = ForgeClient::new(&remote)?;
-            Ok(async move { client.fetch_checks(repo_ref, sha_ref).await })
-        }) {
-            Ok(result) => result,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch: branch.clone(),
-                    message: "live CI is temporarily unavailable".to_string(),
-                });
-                return;
-            }
-        };
-
-        let average_secs = branch_average_secs(&repo, &check_runs);
-        let summary = BranchCiSummary::from_checks(overall_status, &check_runs, average_secs);
-        let _ = sender.send(CiUpdate::Loaded { branch, summary });
+        let _ = sender.send(update);
     });
 
     receiver
@@ -1798,22 +1481,18 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, BranchCiSummary, BranchDisplay, DiffLineType, DiffRequest, DiffUpdate, FocusedPane,
-        Mode, live_ci_summary_text, run_in_tokio_runtime, spawn_diff_loader,
-        substring_filter_indices,
+        App, BranchCiState, BranchDetailsUpdate, BranchDisplay, CiUpdate, DiffRequest, DiffUpdate,
+        FocusedPane, Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
+        spawn_branch_details_loader, spawn_ci_loader, spawn_diff_loader, substring_filter_indices,
     };
-    use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
-    use crate::engine::Stack;
+    use crate::application::{
+        BranchDetails, BranchSummary, CiSummary, DiffLineKind, RepositorySession,
+    };
+    use crate::cache::{DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache};
+    use crate::engine::{BranchMetadata, Stack};
     use crate::git::GitRepo;
-    use anyhow::{Result, anyhow};
-    use chrono::{TimeZone, Utc};
-    use std::future::Ready;
     use std::process::Command;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -1871,18 +1550,19 @@ mod tests {
             ci_state: None,
             commits: Vec::new(),
             details_loaded: parent.is_none(),
+            details_error: None,
         }
     }
 
     fn minimal_app(repo: GitRepo, branches: Vec<BranchDisplay>) -> App {
-        let git_dir = repo.git_dir().expect("git dir").to_path_buf();
+        let session = RepositorySession::open(repo.workdir().expect("workdir"))
+            .expect("open repository session");
         let diff_cache_dir = repo.common_git_dir().expect("common git dir");
         let stack = Stack::load(&repo).expect("load stack");
         App {
             stack,
-            cache: CiCache::load(&git_dir),
             repo,
-            git_dir,
+            session,
             diff_cache_dir,
             current_branch: "main".to_string(),
             selected_index: 0,
@@ -1895,6 +1575,7 @@ mod tests {
             selected_diff: Vec::new(),
             diff_scroll: 0,
             focused_pane: FocusedPane::Stack,
+            pane_visibility: PaneVisibility::default(),
             diff_stat: Vec::new(),
             status_message: None,
             status_set_at: None,
@@ -1933,6 +1614,163 @@ mod tests {
     }
 
     #[test]
+    fn custom_remote_details_make_selected_branch_eligible_for_ci_queueing() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+
+        app.apply_branch_details_update(BranchDetailsUpdate::Loaded {
+            branch: "feature".to_string(),
+            details: BranchDetails {
+                ahead: 1,
+                behind: 0,
+                has_remote: true,
+                unpushed: 1,
+                unpulled: 0,
+                commits: vec!["feature commit".to_string()],
+            },
+        });
+        app.queue_ci_refresh_for_selected();
+
+        assert!(app.branches[0].details_loaded);
+        assert!(app.branches[0].has_remote);
+        assert_eq!(app.ci_queued_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn applying_ci_update_does_not_duplicate_the_session_cache_write() {
+        let (_tempdir, repo) = test_repo();
+        let cache_path = repo
+            .git_dir()
+            .expect("git dir")
+            .join("stax")
+            .join("ci-cache.json");
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+        let summary = CiSummary {
+            overall_status: Some("success".to_string()),
+            total: 1,
+            passed: 1,
+            failed: 0,
+            running: 0,
+            queued: 0,
+            skipped: 0,
+            started_at: None,
+            completed_at: None,
+            average_secs: None,
+        };
+
+        app.apply_ci_update(CiUpdate::Loaded {
+            branch: "feature".to_string(),
+            summary,
+        });
+
+        assert_eq!(app.branches[0].ci_state.as_deref(), Some("success"));
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn hydration_config_error_precedes_no_remote_ci_guidance_and_recovers() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        let main_oid = repo.rev_parse("main").expect("main oid");
+        BranchMetadata::new("main", &main_oid)
+            .write(repo.inner(), "feature")
+            .expect("write feature metadata");
+        std::fs::write(
+            workdir.join("stax.toml"),
+            "[remote\nname = \"origin\"\ntoken = \"super-secret-credential\"\n",
+        )
+        .expect("write malformed config");
+        let request = BranchSummary {
+            name: "feature".to_string(),
+            parent: Some("main".to_string()),
+            column: 0,
+            is_current: true,
+            is_trunk: false,
+            needs_restack: false,
+            pr_number: None,
+            pr_state: None,
+            ci_state: None,
+        };
+        let session = RepositorySession::open(&workdir).expect("open session");
+        let repository_root = session.repository_root().display().to_string();
+
+        let update = spawn_branch_details_loader(session, vec![request])
+            .recv_timeout(Duration::from_secs(15))
+            .expect("details update");
+        match &update {
+            BranchDetailsUpdate::Unavailable { branch, message } => {
+                assert_eq!(branch, "feature");
+                assert!(message.contains("Failed to load stax config"));
+                assert!(message.contains(&repository_root));
+                assert!(!message.contains("super-secret-credential"));
+            }
+            BranchDetailsUpdate::Loaded { .. } | BranchDetailsUpdate::Done => {
+                panic!("malformed config must make details unavailable")
+            }
+        }
+
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+        app.apply_branch_details_update(update);
+        app.queue_ci_refresh_for_selected();
+
+        assert!(app.branches[0].details_loaded);
+        assert!(app.branches[0].details_error.is_some());
+        assert!(app.ci_queued_branch.is_none());
+        match app.ci_states.get("feature") {
+            Some(BranchCiState::Unavailable { message, .. }) => {
+                assert!(message.contains("stax config"));
+                assert!(!message.contains("super-secret-credential"));
+            }
+            Some(BranchCiState::Loading | BranchCiState::Ready { .. }) | None => {
+                panic!("hydration failure must populate unavailable CI state")
+            }
+        }
+        let (summary, _) = app.ci_summary_line(&app.branches[0]);
+        assert!(summary.contains("stax config"));
+        assert!(!summary.contains("push branch"));
+        assert!(!summary.contains("super-secret-credential"));
+
+        std::fs::write(workdir.join("stax.toml"), "[remote]\nname = \"origin\"\n")
+            .expect("fix config");
+        app.refresh_branches().expect("refresh branches");
+        assert!(app.branch_details_queued);
+        let refreshing = app
+            .branches
+            .iter()
+            .find(|branch| branch.name == "feature")
+            .expect("refreshed feature");
+        assert!(!refreshing.details_loaded);
+        assert!(refreshing.details_error.is_some());
+
+        let started = Instant::now();
+        loop {
+            app.refresh_background();
+            let recovered = app
+                .branches
+                .iter()
+                .find(|branch| branch.name == "feature")
+                .is_some_and(|branch| branch.details_loaded && branch.details_error.is_none());
+            if recovered {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "details refresh did not recover"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.select_branch("feature");
+        app.queue_ci_refresh_for_selected();
+
+        let recovered = app.selected_branch().expect("selected feature");
+        assert!(recovered.details_error.is_none());
+        let (summary, _) = app.ci_summary_line(recovered);
+        assert!(summary.contains("push branch"));
+        assert!(!summary.contains("stax config"));
+    }
+
+    #[test]
     fn selecting_next_branch_queues_diff_without_loading_patch_synchronously() {
         let (_tempdir, repo) = test_repo();
         let mut app = minimal_app(
@@ -1952,6 +1790,111 @@ mod tests {
         );
         assert!(app.selected_diff.is_empty());
         assert!(app.diff_stat.is_empty());
+    }
+
+    #[test]
+    fn selecting_branch_cache_miss_does_not_compute_patch_synchronously() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+        let blob_oid = repo
+            .rev_parse("feature:README.md")
+            .expect("feature README blob");
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let object_path = cache_dir
+            .join("objects")
+            .join(&blob_oid[..2])
+            .join(&blob_oid[2..]);
+        std::fs::remove_file(object_path).expect("remove feature blob");
+        let mut app = minimal_app(
+            repo,
+            vec![
+                skeleton_branch("main", None, false),
+                skeleton_branch("feature", Some("main"), true),
+            ],
+        );
+
+        app.select_next();
+
+        assert_eq!(
+            app.diff_queued,
+            Some(DiffRequest::new("feature".to_string(), "main".to_string()))
+        );
+        assert!(app.selected_diff.is_empty());
+        assert!(app.diff_stat.is_empty());
+        assert!(!cache_dir.join("stax").join("tui-diff-cache.json").exists());
+    }
+
+    #[test]
+    fn toggling_patch_hides_it_and_moves_focus_to_stack() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.focused_pane = FocusedPane::Diff;
+
+        app.toggle_pane_visibility(TuiPane::Patch);
+
+        assert!(!app.pane_visibility.patch);
+        assert_eq!(app.focused_pane, FocusedPane::Stack);
+        assert_eq!(app.status_message.as_deref(), Some("Patch pane hidden"));
+    }
+
+    #[test]
+    fn toggling_pane_visibility_persists_for_next_tui_load() {
+        let (_tempdir, repo) = test_repo();
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+
+        app.toggle_pane_visibility(TuiPane::Summary);
+
+        let state = TuiStateCache::load(&cache_dir);
+        let panes = state.panes.expect("pane visibility should be persisted");
+        assert!(panes.stack);
+        assert!(!panes.summary);
+        assert!(panes.patch);
+    }
+
+    #[test]
+    fn invalid_persisted_pane_visibility_falls_back_to_default() {
+        let visibility = PaneVisibility::from_persisted(TuiPaneVisibilityState {
+            stack: false,
+            summary: false,
+            patch: false,
+        });
+
+        assert_eq!(visibility, PaneVisibility::default());
+    }
+
+    #[test]
+    fn toggling_does_not_hide_last_visible_pane() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.pane_visibility = PaneVisibility {
+            stack: true,
+            summary: false,
+            patch: false,
+        };
+
+        app.toggle_pane_visibility(TuiPane::Stack);
+
+        assert!(app.pane_visibility.stack);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("At least one pane must remain visible")
+        );
+    }
+
+    #[test]
+    fn tab_skips_hidden_patch_pane() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.pane_visibility.patch = false;
+
+        app.focus_next_visible_pane();
+
+        assert_eq!(app.focused_pane, FocusedPane::Summary);
     }
 
     #[test]
@@ -1997,7 +1940,7 @@ mod tests {
         assert_eq!(app.diff_queued, None);
         assert_eq!(app.selected_diff.len(), 1);
         assert_eq!(app.selected_diff[0].content, "cached diff line");
-        assert_eq!(app.selected_diff[0].line_type, DiffLineType::Context);
+        assert_eq!(app.selected_diff[0].kind, DiffLineKind::Context);
         assert_eq!(app.diff_stat.len(), 1);
         assert_eq!(app.diff_stat[0].file, "README.md");
     }
@@ -2070,10 +2013,10 @@ mod tests {
         run_git(&workdir, &["add", "README.md"]);
         run_git(&workdir, &["commit", "-m", "feature"]);
 
-        let repo_path = repo.git_dir().expect("git dir").to_path_buf();
         let cache_dir = repo.common_git_dir().expect("common git dir");
         let request = DiffRequest::new("feature".to_string(), "main".to_string());
-        let receiver = spawn_diff_loader(repo_path, cache_dir.clone(), request.clone());
+        let session = RepositorySession::open(&workdir).expect("open session");
+        let receiver = spawn_diff_loader(session, request.clone());
 
         match receiver
             .recv_timeout(Duration::from_secs(15))
@@ -2096,6 +2039,52 @@ mod tests {
     }
 
     #[test]
+    fn diff_loader_does_not_cache_git_failures_as_empty_success() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+
+        let parent_oid = repo.rev_parse("main").expect("main oid");
+        let branch_oid = repo.rev_parse("feature").expect("feature oid");
+        let merge_base_oid = repo.merge_base_refs("main", "feature").expect("merge base");
+        let blob_oid = repo
+            .rev_parse("feature:README.md")
+            .expect("feature README blob");
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let object_path = cache_dir
+            .join("objects")
+            .join(&blob_oid[..2])
+            .join(&blob_oid[2..]);
+        std::fs::remove_file(object_path).expect("remove feature blob");
+        let request = DiffRequest::new("feature".to_string(), "main".to_string());
+        let session = RepositorySession::open(&workdir).expect("open session");
+
+        let update = spawn_diff_loader(session, request.clone())
+            .recv_timeout(Duration::from_secs(15))
+            .expect("diff update");
+
+        match update {
+            DiffUpdate::Unavailable { request: failed } => assert_eq!(failed, request),
+            DiffUpdate::Loaded { .. } => panic!("failed diff must remain unavailable"),
+        }
+        let key = TuiDiffCache::key("main", "feature", &parent_oid, &branch_oid, &merge_base_oid);
+        assert!(TuiDiffCache::load(&cache_dir).get(&key).is_none());
+        assert!(!cache_dir.join("stax").join("tui-diff-cache.json").exists());
+
+        let error = RepositorySession::open(&workdir)
+            .expect("open session")
+            .diff("feature", "main")
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("git diff"), "{message}");
+        assert!(message.contains("failed with"), "{message}");
+        assert!(TuiDiffCache::load(&cache_dir).get(&key).is_none());
+    }
+
+    #[test]
     fn substring_filter_empty_query_returns_all_indices_in_order() {
         let candidates = names(&["main", "feat-a", "feat-b"]);
         assert_eq!(substring_filter_indices(&candidates, ""), vec![0, 1, 2]);
@@ -2114,54 +2103,9 @@ mod tests {
         assert!(substring_filter_indices(&candidates, "xyz").is_empty());
     }
 
-    fn sample_summary() -> BranchCiSummary {
-        BranchCiSummary {
-            overall_status: Some("pending".to_string()),
-            total: 6,
-            passed: 2,
-            failed: 0,
-            running: 1,
-            queued: 3,
-            skipped: 0,
-            started_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 0, 0).unwrap()),
-            completed_at: None,
-            average_secs: Some(900),
-        }
-    }
-
-    #[test]
-    fn ci_summary_tracks_completion_counts_and_eta() {
-        let summary = sample_summary();
-        let now = Utc.with_ymd_and_hms(2026, 4, 14, 10, 5, 0).unwrap();
-
-        assert_eq!(summary.completed_count(), 2);
-        assert_eq!(summary.elapsed_secs(now), Some(300));
-        assert_eq!(summary.progress_percent(now), Some(33));
-        assert_eq!(summary.eta_secs(now), Some(600));
-    }
-
-    #[test]
-    fn ci_summary_marks_completed_runs_as_done() {
-        let summary = BranchCiSummary {
-            overall_status: Some("success".to_string()),
-            total: 3,
-            passed: 2,
-            failed: 0,
-            running: 0,
-            queued: 0,
-            skipped: 1,
-            started_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 0, 0).unwrap()),
-            completed_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 6, 0).unwrap()),
-            average_secs: Some(600),
-        };
-
-        assert!(summary.is_complete());
-        assert_eq!(summary.progress_percent(Utc::now()), Some(100));
-    }
-
     #[test]
     fn live_ci_text_handles_missing_checks() {
-        let summary = BranchCiSummary {
+        let summary = CiSummary {
             overall_status: None,
             total: 0,
             passed: 0,
@@ -2180,48 +2124,21 @@ mod tests {
     }
 
     #[test]
-    fn run_in_tokio_runtime_provides_runtime_to_setup_and_future() {
-        let setup_has_runtime = Arc::new(AtomicBool::new(false));
-        let future_has_runtime = Arc::new(AtomicBool::new(false));
-        let setup_has_runtime_clone = Arc::clone(&setup_has_runtime);
-        let future_has_runtime_clone = Arc::clone(&future_has_runtime);
+    fn ci_loader_reports_actionable_session_errors() {
+        let (_tempdir, repo) = test_repo();
+        let session =
+            RepositorySession::open(repo.workdir().expect("workdir")).expect("open session");
 
-        let result = run_in_tokio_runtime(|| {
-            setup_has_runtime_clone.store(
-                tokio::runtime::Handle::try_current().is_ok(),
-                Ordering::SeqCst,
-            );
-            Ok(async move {
-                future_has_runtime_clone.store(
-                    tokio::runtime::Handle::try_current().is_ok(),
-                    Ordering::SeqCst,
-                );
-                Ok::<_, anyhow::Error>(42usize)
-            })
-        })
-        .unwrap();
+        let update = spawn_ci_loader(session, "main".to_string())
+            .recv_timeout(Duration::from_secs(15))
+            .expect("CI update");
 
-        assert_eq!(result, 42);
-        assert!(setup_has_runtime.load(Ordering::SeqCst));
-        assert!(future_has_runtime.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn run_in_tokio_runtime_propagates_setup_errors() {
-        let err =
-            run_in_tokio_runtime::<(), _, Ready<Result<()>>>(|| -> Result<Ready<Result<()>>> {
-                Err(anyhow!("setup failed"))
-            })
-            .unwrap_err();
-
-        assert!(format!("{err:#}").contains("setup failed"));
-    }
-
-    #[test]
-    fn run_in_tokio_runtime_propagates_async_errors() {
-        let err = run_in_tokio_runtime(|| Ok(async { Err::<(), _>(anyhow!("fetch failed")) }))
-            .unwrap_err();
-
-        assert!(format!("{err:#}").contains("fetch failed"));
+        match update {
+            CiUpdate::Unavailable { branch, message } => {
+                assert_eq!(branch, "main");
+                assert!(message.contains("configure a git remote"));
+            }
+            CiUpdate::Loaded { .. } => panic!("CI should be unavailable without a remote"),
+        }
     }
 }

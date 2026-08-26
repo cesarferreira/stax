@@ -1,6 +1,7 @@
-use crate::{commands, config::Config, errors::ConflictStopped, git::GitRepo, tui, update};
+use crate::{commands, config::Config, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 
 mod args;
 mod interactive;
@@ -27,11 +28,28 @@ fn print_subcommand_help(name: &str) -> Result<()> {
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Spawn update check immediately so it runs in parallel with command work.
-    // The handle joins the thread on drop, ensuring the cache write completes before exit.
-    let _update_handle = update::check_in_background();
-
     let cli = Cli::parse();
+
+    if cli.default_config {
+        print!("{}", Config::default_toml()?);
+        return Ok(());
+    }
+
+    if cli.skill {
+        return commands::skills::run_print_skill();
+    }
+
+    if matches!(&cli.command, Some(Commands::UpdateCheck)) {
+        update::run_background_check();
+        return Ok(());
+    }
+
+    let _trace = crate::git::command::TraceGuard::start(cli.trace);
+    update::spawn_background_check();
+
+    if let Some(Commands::Web(args)) = &cli.command {
+        return crate::commands::web::run(args.path.clone(), args.port, args.no_open);
+    }
 
     if let Some(Commands::Setup {
         print,
@@ -41,12 +59,25 @@ pub fn run() -> Result<()> {
         skip_auth,
         auth_from_gh,
         yes,
+        skills,
     }) = &cli.command
     {
-        let skill_install_mode = if *install_skills {
-            commands::shell_setup::SkillInstallMode::Install
-        } else if *skip_skills {
+        let skill_selection = skills
+            .as_deref()
+            .map(commands::skills::parse_harness_selection)
+            .transpose()?;
+        let skill_install_mode = if *skip_skills
+            || matches!(
+                skill_selection.as_ref(),
+                Some(commands::skills::HarnessSelection::Only(ids)) if ids.is_empty()
+            ) {
             commands::shell_setup::SkillInstallMode::Skip
+        } else if *install_skills
+            || skill_selection
+                .as_ref()
+                .is_some_and(|sel| !matches!(sel, commands::skills::HarnessSelection::Only(ids) if ids.is_empty()))
+        {
+            commands::shell_setup::SkillInstallMode::Install
         } else {
             commands::shell_setup::SkillInstallMode::Ask
         };
@@ -61,6 +92,7 @@ pub fn run() -> Result<()> {
             auto_accept: *yes,
             skill_install_mode,
             auth_setup_mode,
+            skill_selection,
         };
         let result = commands::shell_setup::run(*print, *refresh, setup_options);
         update::show_update_notification();
@@ -106,6 +138,10 @@ pub fn run() -> Result<()> {
 
     // Commands that don't need repo initialization
     match &command {
+        Commands::Completions { shell } => {
+            generate(*shell, &mut Cli::command(), "st", &mut std::io::stdout());
+            return Ok(());
+        }
         Commands::Auth {
             token,
             from_gh,
@@ -150,7 +186,28 @@ pub fn run() -> Result<()> {
         Commands::Skills { command } => {
             let result = match command {
                 None | Some(SkillsCommands::List) => commands::skills::run_list(),
-                Some(SkillsCommands::Update { dry_run }) => commands::skills::run_update(*dry_run),
+                Some(SkillsCommands::Update {
+                    dry_run,
+                    all,
+                    skills,
+                }) => {
+                    let (sel, origin) = if *all {
+                        (
+                            commands::skills::HarnessSelection::All,
+                            commands::skills::SkillsUpdateOrigin::AllFlag,
+                        )
+                    } else if let Some(spec) = skills.as_deref() {
+                        (
+                            commands::skills::parse_harness_selection(spec)?,
+                            commands::skills::SkillsUpdateOrigin::Cli {
+                                spec: spec.to_string(),
+                            },
+                        )
+                    } else {
+                        commands::skills::configured_selection_with_origin()
+                    };
+                    commands::skills::run_update_with(*dry_run, &sel, origin)
+                }
             };
             update::show_update_notification();
             return result;
@@ -167,18 +224,19 @@ pub fn run() -> Result<()> {
     commands::init::ensure_initialized()?;
 
     // Block commands that do not explicitly support running during an active rebase.
-    if !command.allows_during_rebase() {
-        if let Ok(repo) = GitRepo::open() {
-            if repo.rebase_in_progress().unwrap_or(false) {
-                anyhow::bail!(
-                    "A rebase is in progress. Resolve conflicts and run one of:\n  \
+    if !command.allows_during_rebase()
+        && let Ok(repo) = GitRepo::open()
+        && repo.rebase_in_progress().unwrap_or(false)
+    {
+        anyhow::bail!(
+            "A rebase is in progress. Resolve conflicts and run one of:\n  \
                      stax resolve\n  stax continue\n  stax abort"
-                );
-            }
-        }
+        );
     }
 
     let result = match command {
+        Commands::Completions { .. } => unreachable!("handled before repository initialization"),
+        Commands::Web(_) => unreachable!("handled before repository initialization"),
         Commands::Status {
             json,
             stack,
@@ -219,7 +277,7 @@ pub fn run() -> Result<()> {
             yes,
             quiet,
         } => {
-            let default_method = if stack { "rebase" } else { "squash" };
+            let default_method = if stack { "merge" } else { "squash" };
             let merge_method = method.as_deref().unwrap_or(default_method).parse()?;
             if queue {
                 commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
@@ -311,20 +369,48 @@ pub fn run() -> Result<()> {
             quiet,
             verbose,
             auto_stash_pop,
-        } => commands::sync::run(
-            restack,
-            prune,
-            full,
-            !no_delete,
-            delete_upstream_gone,
-            force,
-            safe,
-            r#continue,
-            quiet,
-            verbose,
-            auto_stash_pop,
-            &[],
-        ),
+            stash,
+            no_stash,
+            dry_run,
+            json,
+        } => {
+            if prune {
+                eprintln!("{}", commands::sync::prune_deprecation_warning());
+            }
+            let stash_policy = commands::sync::StashPolicy::from_flags(stash, no_stash);
+            if dry_run {
+                commands::sync_plan::run(commands::sync_plan::SyncPlanOptions {
+                    restack,
+                    full,
+                    delete_merged: !no_delete,
+                    delete_upstream_gone,
+                    force,
+                    safe,
+                    quiet,
+                    verbose,
+                    auto_stash_pop,
+                    stash_policy,
+                    json,
+                })
+            } else {
+                commands::sync::run(
+                    restack,
+                    full,
+                    !no_delete,
+                    delete_upstream_gone,
+                    force,
+                    safe,
+                    r#continue,
+                    quiet,
+                    verbose,
+                    auto_stash_pop,
+                    stash_policy,
+                    json,
+                    &[],
+                    false,
+                )
+            }
+        }
         Commands::Sweep {
             delete,
             include_stale,
@@ -356,7 +442,7 @@ pub fn run() -> Result<()> {
             no_submit,
             auto_stash_pop,
         } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
-        Commands::Update {
+        Commands::Refresh {
             no_pr,
             no_submit,
             force,
@@ -365,6 +451,7 @@ pub fn run() -> Result<()> {
             yes,
             no_prompt,
             auto_stash_pop,
+            all_stacks,
         } => commands::refresh::run(
             no_pr,
             no_submit,
@@ -374,6 +461,7 @@ pub fn run() -> Result<()> {
             yes,
             no_prompt,
             auto_stash_pop,
+            all_stacks,
         ),
         Commands::Checkout {
             branch,
@@ -436,6 +524,7 @@ pub fn run() -> Result<()> {
         Commands::Top => commands::navigate::top(),
         Commands::Bottom => commands::navigate::bottom(),
         Commands::Prev => commands::navigate::prev(),
+        Commands::Next => commands::navigate::next(),
         Commands::Create {
             name,
             all,
@@ -469,19 +558,26 @@ pub fn run() -> Result<()> {
             stack,
             json,
             plain,
+            interval,
         } => commands::ready::run(
             commands::ready::ReadyScopeMode::from_flags(all, current, stack),
             json,
             plain,
+            interval,
         ),
         Commands::Issue { command } => match command {
             Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
             None => print_subcommand_help("issue"),
         },
         Commands::Open => commands::open::run(),
-        Commands::Draft { branch } => commands::draft::run(branch, true),
-        Commands::Undraft { branch } => commands::draft::run(branch, false),
-        Commands::Comments { plain } => commands::comments::run(plain),
+        Commands::Draft { branch, stack } => commands::draft::run(branch, stack, true),
+        Commands::Undraft { branch, stack } => commands::draft::run(branch, stack, false),
+        Commands::Comments {
+            plain,
+            stack,
+            all,
+            json,
+        } => commands::comments::run(plain, stack, all, json),
         Commands::Ci {
             all,
             stack,
@@ -510,7 +606,11 @@ pub fn run() -> Result<()> {
             verbose,
             oneline,
         ),
-        Commands::Watch { current, interval } => commands::watch::run(current, interval),
+        Commands::Watch {
+            current,
+            interval,
+            iterations,
+        } => commands::watch::run(current, interval, iterations),
         Commands::Tmux { command } => commands::tmux::run(command),
         Commands::Split {
             hunk,
@@ -532,19 +632,26 @@ pub fn run() -> Result<()> {
         Commands::Edit { yes, no_verify } => commands::edit::run(yes, no_verify),
         Commands::Validate => commands::stack_cmd::run_validate(),
         Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
+        Commands::Freeze { branch } => commands::freeze::run(branch, true),
+        Commands::Unfreeze { branch } => commands::freeze::run(branch, false),
         Commands::Run {
             cmd,
             all,
             stack,
             fail_fast,
+            parallel,
+            jobs,
         }
         | Commands::Test {
             cmd,
             all,
             stack,
             fail_fast,
-        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast),
-        Commands::Demo => unreachable!(), // Handled above
+            parallel,
+            jobs,
+        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast, parallel, jobs),
+        Commands::Demo => unreachable!(),        // Handled above
+        Commands::UpdateCheck => unreachable!(), // Handled before setup/config work
         Commands::Standup {
             json,
             all,
@@ -713,6 +820,8 @@ pub fn run() -> Result<()> {
                 auto_stash_pop,
                 submit_after.into(),
             ),
+            StackCommands::Link => commands::stack_cmd::run_link(),
+            StackCommands::Unlink { stack_number } => commands::stack_cmd::run_unlink(stack_number),
         },
         // Hidden shortcuts
         Commands::Bc {
@@ -817,6 +926,9 @@ pub fn run() -> Result<()> {
                 force,
                 delete_branch,
             }) => commands::worktree::remove::run(name, force, delete_branch),
+            Some(WorktreeCommands::Promote { shell_output }) => {
+                commands::worktree::promote::run(shell_output)
+            }
             Some(WorktreeCommands::Prune) => commands::worktree::prune::run(),
             Some(WorktreeCommands::Cleanup {
                 force,
@@ -909,11 +1021,7 @@ pub fn run() -> Result<()> {
     // Show update notification from cache (instant — no network request here)
     update::show_update_notification();
 
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) if e.is::<ConflictStopped>() => std::process::exit(1),
-        Err(e) => Err(e),
-    }
+    result
 }
 
 fn print_worktree_help() -> Result<()> {

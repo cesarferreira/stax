@@ -1,0 +1,98 @@
+# stax default configuration template
+# Copy to ~/.config/stax/config.toml (or set STAX_CONFIG_DIR) and uncomment keys to override.
+# Omitted keys use the built-in defaults shown in each comment.
+# Docs: https://github.com/cesarferreira/stax/blob/main/docs/configuration/index.md
+
+[branch]
+# format = "{user}/{date}/{message}"
+# user = "cesar"
+# date_format = "%m-%d"
+# replacement = "-"
+# stale_days = 30 # days without commits before `stax sweep` calls a branch stale
+
+[git]
+# rerere = true # auto-enable git rerere on `stax init`
+
+[remote]
+# name = "origin"
+# base_url = "https://github.com"
+# api_base_url = "https://github.company.com/api/v3"
+# forge = "github" # "github" | "gitlab" | "gitea" | "forgejo" — override auto-detection
+
+[submit]
+# stack_links = "comment" # "comment" | "body" | "both" | "off" — where stax writes the stack graph on submit
+# single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
+# native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
+# stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
+
+[ci]
+# alert = false
+# success_alert_sound = "/path/to/ci-success.wav"
+# error_alert_sound = "/path/to/ci-error.wav"
+
+[auth]
+# use_gh_cli = true
+# allow_github_token_env = false
+# gh_hostname = "github.company.com"
+
+[ui]
+# tips = true
+
+[display]
+# worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)
+
+[restack]
+# preflight_auto_repair = true # use merge-base when stored parent boundary would replay too much
+# preflight_warn = true        # print a notice when that automatic repair happens
+
+[skills]
+# harnesses = ["claude", "codex"] # which agent harnesses get skill files
+#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+
+[ai]
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
+# model = "claude-opus-4-8"
+
+# Per-feature overrides — optional, fall back to [ai] above
+[ai.generate]   # st create --ai, st gen / st generate, st submit --ai
+# agent = "codex"
+# model = "o4-mini"
+
+[ai.standup]    # st standup --ai
+# agent = "gemini"
+# model = "gemini-2.5-pro"
+
+[ai.resolve]    # st resolve
+# agent = "claude"
+# model = "claude-opus-4-5"
+
+[ai.lane]       # st lane / st worktree create --ai
+# agent = "claude"
+# (model is intentionally not inherited from [ai] for interactive lanes)
+
+[worktree]
+# root_dir = "" # default: ~/.stax/worktrees/<repo>
+# root_dir = ".." # optional: keep lanes beside a nested trunk clone
+# reuse_slots = true
+#   Warm-slot recycling. Removing a clean, merged-equivalent worktree parks it
+#   (reset --hard trunk + `git clean -fd`, keeping gitignored deps like
+#   node_modules / .venv) instead of deleting it, and the next create/lane adopts
+#   that slot instead of a cold `git worktree add`. Set false to always
+#   cold-create and real-remove (no pool manifest).
+# max_idle_slots = 4
+#   Maximum idle slots kept parked. Parking beyond the cap does a real remove;
+#   `worktree cleanup` evicts the oldest excess slots.
+# reconcile = "pnpm install"
+#   Optional command run (non-fatally) inside a slot after it is adopted, to
+#   re-sync dependencies. A missing or failing command only warns.
+
+[worktree.hooks]
+# post_create = "" # blocking hook run in a new worktree before launch
+# post_start  = "" # background hook after creation
+# post_go     = "" # background hook after entering an existing worktree
+# pre_remove  = "" # blocking hook before removal
+# post_remove = "" # background hook after removal
+#
+# Example — keep VS Code / Cursor aware of every lane:
+#   post_start = "code --add ."
+#   post_go    = "code --add ."

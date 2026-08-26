@@ -621,17 +621,17 @@ impl GiteaClient {
                     Some(u) if u.login != username => u.login.clone(),
                     _ => continue,
                 };
-                if let Some(ts) = review.submitted_at {
-                    if ts >= since {
-                        reviews.push(ReviewActivity {
-                            pr_number: pr.number,
-                            pr_title: pr.title.clone(),
-                            reviewer,
-                            state: review.state.unwrap_or_else(|| "COMMENTED".to_string()),
-                            timestamp: ts,
-                            is_received: true,
-                        });
-                    }
+                if let Some(ts) = review.submitted_at
+                    && ts >= since
+                {
+                    reviews.push(ReviewActivity {
+                        pr_number: pr.number,
+                        pr_title: pr.title.clone(),
+                        reviewer,
+                        state: review.state.unwrap_or_else(|| "COMMENTED".to_string()),
+                        timestamp: ts,
+                        is_received: true,
+                    });
                 }
             }
         }

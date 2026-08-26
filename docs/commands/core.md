@@ -7,6 +7,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | Command | What it does |
 |---|---|
 | `st` | Launch the interactive TUI |
+| `st web [path]` | Open a localhost HTMX web workspace in the browser (127.0.0.1 only) |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
@@ -29,32 +30,46 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | Command | What it does |
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
+| `st stack link` | Register the current PR stack as a native GitHub Stack when `gh-stack` is available |
+| `st stack unlink [<stack-number>]` | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
 | `st upstack submit` | Submit current branch and descendants; descendants are temporarily chained onto any temporary parent publish heads |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
+| `st draft --stack` | Convert every PR in the current stack to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
-| `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
+| `st undraft --stack` | Mark every PR in the current stack as ready for review |
+| `st ready` | Interactive PR readiness dashboard — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s, drops remotely merged PRs, and stays open until you quit (`q`) |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
-| `st merge --stack` | Validate the selected tip PR once, retarget it to trunk, merge that PR, and mark lower PRs as absorbed (`--full` includes descendants; GitHub only) |
+| `st merge --stack` | Target selected PRs/MRs to trunk and merge the tip with SHA-preserving `merge`, allowing GitHub or GitLab to mark lower items merged (`--full` includes descendants); delegates to `gh stack merge` for atomic landing when the repo has a confirmed-enabled native GitHub Stack and `gh-stack` v0.1.0+ |
 | `st merge --remote` | Merge remotely via the GitHub API while you keep working |
 | `st merge --all` | Merge the entire stack regardless of where you are |
-| `st cascade` | Restack, push, and create/update PRs in one shot |
+| `st cascade` | Restack, push, and create/update PRs in one shot (no trunk fetch; offline-friendly) |
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
+
+On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. `gh-stack` v0.0.8+ supports normal GitHub CLI authentication, including token environment variables; stax keeps its token-stripping OAuth fallback only for known older versions. `st doctor` always reports the installed version and marks versions below v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `st merge --stack` delegation; the legacy-OAuth warning itself still only applies below v0.0.8). `st stack unlink <stack-number>` delegates to v0.0.8's remote unstack operation without requiring local tracking; omit the number to target the active locally tracked stack. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
 
 ## Sync, restack, update
 
 | Command | What it does |
 |---|---|
-| `st rs` | Pull trunk, clean merged branches, reparent children |
+| `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
+| `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
+| `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
+| `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json` |
+| `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
+| `st rs --dry-run --json` | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`) instead of human text |
+| `st rs --json` | Run sync and emit the result as a versioned JSON document (`kind: "sync"`, schema version 1); implies non-interactive; failures still emit JSON and exit non-zero |
+| `st rs --json --force` | Same as `--json` but also auto-confirms branch deletions |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
-| `st update` | Sync trunk without merged-branch cleanup, restack, then push and update PRs |
-| `st update --force --yes --no-prompt` | Full update flow without sync or submit prompts |
-| `st update --verbose` | Same as `st update`, with detailed sync/restack/submit timing |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs (`st update` is a back-compat alias); **does not** show the interactive Sync plan prompt (you already chose this workflow) |
+| `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; requires a clean tree unless `--auto-stash-pop` is set, and stops at the first conflict |
+| `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
+| `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
 
 ## Branch housekeeping
 
@@ -82,7 +97,7 @@ Scoped submit keeps local branch metadata unchanged when it prepares a temporary
 | Command | What it does |
 |---|---|
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
-| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · show stack PR readiness |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · live CI/PR readiness |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs or fuzzy-find commits with `find` / `--find` |
 | `st open` | Open the repository in the browser |
@@ -92,4 +107,4 @@ Scoped submit keeps local branch metadata unchanged when it prepares a temporary
 
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
-`st ready` and `st pr list --ready` launch a TUI in an interactive terminal and default to all tracked PRs, ordered newest changed PR first. Use `--current` or `--stack` for only the current stack. Use Up/Down or `j`/`k` to move, Enter or `o` to open the selected PR, `r` to refresh, `?` for help, and `q`/Esc to quit. Use `--plain` for the static table and `--json` for machine-readable output.
+`st ready` and `st pr list --ready` open an interactive TUI showing CI status, review approval (e.g. "1 approval", "missing review"), and recommended next action for each unmerged tracked PR. The TUI auto-refreshes every 15s and stays open after CI passes — press `q` to quit. A PR confirmed remotely merged disappears on initial load or the next refresh; this only updates readiness and cached PR state, and does not delete or reparent local branches (use `st sync` for cleanup). Closed but unmerged PRs remain visible as fix candidates. Use `--current` or `--stack` to limit to the current stack. Use `--plain` for a single static table (safe for capture/pipes) and `--json` for the machine-readable readiness schema. Use `--interval <secs>` to change the auto-refresh interval.

@@ -1,17 +1,24 @@
+pub(crate) use crate::application::SubmitScope;
+use crate::application::submit::{
+    PushSpec, TemporaryPublishRefs, TemporarySubmitWorktree, push_branches,
+};
 use crate::commands::open::open_url_in_browser;
-use crate::config::{Config, SingleStackMode, StackLinksMode};
+use crate::config::{
+    Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
+};
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, LinkOutcome};
 use crate::github::pr::{
-    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, remove_stack_links_from_body,
-    upsert_stack_links_in_body,
+    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, is_native_stack_base_locked_error,
+    remove_stack_links_from_body, upsert_stack_links_in_body,
 };
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
-use crate::remote::{self, RemoteInfo};
+use crate::remote::{self, ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Editor, Input, Select, theme::ColorfulTheme};
@@ -23,27 +30,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmitScope {
-    Branch,
-    Downstack,
-    Upstack,
-    Stack,
-}
-
-impl SubmitScope {
-    fn label(self) -> &'static str {
-        match self {
-            SubmitScope::Branch => "branch",
-            SubmitScope::Downstack => "downstack",
-            SubmitScope::Upstack => "upstack",
-            SubmitScope::Stack => "stack",
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct SubmitOptions {
+    pub dry_run: bool,
+    pub json: bool,
     pub draft: bool,
     pub publish: bool,
     pub no_pr: bool,
@@ -67,6 +57,7 @@ pub struct SubmitOptions {
     pub title: bool,
     pub body: bool,
     pub rerequest_review: bool,
+    pub native_stack_override: Option<NativeStackMode>,
     pub squash: bool,
     pub update_title: bool,
 }
@@ -78,6 +69,7 @@ struct PrPlan {
     publish_ref: String,
     publish_oid: Option<String>,
     uses_temporary_publish_ref: bool,
+    remote_oid_after_fetch: Option<String>,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
     /// Tip commit subject line (for auto-updating PR title)
@@ -94,6 +86,13 @@ struct PrPlan {
     // Track if this is a no-op (already synced)
     needs_push: bool,
     needs_pr_update: bool,
+    /// True only when the PR's base branch itself differs from the desired
+    /// parent — as opposed to `needs_pr_update`, which is also set by a plain
+    /// push with no base change. GitHub's native Stacked PRs API rejects any
+    /// `PATCH .../pulls/{n}` call that includes `base` once a PR is part of a
+    /// registered stack, even when the value is unchanged, so this must gate
+    /// the `update_pr_base` call separately to avoid firing it on every push.
+    needs_base_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
     // Branches imported with `stax get` are read-only support branches.
@@ -112,85 +111,6 @@ struct PublishSource {
     commit_range_base: String,
     oid: Option<String>,
     is_temporary: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PushSpec {
-    branch: String,
-    source_ref: String,
-    oid: Option<String>,
-}
-
-struct TemporaryPublishRefs {
-    workdir: PathBuf,
-    refs: Vec<String>,
-}
-
-impl TemporaryPublishRefs {
-    fn empty(workdir: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            refs: Vec::new(),
-        }
-    }
-}
-
-impl Drop for TemporaryPublishRefs {
-    fn drop(&mut self) {
-        for refname in &self.refs {
-            let _ = Command::new("git")
-                .args(["update-ref", "-d", refname])
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
-}
-
-struct TemporarySubmitWorktree {
-    workdir: PathBuf,
-    path: PathBuf,
-    active: bool,
-}
-
-impl TemporarySubmitWorktree {
-    fn new(workdir: &Path, path: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            path: path.to_path_buf(),
-            active: true,
-        }
-    }
-
-    fn remove(&mut self) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-
-        let remove = Command::new("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .current_dir(&self.workdir)
-            .output()
-            .context("Failed to remove temporary submit worktree")?;
-        if !remove.status.success() {
-            anyhow::bail!("{}", command_output_details("git worktree remove", &remove));
-        }
-
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for TemporarySubmitWorktree {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = Command::new("git")
-                .args(["worktree", "remove", "--force"])
-                .arg(&self.path)
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
 }
 
 #[derive(Default, Clone)]
@@ -335,8 +255,217 @@ fn resolve_is_draft_without_prompt(
     }
 }
 
+#[allow(dead_code)]
+pub(crate) trait SubmitPrompter {
+    fn answer(
+        &mut self,
+        request: &crate::application::SubmitPromptRequest,
+    ) -> Result<crate::application::SubmitPromptAnswer>;
+}
+
+#[allow(dead_code)]
+pub(crate) trait DefaultSubmitBackend {
+    type Prepared;
+
+    fn prepare(
+        &mut self,
+        options: crate::application::SubmitOptions,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<Self::Prepared>;
+
+    fn execute(
+        &mut self,
+        prepared: Self::Prepared,
+        answers: Vec<crate::application::SubmitPromptAnswer>,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<crate::application::OperationReceipt>;
+}
+
+#[allow(dead_code)]
+struct RepositorySubmitBackend<'a> {
+    session: &'a crate::application::RepositorySession,
+}
+
+impl DefaultSubmitBackend for RepositorySubmitBackend<'_> {
+    type Prepared = crate::application::PreparedSubmit;
+
+    fn prepare(
+        &mut self,
+        options: crate::application::SubmitOptions,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<Self::Prepared> {
+        self.session
+            .prepare_submit(options, reporter)
+            .map_err(Into::into)
+    }
+
+    fn execute(
+        &mut self,
+        prepared: Self::Prepared,
+        answers: Vec<crate::application::SubmitPromptAnswer>,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<crate::application::OperationReceipt> {
+        self.session
+            .execute_prepared_submit(prepared, answers, reporter)
+            .map_err(Into::into)
+    }
+}
+
+#[allow(dead_code)]
+struct TerminalSubmitPrompter;
+
+impl SubmitPrompter for TerminalSubmitPrompter {
+    fn answer(
+        &mut self,
+        request: &crate::application::SubmitPromptRequest,
+    ) -> Result<crate::application::SubmitPromptAnswer> {
+        let title = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("  Title")
+            .default(request.suggested_title.clone())
+            .interact_text()?;
+        let body = request.suggested_body.clone();
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("  PR type")
+            .items(PR_TYPE_OPTIONS)
+            .default(PR_TYPE_DEFAULT_INDEX)
+            .interact()?;
+        Ok(crate::application::SubmitPromptAnswer {
+            branch: request.branch.clone(),
+            title,
+            body,
+            mode: if choice == 0 {
+                crate::application::PullRequestMode::Draft
+            } else {
+                crate::application::PullRequestMode::Ready
+            },
+        })
+    }
+}
+
+struct CliOperationReporter {
+    quiet: bool,
+}
+
+impl crate::application::OperationReporter for CliOperationReporter {
+    fn report(&mut self, event: crate::application::OperationEvent) {
+        if self.quiet {
+            return;
+        }
+        match event {
+            crate::application::OperationEvent::Started(_) => {
+                eprintln!("  {}", "Validating repository...".dimmed());
+            }
+            crate::application::OperationEvent::Progress(progress) => {
+                let count = match progress.total {
+                    Some(total) => format!(" ({}/{total})", progress.completed),
+                    None => String::new(),
+                };
+                let branch = progress
+                    .branch
+                    .as_ref()
+                    .map(|branch| format!(" {}", branch.cyan()))
+                    .unwrap_or_default();
+                eprintln!("  {}{}{}", progress.message, branch, count);
+            }
+            crate::application::OperationEvent::Completed(_)
+            | crate::application::OperationEvent::Failed(_) => {}
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn run_default_with_prompter<B, P>(
+    scope: SubmitScope,
+    options: &SubmitOptions,
+    backend: &mut B,
+    prompter: &mut P,
+    reporter: &mut dyn crate::application::OperationReporter,
+) -> Result<crate::application::OperationReceipt>
+where
+    B: DefaultSubmitBackend,
+    B::Prepared: PreparedPromptRequests,
+    P: SubmitPrompter,
+{
+    let application_options = crate::application::SubmitOptions {
+        scope,
+        new_pull_requests: if options.publish {
+            crate::application::PullRequestMode::Ready
+        } else {
+            crate::application::PullRequestMode::Draft
+        },
+        fetch: !options.no_fetch,
+        prefetched: options.prefetched,
+        verify_hooks: !options.no_verify,
+        create_pull_requests: !options.no_pr,
+        reviewers: options.reviewers.clone(),
+        labels: options.labels.clone(),
+        assignees: options.assignees.clone(),
+        rerequest_review: options.rerequest_review,
+        native_stack_override: options.native_stack_override,
+        update_title: options.update_title,
+    };
+    let prepared = backend.prepare(application_options, reporter)?;
+    let prompt_requests = prepared_prompt_requests(&prepared);
+    let auto_accept_prompts = options.yes || options.no_prompt;
+    let answers = if auto_accept_prompts {
+        prompt_requests
+            .iter()
+            .map(|request| crate::application::SubmitPromptAnswer {
+                branch: request.branch.clone(),
+                title: request.suggested_title.clone(),
+                body: request.suggested_body.clone(),
+                mode: if options.publish {
+                    crate::application::PullRequestMode::Ready
+                } else {
+                    crate::application::PullRequestMode::Draft
+                },
+            })
+            .collect()
+    } else {
+        prompt_requests
+            .iter()
+            .map(|request| prompter.answer(request))
+            .collect::<Result<Vec<_>>>()?
+    };
+    backend.execute(prepared, answers, reporter)
+}
+
+#[allow(dead_code)]
+trait PreparedPromptRequests {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest];
+}
+
+impl PreparedPromptRequests for crate::application::PreparedSubmit {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest] {
+        self.prompt_requests()
+    }
+}
+
+impl PreparedPromptRequests for Vec<crate::application::SubmitPromptRequest> {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest] {
+        self
+    }
+}
+
+#[allow(dead_code)]
+fn prepared_prompt_requests<P: PreparedPromptRequests>(
+    prepared: &P,
+) -> &[crate::application::SubmitPromptRequest] {
+    prepared.prompt_requests()
+}
+
 pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
+    if options.dry_run {
+        return super::submit_plan::run(scope, &options);
+    }
+
+    if uses_application_default_submit(scope, &options) {
+        return run_application_default_submit(scope, &options);
+    }
+
     let SubmitOptions {
+        dry_run: _,
+        json: _,
         draft,
         publish,
         no_pr,
@@ -359,6 +488,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         title: ai_title,
         body: body_scope,
         rerequest_review,
+        native_stack_override,
         squash,
         update_title,
     } = options;
@@ -378,6 +508,8 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
     let single_stack_mode = config.submit.single_stack;
+    let stack_links_when_native = config.submit.stack_links_when_native;
+    let native_stack_mode = native_stack_override.unwrap_or(config.submit.native_stack);
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -425,14 +557,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let empty_branches: Vec<_> = branches_to_submit
         .iter()
         .filter(|b| {
-            if let Some(branch_info) = stack.branches.get(*b) {
-                if let Some(parent) = &branch_info.parent {
-                    if let Ok(branch_commit) = repo.branch_commit(b) {
-                        if let Ok(parent_commit) = repo.branch_commit(parent) {
-                            return branch_commit == parent_commit;
-                        }
-                    }
-                }
+            if let Some(branch_info) = stack.branches.get(*b)
+                && let Some(parent) = &branch_info.parent
+                && let Ok(branch_commit) = repo.branch_commit(b)
+                && let Ok(parent_commit) = repo.branch_commit(parent)
+            {
+                return branch_commit == parent_commit;
             }
             false
         })
@@ -620,8 +750,14 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         )?;
     }
 
-    let (publish_sources, _temporary_publish_refs) =
-        prepare_publish_sources_for_submit(&repo, &stack, scope, &branches_to_submit, quiet)?;
+    let (publish_sources, _temporary_publish_refs) = prepare_publish_sources_for_submit(
+        &repo,
+        &stack,
+        &branches_to_submit,
+        &empty_set,
+        quiet,
+        verbose,
+    )?;
 
     // Build plan - determine which PRs need create vs update
     let planning_timer = LiveTimer::maybe_new(!quiet, "Planning PR operations...");
@@ -659,84 +795,84 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
             // Best-effort metadata refresh when no-pr is used.
-            if !is_empty {
-                if let (Some(runtime), Some(forge_client)) =
+            if !is_empty
+                && let (Some(runtime), Some(forge_client)) =
                     (runtime.as_ref(), forge_client.as_ref())
-                {
-                    let mut found_pr: Option<PrInfoWithHead> = None;
+            {
+                let mut found_pr: Option<PrInfoWithHead> = None;
 
-                    if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                    let lookup_started_at = Instant::now();
+                    found_pr = runtime
+                        .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
+                        .ok();
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                }
+
+                if found_pr.is_none() {
+                    let lookup_started_at = Instant::now();
+                    found_pr = runtime
+                        .block_on(async { forge_client.find_open_pr_by_head(branch).await })
+                        .ok()
+                        .flatten();
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                }
+
+                if found_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
+                    full_scan_fallbacks += 1;
+                    if verbose && !quiet {
+                        println!(
+                            "    Falling back to full open PR scan for {} (metadata mismatch)",
+                            branch.cyan()
+                        );
+                    }
+                    if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
-                        found_pr = runtime
-                            .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
+                        open_prs_by_head = runtime
+                            .block_on(async { forge_client.list_open_prs_by_head().await })
                             .ok();
                         timings.open_pr_discovery += lookup_started_at.elapsed();
-                    }
-
-                    if found_pr.is_none() {
-                        let lookup_started_at = Instant::now();
-                        found_pr = runtime
-                            .block_on(async { forge_client.find_open_pr_by_head(branch).await })
-                            .ok()
-                            .flatten();
-                        timings.open_pr_discovery += lookup_started_at.elapsed();
-                    }
-
-                    if found_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
-                        full_scan_fallbacks += 1;
-                        if verbose && !quiet {
-                            println!(
-                                "    Falling back to full open PR scan for {} (metadata mismatch)",
-                                branch.cyan()
-                            );
-                        }
-                        if open_prs_by_head.is_none() {
-                            let lookup_started_at = Instant::now();
-                            open_prs_by_head = runtime
-                                .block_on(async { forge_client.list_open_prs_by_head().await })
-                                .ok();
-                            timings.open_pr_discovery += lookup_started_at.elapsed();
-                            if verbose && !quiet {
-                                if let Some(map) = &open_prs_by_head {
-                                    println!("      Cached {} open PRs", map.len());
-                                }
-                            }
-                        }
-                        if let Some(map) = &open_prs_by_head {
-                            found_pr = map.get(branch).cloned();
+                        if verbose
+                            && !quiet
+                            && let Some(map) = &open_prs_by_head
+                        {
+                            println!("      Cached {} open PRs", map.len());
                         }
                     }
+                    if let Some(map) = &open_prs_by_head {
+                        found_pr = map.get(branch).cloned();
+                    }
+                }
 
-                    if let Some(pr) = found_pr {
-                        existing_pr = Some(pr.info.number);
-                        let owner_matches = pr
-                            .head_label
-                            .as_ref()
-                            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
-                            .map(|owner| owner == remote_info.owner())
-                            .unwrap_or(false);
+                if let Some(pr) = found_pr {
+                    existing_pr = Some(pr.info.number);
+                    let owner_matches = pr
+                        .head_label
+                        .as_ref()
+                        .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+                        .map(|owner| owner == remote_info.owner())
+                        .unwrap_or(false);
 
-                        let needs_meta_update = meta
-                            .pr_info
-                            .as_ref()
-                            .map(|info| {
-                                info.number != pr.info.number
-                                    || info.state != pr.info.state
-                                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
-                            })
-                            .unwrap_or(true);
+                    let needs_meta_update = meta
+                        .pr_info
+                        .as_ref()
+                        .map(|info| {
+                            info.number != pr.info.number
+                                || info.state != pr.info.state
+                                || info.is_draft.unwrap_or(false) != pr.info.is_draft
+                        })
+                        .unwrap_or(true);
 
-                        if needs_meta_update && owner_matches {
-                            meta = BranchMetadata {
-                                pr_info: Some(crate::engine::metadata::PrInfo {
-                                    number: pr.info.number,
-                                    state: pr.info.state.clone(),
-                                    is_draft: Some(pr.info.is_draft),
-                                }),
-                                ..meta
-                            };
-                            meta.write(repo.inner(), branch)?;
-                        }
+                    if needs_meta_update && owner_matches {
+                        meta = BranchMetadata {
+                            pr_info: Some(crate::engine::metadata::PrInfo {
+                                number: pr.info.number,
+                                state: pr.info.state.clone(),
+                                is_draft: Some(pr.info.is_draft),
+                            }),
+                            ..meta
+                        };
+                        meta.write(repo.inner(), branch)?;
                     }
                 }
             }
@@ -748,6 +884,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr,
                 existing_pr_is_draft: None,
                 tip_commit_subject: None,
@@ -760,6 +900,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update: false,
+                needs_base_update: false,
                 is_empty,
                 is_imported,
             });
@@ -917,15 +1058,23 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 );
 
             // Check if PR base needs updating (not for empty branches)
-            let needs_pr_update = if is_empty {
-                false
-            } else if is_imported {
+            let needs_pr_update = if is_empty || is_imported {
                 false
             } else if let Some(pr) = &existing_pr {
                 pr.info.base != base || needs_push
             } else {
                 true // New PR always needs creation
             };
+
+            // Unlike `needs_pr_update` (also true on a plain push with no base
+            // change), this is only true when the base itself is actually
+            // wrong — the one case where calling `update_pr_base` is required.
+            let needs_base_update = !is_empty
+                && !is_imported
+                && existing_pr
+                    .as_ref()
+                    .map(|pr| pr.info.base != base)
+                    .unwrap_or(false);
 
             // Capture tip commit subject for auto-updating PR title on existing PRs.
             // Only computed when the user opts in via `--update-title` so default submits
@@ -949,6 +1098,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 tip_commit_subject,
@@ -961,6 +1114,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update,
+                needs_base_update,
                 is_empty,
                 is_imported,
             });
@@ -1360,13 +1514,13 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             if squash {
                 if plan.uses_temporary_publish_ref {
                     anyhow::bail!(
-                        "--squash cannot be combined with scoped submit of a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
+                        "--squash cannot be combined with submitting a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
                     );
                 }
-                if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
-                    if !quiet {
-                        println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
-                    }
+                if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent)
+                    && !quiet
+                {
+                    println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
                 }
             }
             pushed_branches.push(PushSpec {
@@ -1376,6 +1530,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     .publish_oid
                     .clone()
                     .or_else(|| rev_parse_ref(repo.workdir().ok(), &plan.publish_ref)),
+                expected_remote_oid: plan.remote_oid_after_fetch.clone(),
             });
         }
 
@@ -1511,18 +1666,43 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         &format!("Updating {} #{}...", plan.branch, existing_pr_number),
                     );
 
-                    // Update base if needed
-                    client
-                        .update_pr_base(existing_pr_number, &plan.parent)
-                        .await?;
+                    // Update base only when it actually differs — `needs_pr_update`
+                    // is also true for a plain push with no base change, and GitHub's
+                    // native Stacked PRs API rejects *any* base PATCH (even a no-op)
+                    // once a PR is registered in a stack.
+                    if plan.needs_base_update
+                        && let Err(e) = client
+                            .update_pr_base(existing_pr_number, &plan.parent)
+                            .await
+                    {
+                        if is_native_stack_base_locked_error(&e) {
+                            if !quiet {
+                                println!(
+                                    "      {} {}",
+                                    "note:".dimmed(),
+                                    format!(
+                                        "skipped base update for #{existing_pr_number} — \
+                                             GitHub manages the base for PRs registered in a \
+                                             native Stack; run `st stack link` to re-sync"
+                                    )
+                                    .dimmed()
+                                );
+                            }
+                        } else {
+                            LiveTimer::maybe_finish_warn(update_timer, "failed");
+                            return Err(e).context(format!(
+                                "Failed to update PR base for #{existing_pr_number}"
+                            ));
+                        }
+                    }
 
                     // Auto-update PR title from tip commit subject when it has changed
-                    if plan.needs_title_update {
-                        if let Some(ref commit_subject) = plan.tip_commit_subject {
-                            client
-                                .update_pr_title(existing_pr_number, commit_subject)
-                                .await?;
-                        }
+                    if plan.needs_title_update
+                        && let Some(ref commit_subject) = plan.tip_commit_subject
+                    {
+                        client
+                            .update_pr_title(existing_pr_number, commit_subject)
+                            .await?;
                     }
 
                     apply_ai_pr_content_updates(
@@ -1589,6 +1769,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(pr.number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 } else {
                     // Toggle draft status even when no other update is needed
@@ -1665,6 +1846,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 }
             } else {
@@ -1725,6 +1907,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
                     is_imported: plan.is_imported,
+                    depth: stack.ancestors(&plan.branch).len(),
                 });
             }
         }
@@ -1752,13 +1935,26 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             &imported_stack_branches,
         );
 
+        let native_stack_linked = maybe_link_native_stack(
+            repo.workdir()?,
+            &remote_info,
+            &stack.trunk,
+            native_stack_mode,
+            &stack,
+            &stack_link_contexts,
+            quiet,
+        )?;
+
         let stack_links_started_at = Instant::now();
-        let effective_stack_links_mode =
-            if single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1 {
-                StackLinksMode::Off
-            } else {
-                stack_links_mode
-            };
+        let native_forces_links_off =
+            native_stack_linked && stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            stack_links_mode
+        };
         for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
@@ -1870,6 +2066,270 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     Ok(())
 }
 
+fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> bool {
+    matches!(scope, SubmitScope::Stack)
+        && options.no_pr
+        && !options.dry_run
+        && !options.json
+        && !options.ai
+        && !options.title
+        && !options.body
+        && !options.squash
+        && !options.edit
+        && !options.prefetched
+        && !options.no_template
+        && options.template.is_none()
+        && !options.update_title
+}
+
+fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
+    if options.force && !options.quiet {
+        eprintln!(
+            "  {} --force is deprecated and has no effect (see issue #222)",
+            "warning:".yellow()
+        );
+    }
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    if !options.quiet {
+        println!("{} {}...", "Submitting".bold(), scope.label().bold());
+    }
+    let session = crate::application::RepositorySession::open(repo.workdir()?)?;
+    let mut backend = RepositorySubmitBackend { session: &session };
+    let mut prompter = TerminalSubmitPrompter;
+    let mut reporter = CliOperationReporter {
+        quiet: options.quiet,
+    };
+    let receipt =
+        run_default_with_prompter(scope, options, &mut backend, &mut prompter, &mut reporter)?;
+    sync_application_submit_links(&repo, &current, &receipt, options)?;
+    render_application_submit_receipt(&receipt, &current, options.open, options.quiet);
+    Ok(())
+}
+
+fn sync_application_submit_links(
+    repo: &GitRepo,
+    current: &str,
+    receipt: &crate::application::OperationReceipt,
+    options: &SubmitOptions,
+) -> Result<()> {
+    if options.no_pr {
+        return refresh_application_no_pr_metadata(repo, receipt);
+    }
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return Ok(()),
+    };
+    if pull_requests.is_empty() {
+        return Ok(());
+    }
+
+    let stack = Stack::load(repo)?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let imported_branches = imported_branches_for_stack(repo, &stack, current)?;
+    let mut pr_infos = pull_requests
+        .iter()
+        .map(|pull_request| StackPrInfo {
+            branch: pull_request.branch.clone(),
+            pr_number: Some(pull_request.number),
+            is_imported: imported_branches.contains(&pull_request.branch),
+            depth: stack.ancestors(&pull_request.branch).len(),
+        })
+        .collect::<Vec<_>>();
+    let created_pr_numbers = pull_requests
+        .iter()
+        .filter(|pull_request| {
+            matches!(
+                pull_request.change,
+                crate::application::PullRequestChange::Created
+            )
+        })
+        .map(|pull_request| pull_request.number)
+        .collect::<HashSet<_>>();
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = ForgeClient::new(&remote_info)?;
+    runtime.block_on(async {
+        if config.submit.stack_links != StackLinksMode::Off {
+            discover_stack_link_pr_infos(
+                &client,
+                &stack,
+                current,
+                &imported_branches,
+                &mut pr_infos,
+            )
+            .await?;
+        }
+        let stack_link_contexts =
+            stack_link_contexts_for_sync(&stack, current, &pr_infos, &imported_branches);
+        let native_stack_mode = options
+            .native_stack_override
+            .unwrap_or(config.submit.native_stack);
+        let native_stack_linked = maybe_link_native_stack(
+            repo.workdir()?,
+            &remote_info,
+            &stack.trunk,
+            native_stack_mode,
+            &stack,
+            &stack_link_contexts,
+            options.quiet,
+        )?;
+
+        let native_forces_links_off = native_stack_linked
+            && config.submit.stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            config.submit.single_stack == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            config.submit.stack_links
+        };
+
+        for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
+            let stack_links = generate_stack_links_markdown(
+                stack_link_pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
+
+            match effective_stack_links_mode {
+                StackLinksMode::Comment | StackLinksMode::Both => {
+                    if created_pr_numbers.contains(pr_number) {
+                        client
+                            .create_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    } else {
+                        client
+                            .update_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    }
+                }
+                StackLinksMode::Body | StackLinksMode::Off => {
+                    client.delete_stack_comment(*pr_number).await?;
+                }
+            }
+
+            let current_body = client.get_pr_body(*pr_number).await?;
+            let desired_body = match effective_stack_links_mode {
+                StackLinksMode::Body | StackLinksMode::Both => {
+                    upsert_stack_links_in_body(&current_body, &stack_links)
+                }
+                StackLinksMode::Comment | StackLinksMode::Off => {
+                    remove_stack_links_from_body(&current_body)
+                }
+            };
+
+            if desired_body != current_body {
+                client.update_pr_body(*pr_number, &desired_body).await?;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    Ok(())
+}
+
+fn refresh_application_no_pr_metadata(
+    repo: &GitRepo,
+    receipt: &crate::application::OperationReceipt,
+) -> Result<()> {
+    if receipt.affected_branches.is_empty() {
+        return Ok(());
+    }
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = match ForgeClient::new(&remote_info) {
+        Ok(client) => client,
+        Err(_) => return Ok(()),
+    };
+
+    for branch in &receipt.affected_branches {
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        let found_pr = runtime
+            .block_on(async { client.find_open_pr_by_head(branch).await })
+            .ok()
+            .flatten();
+        let Some(pr) = found_pr else {
+            continue;
+        };
+        let owner_matches = pr
+            .head_label
+            .as_ref()
+            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+            .map(|owner| owner == remote_info.owner())
+            .unwrap_or(false);
+        if !owner_matches {
+            continue;
+        }
+        let needs_meta_update = meta
+            .pr_info
+            .as_ref()
+            .map(|info| {
+                info.number != pr.info.number
+                    || info.state != pr.info.state
+                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
+            })
+            .unwrap_or(true);
+        if needs_meta_update {
+            let updated_meta = BranchMetadata {
+                pr_info: Some(crate::engine::metadata::PrInfo {
+                    number: pr.info.number,
+                    state: pr.info.state.clone(),
+                    is_draft: Some(pr.info.is_draft),
+                }),
+                ..meta
+            };
+            updated_meta.write(repo.inner(), branch)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn render_application_submit_receipt(
+    receipt: &crate::application::OperationReceipt,
+    current: &str,
+    open: bool,
+    quiet: bool,
+) {
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return,
+    };
+    if !quiet {
+        println!();
+        println!("{}", "✓ Stack submitted!".green().bold());
+        for pull_request in pull_requests {
+            println!("  {} {}", "✓".green(), pull_request.url);
+        }
+    }
+    if open {
+        if let Some(url) = pull_requests
+            .iter()
+            .find(|pull_request| pull_request.branch == current)
+            .map(|pull_request| pull_request.url.as_str())
+        {
+            if !quiet {
+                println!("Opening {} in browser...", url.cyan());
+            }
+            open_url_in_browser(url);
+        } else if !quiet {
+            eprintln!(
+                "  {} No PR found for current branch {}; nothing to open.",
+                "!".yellow(),
+                current.cyan()
+            );
+        }
+    }
+}
+
 /// Squash all commits on a branch down to one commit above the base.
 /// Uses `git reset --soft` + `git commit` to preserve the tree while collapsing history.
 fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()> {
@@ -1958,58 +2418,6 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
     Ok(())
 }
 
-fn push_branches(
-    workdir: &std::path::Path,
-    remote: &str,
-    specs: &[PushSpec],
-    no_verify: bool,
-) -> Result<()> {
-    let mut args = vec!["push", "--porcelain", "--force-with-lease"];
-    if no_verify {
-        args.push("--no-verify");
-    }
-    args.extend(["-u", remote]);
-    let refspecs = specs
-        .iter()
-        .map(|spec| format!("{}:refs/heads/{}", spec.source_ref, spec.branch))
-        .collect::<Vec<_>>();
-    args.extend(refspecs.iter().map(String::as_str));
-
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workdir)
-        .output()
-        .context("Failed to push branches")?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let rejected = rejected_push_branches(&stdout, specs);
-        let details = push_failure_details(&stdout, &stderr);
-        let branch_list = specs
-            .iter()
-            .map(|spec| spec.branch.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !rejected.is_empty() {
-            let mut message = format!(
-                "Failed to push branches {branch_list}: rejected {}",
-                rejected.join(", ")
-            );
-            if !details.is_empty() {
-                message.push('\n');
-                message.push_str(&details);
-            }
-            anyhow::bail!("{message}");
-        }
-        if details.is_empty() {
-            anyhow::bail!("Failed to push branches: {branch_list}");
-        }
-        anyhow::bail!("Failed to push branches {branch_list}:\n{details}");
-    }
-    Ok(())
-}
-
 fn stack_pr_infos_for_links(
     stack: &Stack,
     current: &str,
@@ -2033,11 +2441,16 @@ fn stack_pr_infos_for_links(
             let is_imported = processed_info
                 .map(|info| info.is_imported)
                 .unwrap_or_else(|| imported_branches.contains(&branch));
+            // Depth from trunk (not list position) so a forked stack's
+            // siblings render at the same indent instead of nesting under
+            // one another — see `generate_stack_links_markdown`.
+            let depth = stack.ancestors(&branch).len();
 
             StackPrInfo {
                 branch,
                 pr_number,
                 is_imported,
+                depth,
             }
         })
         .collect()
@@ -2069,6 +2482,7 @@ async fn discover_stack_link_pr_infos(
                 branch: info.branch,
                 pr_number: Some(pr.info.number),
                 is_imported: info.is_imported,
+                depth: info.depth,
             });
         }
     }
@@ -2118,6 +2532,181 @@ fn stack_link_contexts_for_sync(
         .collect()
 }
 
+/// True when `branches` doesn't form a single linear chain — i.e. some
+/// branch in the set has more than one child branch also in the set.
+///
+/// GitHub's native Stack feature can only represent one straight line, so
+/// handing `gh stack link` a forked branch set is unsafe: gh-stack sometimes
+/// rejects it outright (see `gh_stack::is_stack_fork_conflict`), but it can
+/// also silently *accept* it and linearize the PRs in whatever order it was
+/// given — misrepresenting which branch each PR actually builds on (e.g. a
+/// PR appearing to depend on a sibling instead of their shared parent).
+/// stax must detect this itself before ever invoking `gh stack link`, not
+/// rely on gh-stack to catch it.
+fn stack_has_fork(stack: &Stack, branches: &HashSet<&str>) -> bool {
+    branches.iter().any(|branch| {
+        stack
+            .branches
+            .get(*branch)
+            .map(|info| {
+                info.children
+                    .iter()
+                    .filter(|child| branches.contains(child.as_str()))
+                    .count()
+                    > 1
+            })
+            .unwrap_or(false)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn maybe_link_native_stack(
+    workdir: &Path,
+    remote_info: &RemoteInfo,
+    trunk: &str,
+    mode: NativeStackMode,
+    stack: &Stack,
+    stack_link_contexts: &[(u64, String, Vec<StackPrInfo>)],
+    quiet: bool,
+) -> Result<bool> {
+    if mode == NativeStackMode::Off || remote_info.forge != ForgeType::GitHub {
+        return Ok(false);
+    }
+
+    let pr_numbers = stack_link_contexts
+        .iter()
+        .map(|(pr_number, _, _)| *pr_number)
+        .collect::<Vec<_>>();
+    // `gh stack link` requires at least two PRs; a single-PR stack cannot form a
+    // native stack. Skip quietly — once a second PR joins the stack, the next
+    // submit registers both.
+    if pr_numbers.len() < 2 {
+        return Ok(false);
+    }
+
+    // Cheap cached check before spawning any `gh` subprocess: if this repo has
+    // already been marked feature-disabled, `auto` mode stays quiet without
+    // probing the extension on every submit.
+    if mode == NativeStackMode::Auto && gh_stack::feature_enabled(workdir) == FeatureState::Disabled
+    {
+        return Ok(false);
+    }
+
+    let extension_status = gh_stack::extension_status();
+    if extension_status != ExtensionStatus::Installed {
+        if mode == NativeStackMode::Link && !quiet {
+            print_native_stack_unavailable_note(extension_status);
+        }
+        return Ok(false);
+    }
+
+    let branch_set: HashSet<&str> = stack_link_contexts
+        .iter()
+        .map(|(_, branch, _)| branch.as_str())
+        .collect();
+    if stack_has_fork(stack, &branch_set) {
+        if !quiet {
+            println!(
+                "  {} {}",
+                "note:".dimmed(),
+                "native GitHub Stack link skipped: this local stack has forked — a branch \
+                 here has more than one child branch, and GitHub's native Stack feature only \
+                 supports one linear chain at a time. stax's own PR body/comment stack links \
+                 still keep this branch's PRs connected."
+                    .dimmed()
+            );
+        }
+        return Ok(false);
+    }
+
+    match gh_stack::link_stack(&pr_numbers, trunk, &remote_info.name) {
+        LinkOutcome::Linked { stack_number } => {
+            gh_stack::set_feature_enabled(workdir, true)?;
+            if !quiet {
+                let message = stack_number
+                    .map(|number| format!("Native GitHub Stack #{number} linked"))
+                    .unwrap_or_else(|| "Native GitHub Stack linked".to_string());
+                println!("{} {}", "✓".green(), message.dimmed());
+            }
+            Ok(true)
+        }
+        LinkOutcome::FeatureDisabled { .. } => {
+            gh_stack::set_feature_enabled(workdir, false)?;
+            Ok(false)
+        }
+        // Not a durable repo-level fact (unlike `FeatureDisabled`) — the
+        // active `gh` account may change on a later run — so this must
+        // never be cached.
+        LinkOutcome::AuthTokenUnsupported { .. } => {
+            if !quiet {
+                println!(
+                    "  {} {}",
+                    "note:".dimmed(),
+                    "native GitHub Stack link skipped: no OAuth-authenticated `gh` account found \
+                     (Personal Access Tokens are not supported during private preview). Run `gh \
+                     auth login` to add one."
+                        .dimmed()
+                );
+            }
+            Ok(false)
+        }
+        LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
+        LinkOutcome::NonAppendUpdate {
+            message,
+            stack_number,
+        } => {
+            if !quiet {
+                let unlink_command = stack_number
+                    .map(|number| format!("`st stack unlink {number}`"))
+                    .unwrap_or_else(|| "`st stack unlink <stack-number>`".to_string());
+                let note = format!(
+                    "native GitHub Stack link skipped: remote Stack updates are append-only. \
+                     Remove it with {unlink_command}, then retry. gh-stack said: {message}"
+                );
+                println!("  {} {}", "note:".dimmed(), note.dimmed());
+            }
+            Ok(false)
+        }
+        LinkOutcome::Failed { message } => {
+            if !quiet {
+                let note = if gh_stack::is_stack_fork_conflict(&message) {
+                    "native GitHub Stack link skipped: this stack has forked — another branch \
+                     sharing the same ancestor PRs is already registered as a native Stack, and \
+                     GitHub's native Stack feature only supports one linear chain at a time. \
+                     stax's own PR body/comment stack links still keep this branch's PRs \
+                     connected."
+                        .to_string()
+                } else {
+                    format!("native GitHub Stack link skipped: {message}")
+                };
+                println!("  {} {}", "note:".dimmed(), note.dimmed());
+            }
+            Ok(false)
+        }
+    }
+}
+
+fn print_native_stack_unavailable_note(status: ExtensionStatus) {
+    let note = match status {
+        ExtensionStatus::NoGh => {
+            "native GitHub Stack link skipped: GitHub CLI `gh` is not installed or not usable. \
+             Install `gh`, run `gh auth login`, then retry; `st doctor --fix` can help diagnose setup."
+        }
+        ExtensionStatus::NoExtension => {
+            "native GitHub Stack link skipped: gh-stack extension missing. Run `st doctor --fix` \
+             or `gh extension install github/gh-stack`, then retry."
+        }
+        ExtensionStatus::Outdated => {
+            "native GitHub Stack link skipped: gh-stack extension is outdated and lacks \
+             `gh stack link`. Run `st doctor --fix` or `gh extension upgrade stack`, then retry."
+        }
+        ExtensionStatus::Installed => return,
+    };
+
+    println!("  {} {}", "note:".dimmed(), note.dimmed());
+}
+
+#[cfg(test)]
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
     porcelain
         .lines()
@@ -2146,27 +2735,12 @@ fn push_failure_details(stdout: &str, stderr: &str) -> String {
     }
 }
 
-fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
-    let branches = match scope {
-        SubmitScope::Stack => stack.current_stack(current),
-        SubmitScope::Downstack => {
-            let mut ancestors = stack.ancestors(current);
-            ancestors.reverse();
-            ancestors.push(current.to_string());
-            ancestors
-        }
-        SubmitScope::Upstack => {
-            let mut upstack = vec![current.to_string()];
-            upstack.extend(stack.descendants(current));
-            upstack
-        }
-        SubmitScope::Branch => vec![current.to_string()],
-    };
-
-    branches
-        .into_iter()
-        .filter(|branch| branch != &stack.trunk)
-        .collect()
+pub(crate) fn resolve_branches_for_scope(
+    stack: &Stack,
+    current: &str,
+    scope: SubmitScope,
+) -> Vec<String> {
+    crate::application::submit::branches_for_submit_scope(stack, current, scope)
 }
 
 /// Ref names to pass to `git fetch --no-tags <remote> ...` before submit (trunk, submitted branches,
@@ -2273,12 +2847,12 @@ async fn discover_existing_pr(
     let mut existing_pr = None;
     let had_metadata_pr = metadata_pr_number.is_some();
 
-    if let Some(pr_number) = metadata_pr_number {
-        if let Ok(pr) = forge_client.get_pr_with_head(pr_number).await {
-            let state = pr.info.state.to_ascii_lowercase();
-            if pr.head == branch && matches!(state.as_str(), "open" | "opened") {
-                existing_pr = Some(pr);
-            }
+    if let Some(pr_number) = metadata_pr_number
+        && let Ok(pr) = forge_client.get_pr_with_head(pr_number).await
+    {
+        let state = pr.info.state.to_ascii_lowercase();
+        if pr.head == branch && matches!(state.as_str(), "open" | "opened") {
+            existing_pr = Some(pr);
         }
     }
 
@@ -2325,16 +2899,13 @@ fn create_pr_failure_context(plan: &PrPlan) -> String {
 fn prepare_publish_sources_for_submit(
     repo: &GitRepo,
     stack: &Stack,
-    scope: SubmitScope,
     branches_to_submit: &[String],
+    empty_set: &HashSet<&String>,
     quiet: bool,
+    verbose: bool,
 ) -> Result<(HashMap<String, PublishSource>, TemporaryPublishRefs)> {
     let workdir = repo.workdir()?;
-    if !matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
-        return Ok((HashMap::new(), TemporaryPublishRefs::empty(workdir)));
-    }
-
-    let mut sources = HashMap::new();
+    let mut sources: HashMap<String, PublishSource> = HashMap::new();
     let temp_root = std::env::temp_dir().join(format!(
         "stax-submit-{}-{}",
         std::process::id(),
@@ -2342,49 +2913,114 @@ fn prepare_publish_sources_for_submit(
     ));
     let mut temporary_refs = TemporaryPublishRefs::empty(workdir);
 
-    for branch in branches_to_submit {
-        let meta = BranchMetadata::read(repo.inner(), branch)?
-            .with_context(|| format!("No metadata for branch {}", branch))?;
-        if is_imported_branch(&meta) {
-            continue;
+    // Work out up-front which branches actually need a rebase, so progress can
+    // be reported as "(i/N)" rather than leaving the user staring at nothing.
+    // (branch, upstream revision to rebase from, ref to rebase onto, temp ref)
+    let mut planned: Vec<(String, String, String, String)> = Vec::new();
+    // (empty branch, the parent whose prepared ref it inherits)
+    let mut reused_parent_sources: Vec<(String, String)> = Vec::new();
+    {
+        // Mirrors `sources` while planning, since the real refs don't exist yet.
+        let mut planned_sources: HashMap<String, PublishSource> = HashMap::new();
+        for branch in branches_to_submit {
+            let meta = BranchMetadata::read(repo.inner(), branch)?
+                .with_context(|| format!("No metadata for branch {}", branch))?;
+            if is_imported_branch(&meta) {
+                continue;
+            }
+
+            let parent_source = planned_sources.get(&meta.parent_branch_name).cloned();
+            let parent_will_publish_from_temp = parent_source.is_some();
+            let branch_needs_temp = stack
+                .branches
+                .get(branch)
+                .map(|br| br.needs_restack)
+                .unwrap_or(false)
+                || parent_will_publish_from_temp;
+
+            if !branch_needs_temp {
+                continue;
+            }
+
+            // An empty branch has, by definition, the same tip commit as its
+            // parent, so its rebased tip is exactly the parent's rebased tip.
+            // Reuse the parent's prepared ref instead of paying for a whole
+            // worktree checkout + rebase + teardown that cannot change anything.
+            if empty_set.contains(branch) {
+                if let Some(parent_source) = parent_source {
+                    planned_sources.insert(
+                        branch.clone(),
+                        PublishSource {
+                            commit_range_base: parent_source.source_ref.clone(),
+                            source_ref: parent_source.source_ref,
+                            oid: None,
+                            is_temporary: true,
+                        },
+                    );
+                    reused_parent_sources.push((branch.clone(), meta.parent_branch_name.clone()));
+                }
+                // With no parent temp ref, the branch already points at its
+                // parent's tip, so `refs/heads/<branch>` is already correct.
+                continue;
+            }
+
+            let onto_ref = parent_source
+                .map(|source| source.source_ref)
+                .unwrap_or_else(|| meta.parent_branch_name.clone());
+
+            // Placeholder: only `source_ref` is read while planning, and the
+            // real ref name is computed here so children chain onto it.
+            let temp_ref = format!(
+                "refs/stax/submit/{}/{}",
+                chrono_like_timestamp(),
+                hex_ref_component(branch)
+            );
+            planned_sources.insert(
+                branch.clone(),
+                PublishSource {
+                    source_ref: temp_ref.clone(),
+                    commit_range_base: onto_ref.clone(),
+                    oid: None,
+                    is_temporary: true,
+                },
+            );
+            planned.push((
+                branch.clone(),
+                meta.parent_branch_revision.clone(),
+                onto_ref,
+                temp_ref,
+            ));
         }
+    }
 
-        let parent_source_ref = sources
-            .get(&meta.parent_branch_name)
-            .map(|source: &PublishSource| source.source_ref.clone());
-        let parent_will_publish_from_temp = parent_source_ref.is_some();
-        let branch_needs_temp = stack
-            .branches
-            .get(branch)
-            .map(|br| br.needs_restack)
-            .unwrap_or(false)
-            || parent_will_publish_from_temp;
+    let total = planned.len();
+    let mut worktree = ReusableSubmitWorktree::new(workdir, &temp_root);
 
-        if !branch_needs_temp {
-            continue;
-        }
-
-        let onto_ref = parent_source_ref.unwrap_or_else(|| meta.parent_branch_name.clone());
-        let temp_ref = format!(
-            "refs/stax/submit/{}/{}",
-            chrono_like_timestamp(),
-            hex_ref_component(branch)
+    for (index, (branch, upstream, onto_ref, temp_ref)) in planned.into_iter().enumerate() {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!(
+                "Preparing restack {}/{}: {}...",
+                index + 1,
+                total,
+                truncate_branch_label(&branch)
+            ),
         );
-        let temp_worktree = temp_root.join(hex_ref_component(branch));
-        let oid = temporary_rebased_head(
-            workdir,
-            &temp_worktree,
-            branch,
-            &onto_ref,
-            &meta.parent_branch_revision,
-        )
-        .with_context(|| {
-            format!(
-                "Could not prepare temporary restack for scoped submit of '{}'.\n\
-                 Run `stax restack` to resolve it locally, then retry submit.",
-                branch
-            )
-        })?;
+
+        let oid = match worktree.rebased_head(&branch, &onto_ref, &upstream) {
+            Ok(oid) => oid,
+            Err(err) => {
+                LiveTimer::maybe_finish_warn(timer, "FAILED");
+                return Err(err).with_context(|| {
+                    format!(
+                        "Could not prepare temporary restack for submit of '{}'.\n\
+                         Run `stax restack` to resolve it locally, then retry submit.",
+                        branch
+                    )
+                });
+            }
+        };
+        LiveTimer::maybe_finish_ok(timer, "done");
 
         update_ref(workdir, &temp_ref, &oid)?;
         temporary_refs.refs.push(temp_ref.clone());
@@ -2399,80 +3035,358 @@ fn prepare_publish_sources_for_submit(
         );
     }
 
-    if !sources.is_empty() && !quiet {
-        println!(
-            "  {} Prepared {} temporary restack {} for scoped submit",
-            "▸".dimmed(),
-            sources.len().to_string().cyan(),
-            if sources.len() == 1 { "ref" } else { "refs" }
+    let (worktrees_created, replayed) = worktree.finish();
+
+    // Empty branches inherit their parent's freshly-created ref. Processed in
+    // stack order, so a chain of empty branches inherits transitively.
+    for (branch, parent) in reused_parent_sources {
+        let Some(parent_source) = sources.get(&parent).cloned() else {
+            continue;
+        };
+        sources.insert(
+            branch,
+            PublishSource {
+                commit_range_base: parent_source.source_ref.clone(),
+                source_ref: parent_source.source_ref,
+                oid: parent_source.oid,
+                is_temporary: true,
+            },
         );
     }
 
-    if let Err(err) = remove_path_if_exists(&temp_root) {
-        if !quiet {
-            eprintln!(
-                "  {} could not remove temporary submit worktree root {}: {}",
-                "warning:".yellow(),
-                temp_root.display(),
-                err
+    let prepared_refs = temporary_refs.refs.len();
+    if prepared_refs > 0 && !quiet {
+        println!(
+            "  {} Prepared {} temporary restack {} for submit",
+            "▸".dimmed(),
+            prepared_refs.to_string().cyan(),
+            if prepared_refs == 1 { "ref" } else { "refs" }
+        );
+        if verbose {
+            println!(
+                "    {} {} rebase(s): {} replayed in-memory, {} worktree(s) created",
+                "▸".dimmed(),
+                total,
+                replayed,
+                worktrees_created
             );
         }
+    }
+
+    if let Err(err) = remove_path_if_exists(&temp_root)
+        && !quiet
+    {
+        eprintln!(
+            "  {} could not remove temporary submit worktree root {}: {}",
+            "warning:".yellow(),
+            temp_root.display(),
+            err
+        );
     }
 
     Ok((sources, temporary_refs))
 }
 
-fn temporary_rebased_head(
+fn truncate_branch_label(branch: &str) -> String {
+    const MAX: usize = 40;
+    if branch.chars().count() <= MAX {
+        return branch.to_string();
+    }
+    let kept: String = branch.chars().take(MAX - 1).collect();
+    format!("{kept}…")
+}
+
+/// Replay `upstream..branch` onto `onto_ref` entirely in the object database.
+///
+/// A temporary restack only needs the resulting commit id — nobody ever looks
+/// at the files. `git merge-tree --write-tree` performs the three-way merge for
+/// each commit and writes the result straight to the object store, so this does
+/// the same work as `git rebase --onto` without materialising a working tree.
+/// On a 95k-file repository that is the difference between ~0.3s and ~45s.
+///
+/// Returns `Ok(None)` when the replay cannot be trusted and the caller should
+/// fall back to a real worktree rebase. That is deliberately conservative: it
+/// bails on anything where `git rebase` would do something more subtle than a
+/// straight three-way merge per commit.
+fn replay_rebase_in_odb(
     workdir: &Path,
-    temp_worktree: &Path,
     branch: &str,
     onto_ref: &str,
     upstream: &str,
-) -> Result<String> {
-    if let Some(parent) = temp_worktree.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create temporary directory {}", parent.display())
-        })?;
+) -> Result<Option<String>> {
+    // Signing has to be done by git itself; never silently drop a signature.
+    if git_config_is_true(workdir, "commit.gpgsign") {
+        return Ok(None);
     }
 
-    let add = Command::new("git")
-        .args(["worktree", "add", "--detach"])
-        .arg(temp_worktree)
-        .arg(branch)
+    let range = format!("{upstream}..{branch}");
+
+    // `git rebase` flattens or drops merge commits; a per-commit three-way
+    // merge would quietly do something different.
+    match git_stdout(workdir, &["rev-list", "--merges", "--count", &range]) {
+        Some(count) if count.trim() != "0" => return Ok(None),
+        None => return Ok(None),
+        _ => {}
+    }
+
+    let Some(commits) = git_stdout(workdir, &["rev-list", "--reverse", &range]) else {
+        return Ok(None);
+    };
+
+    let Some(mut base) = git_stdout(workdir, &["rev-parse", &format!("{onto_ref}^{{commit}}")])
+        .map(|oid| oid.trim().to_string())
+        .filter(|oid| !oid.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    for commit in commits.split_whitespace() {
+        // The commit's own parent is the merge base for cherry-picking it.
+        // A root commit has none, so let the worktree path deal with it.
+        let Some(parent) = git_stdout(workdir, &["rev-parse", &format!("{commit}^")]) else {
+            return Ok(None);
+        };
+        let parent = parent.trim().to_string();
+
+        let merged = Command::new("git")
+            .args([
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                &format!("--merge-base={parent}"),
+                &base,
+                commit,
+            ])
+            .current_dir(workdir)
+            .output()
+            .context("Failed to replay commit for temporary restack")?;
+        if !merged.status.success() {
+            // Conflict: fall back so the user gets git's real conflict output.
+            return Ok(None);
+        }
+        let tree = String::from_utf8_lossy(&merged.stdout).trim().to_string();
+        if tree.is_empty() {
+            return Ok(None);
+        }
+
+        // A commit that replays to nothing is dropped, matching rebase's default.
+        let base_tree = git_stdout(workdir, &["rev-parse", &format!("{base}^{{tree}}")])
+            .map(|oid| oid.trim().to_string())
+            .unwrap_or_default();
+        if tree == base_tree {
+            continue;
+        }
+
+        // `--format=%B` appends its own newline, which `commit-tree` would store
+        // verbatim, producing a message one byte longer than the one `git
+        // rebase` keeps. `-z` terminates with NUL instead, so dropping that
+        // single byte leaves the exact original message. Kept as raw bytes so a
+        // non-UTF-8 message survives untouched.
+        let Some(mut message) =
+            git_stdout_bytes(workdir, &["log", "-1", "--format=%B", "-z", commit])
+        else {
+            return Ok(None);
+        };
+        if message.last() == Some(&0) {
+            message.pop();
+        }
+
+        // Author identity has to travel through environment variables, so it
+        // must be valid UTF-8; bail rather than mangle an unusual identity.
+        let (Some(author_name), Some(author_email), Some(author_date)) = (
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%an", commit]),
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%ae", commit]),
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%aI", commit]),
+        ) else {
+            return Ok(None);
+        };
+
+        // Author identity is carried over and the committer becomes the current
+        // user, exactly as `git rebase` does.
+        let mut child = Command::new("git")
+            .args(["commit-tree", &tree, "-p", &base])
+            .env("GIT_AUTHOR_NAME", &author_name)
+            .env("GIT_AUTHOR_EMAIL", &author_email)
+            .env("GIT_AUTHOR_DATE", &author_date)
+            .current_dir(workdir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to write replayed commit")?;
+        {
+            use std::io::Write;
+            let stdin = child
+                .stdin
+                .as_mut()
+                .context("Failed to write replayed commit message")?;
+            stdin.write_all(&message)?;
+        }
+        let created = child
+            .wait_with_output()
+            .context("Failed to write replayed commit")?;
+        if !created.status.success() {
+            return Ok(None);
+        }
+        base = String::from_utf8_lossy(&created.stdout).trim().to_string();
+        if base.is_empty() {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(base))
+}
+
+fn git_stdout_bytes(workdir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
         .current_dir(workdir)
         .output()
-        .context("Failed to create temporary submit worktree")?;
-    if !add.status.success() {
-        anyhow::bail!("{}", command_output_details("git worktree add", &add));
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    let mut temp_worktree_guard = TemporarySubmitWorktree::new(workdir, temp_worktree);
+    Some(output.stdout)
+}
 
-    let rebase = Command::new("git")
-        .args(["rebase", "--onto", onto_ref, upstream])
-        .current_dir(temp_worktree)
-        .output()
-        .context("Failed to run temporary submit rebase")?;
-    if !rebase.status.success() {
-        let _ = Command::new("git")
-            .args(["rebase", "--abort"])
-            .current_dir(temp_worktree)
-            .output();
-        anyhow::bail!("{}", command_output_details("git rebase", &rebase));
+fn git_stdout(workdir: &Path, args: &[&str]) -> Option<String> {
+    git_stdout_bytes(workdir, args).map(|out| String::from_utf8_lossy(&out).to_string())
+}
+
+/// Like [`git_stdout`] but refuses to lossily convert invalid UTF-8, so callers
+/// can bail instead of silently corrupting the value.
+fn git_stdout_utf8(workdir: &Path, args: &[&str]) -> Option<String> {
+    let out = git_stdout_bytes(workdir, args)?;
+    String::from_utf8(out).ok().map(|s| s.trim().to_string())
+}
+
+fn git_config_is_true(workdir: &Path, key: &str) -> bool {
+    git_stdout(workdir, &["config", "--get", key])
+        .map(|value| matches!(value.trim(), "true" | "yes" | "on" | "1"))
+        .unwrap_or(false)
+}
+
+/// A single temporary worktree reused across every branch that needs a
+/// temporary restack.
+///
+/// Creating and tearing down one worktree per branch means a full working-tree
+/// checkout plus an `rm -rf` per branch, which in a large repository is tens of
+/// seconds each and dominates submit time for anything but a trivial stack.
+/// Checking out successive branches in one worktree only touches the files that
+/// actually differ between them.
+struct ReusableSubmitWorktree<'a> {
+    workdir: &'a Path,
+    root: PathBuf,
+    guard: Option<TemporarySubmitWorktree>,
+    path: Option<PathBuf>,
+    created: usize,
+    replayed: usize,
+}
+
+impl<'a> ReusableSubmitWorktree<'a> {
+    fn new(workdir: &'a Path, root: &Path) -> Self {
+        Self {
+            workdir,
+            root: root.to_path_buf(),
+            guard: None,
+            path: None,
+            created: 0,
+            replayed: 0,
+        }
     }
 
-    let rev = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(temp_worktree)
-        .output()
-        .context("Failed to read temporary submit head")?;
-    if !rev.status.success() {
-        anyhow::bail!("{}", command_output_details("git rev-parse", &rev));
+    /// Rebase `branch` onto `onto_ref` (dropping everything up to `upstream`)
+    /// and return the resulting commit, without touching the user's checkout.
+    ///
+    /// Prefers an object-database replay, which needs no working tree at all;
+    /// falls back to a real worktree rebase when the replay cannot be trusted.
+    fn rebased_head(&mut self, branch: &str, onto_ref: &str, upstream: &str) -> Result<String> {
+        if let Some(oid) = replay_rebase_in_odb(self.workdir, branch, onto_ref, upstream)? {
+            self.replayed += 1;
+            return Ok(oid);
+        }
+        self.worktree_rebased_head(branch, onto_ref, upstream)
     }
-    let oid = String::from_utf8_lossy(&rev.stdout).trim().to_string();
 
-    temp_worktree_guard.remove()?;
+    /// The original path: check the branch out in a real worktree and run
+    /// `git rebase`. Only reached when the object-database replay bails.
+    fn worktree_rebased_head(
+        &mut self,
+        branch: &str,
+        onto_ref: &str,
+        upstream: &str,
+    ) -> Result<String> {
+        let path = match &self.path {
+            Some(path) => path.clone(),
+            None => {
+                let path = self.root.join("worktree");
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create temporary directory {}", parent.display())
+                    })?;
+                }
+                let add = Command::new("git")
+                    .args(["worktree", "add", "--detach"])
+                    .arg(&path)
+                    .arg(branch)
+                    .current_dir(self.workdir)
+                    .output()
+                    .context("Failed to create temporary submit worktree")?;
+                if !add.status.success() {
+                    anyhow::bail!("{}", command_output_details("git worktree add", &add));
+                }
+                self.guard = Some(TemporarySubmitWorktree::new(self.workdir, &path));
+                self.path = Some(path.clone());
+                self.created += 1;
+                path
+            }
+        };
 
-    Ok(oid)
+        // The worktree is already detached at `branch` on the very first use;
+        // afterwards it is parked on the previous branch's rebase result.
+        let checkout = Command::new("git")
+            .args(["checkout", "--force", "--detach", branch])
+            .current_dir(&path)
+            .output()
+            .context("Failed to check out branch in temporary submit worktree")?;
+        if !checkout.status.success() {
+            anyhow::bail!("{}", command_output_details("git checkout", &checkout));
+        }
+
+        let rebase = Command::new("git")
+            .args(["rebase", "--onto", onto_ref, upstream])
+            .current_dir(&path)
+            .output()
+            .context("Failed to run temporary submit rebase")?;
+        if !rebase.status.success() {
+            let _ = Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&path)
+                .output();
+            anyhow::bail!("{}", command_output_details("git rebase", &rebase));
+        }
+
+        let rev = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&path)
+            .output()
+            .context("Failed to read temporary submit head")?;
+        if !rev.status.success() {
+            anyhow::bail!("{}", command_output_details("git rev-parse", &rev));
+        }
+
+        Ok(String::from_utf8_lossy(&rev.stdout).trim().to_string())
+    }
+
+    /// Tear the worktree down and report how many were created.
+    /// Tear the worktree down and report (worktrees created, commits replayed
+    /// without one).
+    fn finish(mut self) -> (usize, usize) {
+        if let Some(guard) = self.guard.as_mut() {
+            let _ = guard.remove();
+        }
+        (self.created, self.replayed)
+    }
 }
 
 fn update_ref(workdir: &Path, refname: &str, oid: &str) -> Result<()> {
@@ -2532,7 +3446,12 @@ fn default_publish_source(workdir: Option<&Path>, branch: &str, parent: &str) ->
     }
 }
 
-fn ref_needs_push(workdir: &Path, remote: &str, remote_branch: &str, source_ref: &str) -> bool {
+pub(crate) fn ref_needs_push(
+    workdir: &Path,
+    remote: &str,
+    remote_branch: &str,
+    source_ref: &str,
+) -> bool {
     // Get local commit
     let local = rev_parse_ref(Some(workdir), source_ref);
 
@@ -2934,10 +3853,10 @@ fn load_pr_template(workdir: &Path) -> Option<String> {
 
     for candidate in &candidates {
         let path = workdir.join(candidate);
-        if path.is_file() {
-            if let Ok(content) = fs::read_to_string(path) {
-                return Some(content);
-            }
+        if path.is_file()
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            return Some(content);
         }
     }
 
@@ -2955,10 +3874,10 @@ fn load_pr_template(workdir: &Path) -> Option<String> {
             })
             .collect();
         entries.sort_by_key(|entry| entry.path());
-        if let Some(entry) = entries.first() {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
-                return Some(content);
-            }
+        if let Some(entry) = entries.first()
+            && let Ok(content) = fs::read_to_string(entry.path())
+        {
+            return Some(content);
         }
     }
 
@@ -3085,14 +4004,22 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS, PushSpec,
-        StackPrInfo, build_ai_pr_details_prompt, existing_ai_prompt_items,
-        existing_ai_targets_for_auto_accept, parse_ai_pr_details, push_failure_details,
-        rejected_push_branches, resolve_ai_targets, resolve_is_draft_without_prompt,
+        AiPrTargets, DefaultSubmitBackend, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX,
+        PR_TYPE_OPTIONS, PushSpec, StackPrInfo, SubmitOptions, SubmitPrompter, SubmitScope,
+        build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
+        parse_ai_pr_details, push_failure_details, rejected_push_branches, resolve_ai_targets,
+        resolve_is_draft_without_prompt, run_default_with_prompter, stack_has_fork,
         stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
+    };
+    use crate::application::{
+        NoopOperationReporter, OperationOutcome, OperationReceipt, OperationRequest,
+        OperationSideEffects, PullRequestChange, PullRequestMode, PullRequestReceipt,
+        SubmitOptions as ApplicationSubmitOptions, SubmitPromptAnswer, SubmitPromptRequest,
+        SubmitScope as ApplicationSubmitScope,
     };
     use crate::engine::Stack;
     use crate::engine::stack::StackBranch;
+    use anyhow::Result;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -3101,6 +4028,260 @@ mod tests {
             resolve_is_draft_without_prompt(false, false, false, true),
             Some(true)
         );
+    }
+
+    fn branch_scope_test_stack() -> Stack {
+        // main (trunk)
+        //  ├── a
+        //  │   └── a1
+        //  │       └── a2
+        //  └── b
+        let mut branches = HashMap::new();
+        let mut branch = |name: &str, parent: Option<&str>, children: &[&str]| {
+            branches.insert(
+                name.to_string(),
+                StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(str::to_string),
+                    parent_revision: parent.map(|p| format!("sha-{p}")),
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        };
+        branch("main", None, &["a", "b"]);
+        branch("a", Some("main"), &["a1"]);
+        branch("a1", Some("a"), &["a2"]);
+        branch("a2", Some("a1"), &[]);
+        branch("b", Some("main"), &[]);
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    // Regression guard: `resolve_branches_for_scope` must keep delegating to the
+    // canonical `application::submit::branches_for_submit_scope`. Lives here (not in
+    // the application module) so it does not cross the application→command boundary.
+    #[test]
+    fn resolve_and_application_selection_match() {
+        let stack = branch_scope_test_stack();
+        for (current, scope) in [
+            ("a", SubmitScope::Stack),
+            ("a2", SubmitScope::Downstack),
+            ("a1", SubmitScope::Upstack),
+            ("a1", SubmitScope::Branch),
+        ] {
+            assert_eq!(
+                super::resolve_branches_for_scope(&stack, current, scope),
+                crate::application::submit::branches_for_submit_scope(&stack, current, scope),
+                "scope {scope:?} from {current}"
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSubmitBackend {
+        prepared_options: Vec<ApplicationSubmitOptions>,
+        prepared_requests: Vec<SubmitPromptRequest>,
+        executed_answers: Vec<Vec<SubmitPromptAnswer>>,
+    }
+
+    impl RecordingSubmitBackend {
+        fn with_requests(requests: Vec<SubmitPromptRequest>) -> Self {
+            Self {
+                prepared_requests: requests,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl DefaultSubmitBackend for RecordingSubmitBackend {
+        type Prepared = Vec<SubmitPromptRequest>;
+
+        fn prepare(
+            &mut self,
+            options: ApplicationSubmitOptions,
+            _reporter: &mut dyn crate::application::OperationReporter,
+        ) -> Result<Self::Prepared> {
+            self.prepared_options.push(options);
+            Ok(self.prepared_requests.clone())
+        }
+
+        fn execute(
+            &mut self,
+            prepared: Self::Prepared,
+            answers: Vec<SubmitPromptAnswer>,
+            _reporter: &mut dyn crate::application::OperationReporter,
+        ) -> Result<OperationReceipt> {
+            assert_eq!(
+                prepared
+                    .iter()
+                    .map(|request| &request.branch)
+                    .collect::<Vec<_>>(),
+                answers
+                    .iter()
+                    .map(|answer| &answer.branch)
+                    .collect::<Vec<_>>()
+            );
+            self.executed_answers.push(answers);
+            Ok(submit_receipt())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSubmitPrompter {
+        requests: Vec<SubmitPromptRequest>,
+        answers: Vec<SubmitPromptAnswer>,
+    }
+
+    impl RecordingSubmitPrompter {
+        fn answering(answers: Vec<SubmitPromptAnswer>) -> Self {
+            Self {
+                answers,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl SubmitPrompter for RecordingSubmitPrompter {
+        fn answer(&mut self, request: &SubmitPromptRequest) -> Result<SubmitPromptAnswer> {
+            self.requests.push(request.clone());
+            Ok(self.answers.remove(0))
+        }
+    }
+
+    fn submit_prompt_request() -> SubmitPromptRequest {
+        SubmitPromptRequest {
+            branch: "feature".into(),
+            suggested_title: "Suggested title".into(),
+            suggested_body: "Suggested body".into(),
+            suggested_mode: PullRequestMode::Draft,
+        }
+    }
+
+    fn ready_answer() -> SubmitPromptAnswer {
+        SubmitPromptAnswer {
+            branch: "feature".into(),
+            title: "Reviewed title".into(),
+            body: "Reviewed body".into(),
+            mode: PullRequestMode::Ready,
+        }
+    }
+
+    fn submit_receipt() -> OperationReceipt {
+        OperationReceipt {
+            request: OperationRequest::SubmitStack {
+                new_pull_requests: PullRequestMode::Draft,
+            },
+            summary: "Submitted 1 branch".into(),
+            affected_branches: vec!["feature".into()],
+            outcome: OperationOutcome::Submitted {
+                pull_requests: vec![PullRequestReceipt {
+                    branch: "feature".into(),
+                    number: 1,
+                    url: "https://example.com/pull/1".into(),
+                    change: PullRequestChange::Created,
+                }],
+            },
+            transaction: None,
+            warnings: Vec::new(),
+            side_effects: OperationSideEffects::RemoteMayHaveChanged,
+        }
+    }
+
+    #[test]
+    fn interactive_default_calls_prepare_then_execute_once() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let answer = ready_answer();
+        let mut prompter = RecordingSubmitPrompter::answering(vec![answer.clone()]);
+        let mut reporter = NoopOperationReporter;
+
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &SubmitOptions::default(),
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert_eq!(
+            backend.prepared_options[0].scope,
+            ApplicationSubmitScope::Stack
+        );
+        assert_eq!(
+            backend.prepared_options[0].new_pull_requests,
+            PullRequestMode::Draft
+        );
+        assert!(backend.prepared_options[0].fetch);
+        assert!(backend.prepared_options[0].verify_hooks);
+        assert_eq!(prompter.requests, vec![request]);
+        assert_eq!(backend.executed_answers, vec![vec![answer]]);
+    }
+
+    #[test]
+    fn no_prompt_default_calls_prepare_then_execute_once() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let mut prompter = RecordingSubmitPrompter::default();
+        let mut reporter = NoopOperationReporter;
+
+        let options = SubmitOptions {
+            no_prompt: true,
+            ..SubmitOptions::default()
+        };
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &options,
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert!(prompter.requests.is_empty());
+        assert_eq!(
+            backend.executed_answers,
+            vec![vec![SubmitPromptAnswer {
+                branch: request.branch,
+                title: request.suggested_title,
+                body: request.suggested_body,
+                mode: PullRequestMode::Draft,
+            }]]
+        );
+    }
+
+    #[test]
+    fn yes_default_uses_the_same_automatic_answers_as_no_prompt() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let mut prompter = RecordingSubmitPrompter::default();
+        let mut reporter = NoopOperationReporter;
+
+        let options = SubmitOptions {
+            yes: true,
+            ..SubmitOptions::default()
+        };
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &options,
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert!(prompter.requests.is_empty());
+        assert_eq!(backend.executed_answers.len(), 1);
+        assert_eq!(backend.executed_answers[0][0].mode, PullRequestMode::Draft);
     }
 
     #[test]
@@ -3157,6 +4338,7 @@ mod tests {
             branch: branch.to_string(),
             source_ref: source_ref.to_string(),
             oid: None,
+            expected_remote_oid: None,
         }
     }
 
@@ -3244,6 +4426,7 @@ mod tests {
                 branch: "middle".to_string(),
                 pr_number: Some(22),
                 is_imported: false,
+                depth: 0, // unused: this is a lookup-only input, not rendered
             }],
             &imported_branches,
         );
@@ -3259,6 +4442,94 @@ mod tests {
                 ("leaf", Some(30), false)
             ]
         );
+    }
+
+    /// A local stack that forks (two branches created off the same ancestor)
+    /// must render its siblings at the same depth in the Stack Links list,
+    /// not nested one under the other by list position — see real-world
+    /// report where `test-4` and `test-3-1` (both children of `test-3`)
+    /// rendered as `test-4 > test-3-1` instead of siblings.
+    #[test]
+    fn stack_pr_infos_for_links_gives_forked_siblings_equal_depth() {
+        let stack = Stack {
+            trunk: "main".to_string(),
+            branches: HashMap::from([
+                (
+                    "main".to_string(),
+                    StackBranch {
+                        name: "main".to_string(),
+                        parent: None,
+                        parent_revision: None,
+                        children: vec!["bottom".to_string()],
+                        needs_restack: false,
+                        pr_number: None,
+                        pr_state: None,
+                        pr_is_draft: None,
+                    },
+                ),
+                (
+                    "bottom".to_string(),
+                    StackBranch {
+                        name: "bottom".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec!["fork-a".to_string(), "fork-b".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(1),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-a".to_string(),
+                    StackBranch {
+                        name: "fork-a".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(2),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-b".to_string(),
+                    StackBranch {
+                        name: "fork-b".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(3),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+            ]),
+        };
+
+        let infos = stack_pr_infos_for_links(&stack, "bottom", &[], &HashSet::new());
+        let depths: HashMap<&str, usize> = infos
+            .iter()
+            .map(|info| (info.branch.as_str(), info.depth))
+            .collect();
+
+        assert_eq!(depths["bottom"], 1);
+        assert_eq!(
+            depths["fork-a"], depths["fork-b"],
+            "sibling branches sharing a parent must render at the same depth"
+        );
+        assert_eq!(depths["fork-a"], 2);
+
+        // The same tree must be flagged as a fork so native-stack linking
+        // proactively skips it instead of handing gh-stack a linearized list.
+        let all_branches: HashSet<&str> = HashSet::from(["bottom", "fork-a", "fork-b"]);
+        assert!(stack_has_fork(&stack, &all_branches));
+
+        // A linear subset (no sibling pair both present) is not a fork.
+        let linear_subset: HashSet<&str> = HashSet::from(["bottom", "fork-a"]);
+        assert!(!stack_has_fork(&stack, &linear_subset));
     }
 
     #[test]

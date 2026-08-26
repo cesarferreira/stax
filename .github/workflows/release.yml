@@ -36,8 +36,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -47,19 +48,13 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        id: install-nextest
-        continue-on-error: true
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.114
 
-      - name: Run Windows tests (with nextest)
-        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.install-nextest.outcome == 'success'
-        continue-on-error: true
+      - name: Run Windows tests
+        if: matrix.target == 'x86_64-pc-windows-msvc'
         run: cargo nextest run --lib --bins
-
-      - name: Run Windows tests (fallback)
-        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.install-nextest.outcome != 'success'
-        continue-on-error: true
-        run: cargo test --lib --bins
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
@@ -85,8 +80,7 @@ jobs:
 
   release:
     name: Release
-    needs: build
-    if: always() && needs.build.result != 'cancelled'
+    needs: [build]
     runs-on: ubuntu-latest
 
     steps:
@@ -109,6 +103,24 @@ jobs:
 
       - name: List artifacts
         run: ls -la artifacts/
+
+      - name: Verify release artifacts
+        run: |
+          set -euo pipefail
+          expected_artifacts=(
+            stax-x86_64-apple-darwin.tar.gz
+            stax-aarch64-apple-darwin.tar.gz
+            stax-x86_64-unknown-linux-gnu.tar.gz
+            stax-aarch64-unknown-linux-gnu.tar.gz
+            stax-x86_64-pc-windows-msvc.zip
+          )
+
+          for artifact in "${expected_artifacts[@]}"; do
+            test -f "artifacts/${artifact}" || {
+              echo "Missing release artifact: ${artifact}" >&2
+              exit 1
+            }
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

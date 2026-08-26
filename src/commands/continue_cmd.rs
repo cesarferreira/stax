@@ -52,7 +52,7 @@ pub(crate) fn latest_failed_restack_receipt(repo: &GitRepo) -> Result<Option<OpR
     Ok(OpReceipt::load_latest(git_dir)?.filter(|receipt| {
         matches!(
             receipt.kind,
-            OpKind::Restack | OpKind::SyncRestack | OpKind::UpstackRestack
+            OpKind::Restack | OpKind::SyncRestack | OpKind::UpstackRestack | OpKind::Sync
         ) && receipt.status == OpStatus::Failed
             && receipt.repo_workdir == workdir
     }))
@@ -70,16 +70,14 @@ fn continue_impl(repo: &GitRepo, resume_restack: bool) -> Result<()> {
         RebaseResult::Success => {
             println!("{}", "✓ Rebase completed successfully!".green());
 
-            if resume_restack {
-                if let Some(receipt) = latest_failed_restack(repo)? {
-                    println!();
-                    println!("{}", "Continuing restack...".bold());
-                    restack::resume_after_rebase(
-                        receipt.auto_stash_pop,
-                        Some(receipt.head_branch_before.clone()),
-                    )?;
-                    return Ok(());
-                }
+            if resume_restack && let Some(receipt) = latest_failed_restack(repo)? {
+                println!();
+                println!("{}", "Continuing restack...".bold());
+                restack::resume_after_rebase(
+                    receipt.auto_stash_pop,
+                    Some(receipt.head_branch_before.clone()),
+                )?;
+                return Ok(());
             }
 
             let config = Config::load().unwrap_or_default();

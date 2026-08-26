@@ -1,18 +1,14 @@
 use crate::cache::CiCache;
 use crate::commands::stack_palette;
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack};
-use crate::git::GitRepo;
+use crate::engine::{BranchMetadata, Stack, StackSnapshot};
+use crate::git::{GitRepo, command};
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
-use std::thread;
-
-const LINKED_WORKTREE_GLYPH: &str = "↳";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
@@ -91,12 +87,14 @@ pub fn run(
     verbose: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
-    let current = repo.current_branch()?;
-    let stack = Stack::load(&repo)?;
+    let snapshot = StackSnapshot::load(&repo)?;
+    let current = snapshot.current_branch;
+    let stack = snapshot.stack;
     let config = Config::load()?;
+    let worktree_glyph = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
-    let git_dir = repo.git_dir()?;
+    let cache_dir = repo.common_git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
@@ -163,12 +161,17 @@ pub fn run(
     let missing_parent_by_branch = collect_missing_parent_branches(&repo, &stack);
 
     // Load CI cache (refresh happens in `stax ci`)
-    let cache = CiCache::load(git_dir);
+    let cache = CiCache::load(&cache_dir);
 
     // Build CI states from cache
     let ci_states: HashMap<String, String> = ordered_branches
         .iter()
-        .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
+        .filter_map(|branch| {
+            let revision = repo.branch_commit(branch).ok()?;
+            cache
+                .get_ci_state_for_revision(branch, &revision)
+                .map(|state| (branch.clone(), state))
+        })
         .collect();
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();
@@ -218,7 +221,7 @@ pub fn run(
 
         let pr_state = info
             .and_then(|b| b.pr_state.clone())
-            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
+            .filter(|s| !s.trim().is_empty());
 
         let pr_number = info.and_then(|b| b.pr_number);
         let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));
@@ -347,7 +350,10 @@ pub fn run(
         }
 
         if entry.and_then(|e| e.linked_worktree.as_ref()).is_some() {
-            info_str.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+            info_str.push_str(&format!(
+                "{} ",
+                stack_palette::format_linked_worktree_marker(worktree_glyph)
+            ));
         }
 
         // Color branch names to match their column in the graph
@@ -367,27 +373,23 @@ pub fn run(
             }
 
             // Only show PR info in verbose mode (ll command)
-            if verbose {
-                if let Some(pr_number) = entry.pr_number {
-                    let mut pr_text = format!(" PR #{}", pr_number);
-                    if let Some(ref state) = entry.pr_state {
-                        pr_text.push_str(&format!(" {}", state.to_lowercase()));
-                    }
-                    if entry.pr_is_draft.unwrap_or(false) {
-                        pr_text.push_str(" draft");
-                    }
-                    if let Some(ref url) = entry.pr_url {
-                        pr_text.push_str(&format!(" {}", url));
-                    }
-                    info_str.push_str(&format!("{}", pr_text.bright_magenta()));
+            if verbose && let Some(pr_number) = entry.pr_number {
+                let mut pr_text = format!(" PR #{}", pr_number);
+                if let Some(ref state) = entry.pr_state {
+                    pr_text.push_str(&format!(" {}", state.to_lowercase()));
                 }
+                if entry.pr_is_draft.unwrap_or(false) {
+                    pr_text.push_str(" draft");
+                }
+                if let Some(ref url) = entry.pr_url {
+                    pr_text.push_str(&format!(" {}", url));
+                }
+                info_str.push_str(&format!("{}", pr_text.bright_magenta()));
             }
 
             // Only show CI state in verbose mode (ll command)
-            if verbose {
-                if let Some(ref ci) = entry.ci_state {
-                    info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
-                }
+            if verbose && let Some(ref ci) = entry.ci_state {
+                info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
             }
         }
 
@@ -444,7 +446,10 @@ pub fn run(
         .and_then(|entry| entry.linked_worktree.as_ref())
         .is_some()
     {
-        trunk_info.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+        trunk_info.push_str(&format!(
+            "{} ",
+            stack_palette::format_linked_worktree_marker(worktree_glyph)
+        ));
     }
     // Color trunk name to match column 0
     if is_trunk_current {
@@ -660,6 +665,46 @@ fn collect_missing_parent_branches(repo: &GitRepo, stack: &Stack) -> HashMap<Str
     missing
 }
 
+/// Get line additions and deletions between parent and branch
+fn get_line_diff_stats_many(
+    workdir: &Path,
+    branch_pairs: &[Option<(String, String)>],
+) -> Vec<(usize, usize)> {
+    crate::parallel::map_ordered(branch_pairs, |pair| {
+        pair.as_ref()
+            .and_then(|(parent, branch)| get_line_diff_stats(workdir, parent, branch))
+            .unwrap_or((0, 0))
+    })
+}
+
+fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
+    let range = format!("{}...{}", parent, branch);
+    let output = command::output(workdir, &["diff", "--numstat", &range]).ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            // Binary files show "-" instead of numbers
+            if let Ok(add) = parts[0].parse::<usize>() {
+                additions += add;
+            }
+            if let Ok(del) = parts[1].parse::<usize>() {
+                deletions += del;
+            }
+        }
+    }
+
+    Some((additions, deletions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,62 +841,4 @@ mod tests {
         colored::control::unset_override();
         assert_eq!(label, "\u{1b}[1;37m(needs restack)\u{1b}[0m");
     }
-}
-
-/// Get line additions and deletions between parent and branch
-fn get_line_diff_stats_many(
-    workdir: &Path,
-    branch_pairs: &[Option<(String, String)>],
-) -> Vec<(usize, usize)> {
-    thread::scope(|scope| {
-        let handles = branch_pairs
-            .iter()
-            .map(|pair| {
-                pair.as_ref().map(|(parent, branch)| {
-                    scope.spawn(move || {
-                        get_line_diff_stats(workdir, parent, branch).unwrap_or((0, 0))
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-
-        handles
-            .into_iter()
-            .map(|handle| match handle {
-                Some(handle) => handle.join().unwrap_or((0, 0)),
-                None => (0, 0),
-            })
-            .collect()
-    })
-}
-
-fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            // Binary files show "-" instead of numbers
-            if let Ok(add) = parts[0].parse::<usize>() {
-                additions += add;
-            }
-            if let Ok(del) = parts[1].parse::<usize>() {
-                deletions += del;
-            }
-        }
-    }
-
-    Some((additions, deletions))
 }

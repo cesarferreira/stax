@@ -10,6 +10,8 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
 
+ <img src="assets/screenshot.png" width="100%" alt="stax in action">
+
   <p>
     <a href="#install">Install</a>
     &nbsp;·&nbsp;
@@ -20,9 +22,9 @@
     <a href="https://cesarferreira.github.io/stax/">Docs</a>
   </p>
 
-  <br>
 
-  <img src="assets/screenshot.png" width="880" alt="stax in action">
+
+ 
 </div>
 
 ---
@@ -34,6 +36,7 @@ One giant PR is slow to review and risky to merge. A stack of small PRs is the a
 - **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
 - **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
 - **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate branch names, commit messages, and PR details from real diffs.
+- **GitHub-native stacks, automatically.** When your repo has GitHub's native Stacked PRs enabled and `github/gh-stack` is installed, `st ss` registers the stack with GitHub under the hood — zero config, zero extra commands. See [Native GitHub Stacked PRs](#native-github-stacked-prs).
 - **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
 - **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
 
@@ -92,8 +95,6 @@ Then:
 cargo install --path . --locked
 # or
 make install
-# or
-task install
 ```
 
 No system OpenSSL? Use the vendored feature:
@@ -113,7 +114,7 @@ st --version
 <a id="quickstart"></a>
 ## Quickstart
 
-`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step:
+`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step. When you install skills interactively (or with `--yes`), stax asks which agent harnesses should receive the skill file, pre-checking the ones it detects on disk. Use `--skills all|detected|<ids>` for non-interactive control.
 
 ```bash
 st setup --yes
@@ -154,7 +155,7 @@ st ls
 st ss
 
 # 4. After the bottom PR merges on GitHub…
-st update          # sync trunk, restack this stack, update PRs
+st refresh         # sync trunk, restack this stack, update PRs (`st update` is a back-compat alias)
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -178,10 +179,36 @@ Each lane is a real Git worktree with normal stax metadata — it appears in `st
 ```bash
 st wt         # open the worktree dashboard
 st wt rs      # restack every lane at once when trunk moves
+st wt promote # move the current lane branch back to the main worktree
 st ss         # submit PRs for the ones that are ready
 ```
 
+Lanes start warm: instead of deleting a removed worktree, stax parks it as a reusable warm slot (resetting it to trunk and running `git clean -fd`, which keeps gitignored dependency directories like `node_modules` or `.venv`). The next lane adopts that slot instead of a cold checkout, so agents keep their built deps and don't re-install from scratch. Set `worktree.reconcile` to re-sync deps on adopt, or `worktree.reuse_slots = false` to opt out.
+
 → [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
+
+<a id="native-github-stacked-prs"></a>
+### Native GitHub Stacked PRs
+
+When a GitHub repo has native Stacked PRs enabled, stax can register your submitted PRs as a native GitHub Stack automatically. This requires GitHub's [`github/gh-stack`](https://github.com/github/gh-stack) CLI extension — install it once:
+
+```bash
+gh extension install github/gh-stack
+# or let stax install it for you:
+st doctor --fix
+```
+
+That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top. On gh-stack v0.0.8+, stax also prints the repository-scoped Stack number returned by GitHub.
+
+```bash
+st ss                    # auto-links native stack when available
+st stack link            # manually re-link the current stack
+st stack unlink 7        # unstack native Stack #7 remotely
+```
+
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.1.0 as out of date (v0.1.0 adds `gh stack merge`, see below), and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
+
+→ [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
 ### Cascade stack merge
 
@@ -191,11 +218,24 @@ Merge from the bottom of the stack up to your current branch, with CI and readin
 st merge                  # local cascade merge
 st merge --when-ready     # wait/poll until PRs are mergeable
 st merge --ds             # merge ancestors, rebase current branch
-st merge --stack          # validate current PR once; absorb lower PRs through current
+st merge --stack          # GitHub/GitLab: preserve lower PR/MR merged state through one tip merge
 st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
 ```
+
+On GitHub, if the current stack is a confirmed-enabled native GitHub Stack and
+`gh-stack` v0.1.0+ is installed, `st merge --stack` delegates to `gh stack
+merge` instead — GitHub lands every selected PR up to the tip atomically, or
+none of them. Older `gh-stack` versions fall back to the flow below with a
+`note:` pointing at `gh extension upgrade stack`.
+
+GitLab stack merge checks project merge settings first, sends `squash: false`,
+and accepts only the default preserving method; explicit stack `rebase` or
+`squash` is rejected. GitHub also rejects those rewriting methods for multi-PR
+stack ranges before mutation because lower PRs could not reach merged state; a
+single selected GitHub PR may still use them. Gitea/Forgejo stack merge is not
+supported.
 
 → [Merge and cascade](docs/workflows/merge-and-cascade.md)
 
@@ -218,7 +258,7 @@ one-line notice. Silence the notice with `[restack] preflight_warn = false` or
 
 ### Undo / redo
 
-`restack`, `submit`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
+`restack`, `submit`, `sync`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
 
 ```bash
 st restack
@@ -234,9 +274,27 @@ st redo
   <img alt="stax TUI" src="assets/tui.png" width="760">
 </p>
 
-Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal.
+Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal. Stack/Summary/Patch pane visibility is remembered per repo.
 
 → [TUI guide](docs/interface/tui.md)
+
+### Localhost web workspace
+
+<p align="center">
+  <img alt="stax web workspace showing a stacked branch graph, changes, and branch inspector" src="assets/web.png" width="960">
+</p>
+
+`st web` starts a secure, browser-based workspace on `127.0.0.1` — the same three-pane layout as the TUI, available everywhere (Linux, macOS, SSH sessions):
+
+```bash
+st web            # opens port 8787, or warns and uses a free port if busy
+st web --port 0   # ephemeral port
+st web --no-open  # start without opening browser; prints URL
+```
+
+Binds 127.0.0.1 only with an unguessable session token in the URL, CSRF protection on every mutating POST, and one-mutation-at-a-time enforcement. No `--host` flag — it cannot be exposed to the network.
+
+→ [Web workspace guide](docs/interface/web.md)
 
 ### AI branch names, PR details, and standups
 
@@ -257,6 +315,8 @@ Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different a
 st config --set-ai
 ```
 
+The model picker can also open your user config for a custom or provider-qualified model ID, including for agents without a built-in model list.
+
 → [PR templates & AI](docs/integrations/pr-templates-and-ai.md) · [Reporting](docs/workflows/reporting.md)
 
 <a id="commands"></a>
@@ -265,6 +325,7 @@ st config --set-ai
 | Command | What it does |
 |---|---|
 | `st` | Launch interactive TUI |
+| `st web [path]` | Start a localhost web workspace in the browser |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |
@@ -272,24 +333,29 @@ st config --set-ai
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
-| `st ss` | Submit the full stack, open/update linked PRs |
-| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when its parent is already synced remotely |
+| `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
+| `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
+| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
+| `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
+| `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
-| `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
-| `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
+| `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
+| `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
-| `st update` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
-| `st update --force --yes --no-prompt` | Run update without sync or submit prompts |
-| `st update --verbose` | Include detailed sync/restack/submit timing |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (`st update` is a back-compat alias) |
+| `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
+| `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
+| `st refresh --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |
-| `st cascade` | Restack + push + open/update PRs |
+| `st cascade` | Restack + push + open/update PRs (no trunk fetch; offline-friendly) |
 | `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
 | `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
 | `st wt` | Open the worktree dashboard |
+| `st wt promote` | Retire the current lane and check its branch out in the main worktree |
 | `st resolve` | AI-resolve an in-progress rebase conflict |
 | `st create --ai` | Generate a branch name from local changes |
 | `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
@@ -299,15 +365,22 @@ st config --set-ai
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st run --parallel --jobs 4 <cmd>` | Run checks concurrently in isolated temporary worktrees without switching the main worktree; each command receives `STAX_RUN_BRANCH` |
+| `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
+| `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
-| `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
-| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |
+| `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
 
 ## Performance
 
 Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machine; the ratios do not.
+
+Run `make benchmark-status` for deterministic cold 10/50/100-branch scaling
+fixtures, or add global `--trace` to a command to see instrumented Git
+subprocess and wall-clock timings.
 
 | Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
 |----------------|----------|-----------------|----------------|
@@ -324,6 +397,8 @@ stax is wire-compatible with Freephite/Graphite for common stacked-branch workfl
 st config                  # open the config editor
 st config --set-ai         # pick AI agent + model
 st config --reset-ai       # clear saved AI pairing and re-prompt
+st --default-config       # print annotated config template (options + allowed values)
+st --skill                 # print bundled AI agent skill (SKILL.md format)
 ```
 
 Config lives at `~/.config/stax/config.toml`. When `STAX_CONFIG_DIR` is unset,
@@ -367,9 +442,10 @@ AI and editor integration guides:
 - [Codex](docs/integrations/codex.md)
 - [Gemini CLI](docs/integrations/gemini-cli.md)
 - [OpenCode](docs/integrations/opencode.md)
+- [pi](docs/integrations/pi.md)
 - [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)
 
-Shared skill/instruction file used across agents: [skills.md](skills.md)
+Shared skill/instruction file used across agents: [skills.md](skills.md). Print the version bundled with your install: `st --skill`.
 
 `st changelog` can generate notes between refs, and `st changelog find [query]`
 or `st changelog --find [query]` fuzzy-finds commits in the selected range.
@@ -382,10 +458,10 @@ Use `--path` to scope either mode to a subdirectory.
 stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with these limitations:
 
 - **Shell integration is not available.** `st setup` supports bash/zsh/fish only. On Windows:
-  - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. Manually `cd` to the printed path.
+  - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. `st wt promote` performs the handoff but likewise requires the printed `cd` command.
   - The `sw` quick alias is not available.
   - `st wt rm` (bare) cannot relocate the shell. Specify: `st wt rm <name>`.
-- **Worktree commands still work.** `st wt c/go/ls/ll/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
+- **Worktree commands still work.** `st wt c/go/ls/ll/promote/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
 - **tmux integration requires WSL** or a Unix-like environment. The [stax.tmux](https://github.com/cesarferreira/stax.tmux) plugin is Unix-only.
 
 Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — works on Windows without limitation.
@@ -399,6 +475,12 @@ Before opening a PR, run:
 ```bash
 make test
 ```
+
+On macOS this uses Docker when available. `make test-native` is the guarded
+fallback: it checks the file-descriptor limit, sanitizes the environment, and
+runs nextest with the optimized test profile. Native macOS timings can still
+vary substantially with endpoint-security tooling, so Docker remains the
+recommended full-suite path.
 
 To cut a release, run:
 

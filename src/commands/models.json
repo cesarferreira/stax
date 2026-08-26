@@ -1,9 +1,11 @@
 {
   "claude": [
-    { "id": "claude-sonnet-4-6",          "description": "Sonnet 4.6 · balanced · recommended" },
-    { "id": "claude-haiku-4-5-20251001",   "description": "Haiku 4.5 · fastest · cheapest" },
-    { "id": "claude-opus-4-6",             "description": "Opus 4.6 · most capable · slower" },
-    { "id": "claude-sonnet-4-5-20250929",  "description": "Sonnet 4.5 · previous gen" }
+    { "id": "claude-opus-4-8",   "description": "Opus 4.8 · most capable · recommended" },
+    { "id": "claude-sonnet-5",   "description": "Sonnet 5 · balanced · fast" },
+    { "id": "claude-haiku-4-5",  "description": "Haiku 4.5 · fastest · cheapest" },
+    { "id": "claude-fable-5",    "description": "Fable 5 · deepest reasoning · premium" },
+    { "id": "claude-opus-4-7",   "description": "Opus 4.7 · previous gen" },
+    { "id": "claude-sonnet-4-6", "description": "Sonnet 4.6 · previous gen" }
   ],
   "codex": [
     { "id": "gpt-5.5",       "description": "GPT-5.5 · latest · balanced" },

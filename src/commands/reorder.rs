@@ -1,7 +1,6 @@
-use crate::engine::{BranchMetadata, Stack};
+use crate::application::{NoopOperationReporter, RepositorySession};
+use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::ops::receipt::OpKind;
-use crate::ops::tx::Transaction;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{Select, theme::ColorfulTheme};
@@ -123,48 +122,14 @@ pub fn run(yes: bool) -> Result<()> {
         }
     }
 
-    // Apply the new order by updating parent pointers
-    let mut tx = Transaction::begin(OpKind::Reorder, &repo, false)?;
-    for b in &new_order {
-        tx.plan_branch(&repo, b)?;
-    }
-    tx.snapshot()?;
-
-    let trunk = stack.trunk.clone();
-    for (i, branch_name) in new_order.iter().enumerate() {
-        let new_parent = if i == 0 {
-            trunk.clone()
-        } else {
-            new_order[i - 1].clone()
-        };
-
-        let parent_rev = repo.branch_commit(&new_parent)?;
-        let merge_base = repo
-            .merge_base(&new_parent, branch_name)
-            .unwrap_or_else(|_| parent_rev.clone());
-
-        let existing = BranchMetadata::read(repo.inner(), branch_name)?;
-        let updated = if let Some(meta) = existing {
-            BranchMetadata {
-                parent_branch_name: new_parent,
-                parent_branch_revision: merge_base,
-                ..meta
-            }
-        } else {
-            BranchMetadata::new(&new_parent, &merge_base)
-        };
-        updated.write(repo.inner(), branch_name)?;
-
-        tx.record_after(&repo, branch_name)?;
-    }
-
-    tx.finish_ok()?;
+    RepositorySession::open(repo.workdir()?)?.reorder_stack(
+        &branches,
+        &new_order,
+        false,
+        &mut NoopOperationReporter,
+    )?;
 
     println!("{}", "Stack reordered.".green());
-    println!(
-        "{}",
-        "Run `stax restack --all` to rebase branches in the new order.".yellow()
-    );
 
     Ok(())
 }

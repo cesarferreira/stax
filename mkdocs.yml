@@ -60,6 +60,7 @@ nav:
       - Multiple Stacks: concepts/multiple-stacks.md
   - Interface:
       - Interactive TUI: interface/tui.md
+      - Localhost web workspace: interface/web.md
   - Commands:
       - Core Commands: commands/core.md
       - Full Reference: commands/reference.md
@@ -77,6 +78,7 @@ nav:
   - Configuration:
       - Config Reference: configuration/index.md
   - Integrations:
+      - GitHub Native Stacked PRs: integrations/github-native-stacks.md
       - PR Templates and AI: integrations/pr-templates-and-ai.md
       - Claude Code: integrations/claude-code.md
       - Codex: integrations/codex.md

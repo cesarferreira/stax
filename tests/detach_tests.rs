@@ -38,7 +38,7 @@ fn test_detach_middle_of_stack() {
     repo.run_stax(&["checkout", &branches[2]]);
     let c_parent = repo.get_current_parent();
     assert!(
-        c_parent.as_ref().map_or(false, |p| p.contains("detach-a")),
+        c_parent.as_ref().is_some_and(|p| p.contains("detach-a")),
         "C should be reparented to A, got parent: {:?}",
         c_parent
     );

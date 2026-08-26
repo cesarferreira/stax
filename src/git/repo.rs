@@ -7,8 +7,18 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+use super::command;
+
 pub struct GitRepo {
     repo: Repository,
+}
+
+/// Immutable object IDs for one merge-base branch diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffTarget {
+    pub(crate) parent_oid: String,
+    pub(crate) branch_oid: String,
+    pub(crate) merge_base_oid: String,
 }
 
 fn normalize_local_branch_name(branch: &str) -> &str {
@@ -94,10 +104,10 @@ fn assign_unique_label_stage<F>(
             continue;
         }
 
-        if let Some(label) = label_for(candidate) {
-            if !reserved.contains(&label) {
-                *counts.entry(label).or_insert(0usize) += 1;
-            }
+        if let Some(label) = label_for(candidate)
+            && !reserved.contains(&label)
+        {
+            *counts.entry(label).or_insert(0usize) += 1;
         }
     }
 
@@ -159,18 +169,11 @@ fn derive_worktree_names(candidates: &[WorktreeLabelCandidate]) -> Vec<String> {
 }
 
 fn run_git_in(cwd: &Path, args: &[&str]) -> Result<Output> {
-    Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("Failed to run git {}", args.join(" ")))
+    command::output(cwd, args).with_context(|| format!("Failed to run git {}", args.join(" ")))
 }
 
 pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["checkout", branch])
-        .current_dir(workdir)
-        .output()
+    let output = command::output(workdir, &["checkout", branch])
         .with_context(|| format!("Failed to run git checkout {}", branch))?;
 
     if !output.status.success() {
@@ -183,10 +186,7 @@ pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
 
 pub fn local_branch_exists_in(workdir: &Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
-    Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &local_ref])
-        .current_dir(workdir)
-        .status()
+    command::status(workdir, &["show-ref", "--verify", "--quiet", &local_ref])
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -262,7 +262,11 @@ struct BranchParentMetadata {
 impl GitRepo {
     /// Open the repository at the current directory or any parent
     pub fn open() -> Result<Self> {
-        let repo = Repository::discover(".").context("Not in a git repository")?;
+        let repo = Repository::discover(".").map_err(|_| {
+            anyhow::anyhow!(
+                "Not in a Git repository. Run this command from inside a Git repository."
+            )
+        })?;
         Ok(Self { repo })
     }
 
@@ -271,6 +275,18 @@ impl GitRepo {
         let repo = Repository::open(path)
             .with_context(|| format!("Failed to open git repository at '{}'", path.display()))?;
         Ok(Self { repo })
+    }
+
+    /// Re-open this repository from scratch, returning a new `GitRepo` with a fresh libgit2
+    /// handle.
+    ///
+    /// libgit2's refdb caches ref-OIDs in memory for the lifetime of the `Repository` object.
+    /// Any branch created, moved, or deleted by a git subprocess (e.g. `git update-ref`, `git
+    /// fetch`, or `git push`) will not be visible through the stale handle.  Call `refresh()`
+    /// after subprocess-driven ref mutations to obtain a handle that sees the current on-disk
+    /// state.
+    pub fn refresh(&self) -> Result<Self> {
+        Self::open_from_path(self.repo.path())
     }
 
     /// Get the repository root path
@@ -291,11 +307,7 @@ impl GitRepo {
     }
 
     fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<Output> {
-        Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .with_context(|| format!("Failed to run git {}", args.join(" ")))
+        command::output(cwd, args).with_context(|| format!("Failed to run git {}", args.join(" ")))
     }
 
     pub(crate) fn normalize_path(path: &Path) -> PathBuf {
@@ -361,19 +373,34 @@ impl GitRepo {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
-    /// Count tracked files in the given worktree path.
-    pub fn tracked_file_count_at(&self, cwd: &Path) -> Result<usize> {
-        let output = self.run_git(cwd, &["ls-files", "-z"])?;
+    pub(crate) fn head_oid_in(&self, cwd: &Path) -> Result<String> {
+        let output = self.run_git(cwd, &["rev-parse", "HEAD"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!("git ls-files failed in '{}': {}", cwd.display(), stderr);
+            anyhow::bail!(
+                "git rev-parse HEAD failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
         }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
 
-        Ok(output
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|entry| !entry.is_empty())
-            .count())
+    pub(crate) fn switch_detached_in(&self, cwd: &Path, target: Option<&str>) -> Result<()> {
+        let mut args = vec!["switch", "--detach"];
+        if let Some(target) = target {
+            args.push(target);
+        }
+        let output = self.run_git(cwd, &args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch --detach failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
@@ -451,10 +478,8 @@ impl GitRepo {
 
         let mut by_branch = HashMap::new();
         for (idx, (_, branch, is_prunable)) in entries.into_iter().enumerate().skip(1) {
-            if !is_prunable {
-                if let Some(branch) = branch {
-                    by_branch.insert(branch, labels[idx].clone());
-                }
+            if !is_prunable && let Some(branch) = branch {
+                by_branch.insert(branch, labels[idx].clone());
             }
         }
 
@@ -569,6 +594,16 @@ impl GitRepo {
             &mut current_prunable_reason,
         );
 
+        // Worktrees can be nested beneath another worktree's path (for example,
+        // `<repo>/.worktrees/feature`). Choose the deepest matching root so only
+        // the actual current worktree is marked current.
+        let current_worktree_path = raw_entries
+            .iter()
+            .map(|(path, _, _, _, _, _)| path)
+            .filter(|path| cwd_normalized.starts_with(path))
+            .max_by_key(|path| path.components().count())
+            .cloned();
+
         let label_candidates = raw_entries
             .iter()
             .enumerate()
@@ -591,7 +626,7 @@ impl GitRepo {
             .map(
                 |(idx, (path, branch, is_locked, lock_reason, is_prunable, prunable_reason))| {
                     let is_main = idx == 0;
-                    let is_current = path == cwd_normalized;
+                    let is_current = current_worktree_path.as_ref() == Some(&path);
                     WorktreeInfo {
                         name: labels[idx].clone(),
                         path,
@@ -775,6 +810,41 @@ impl GitRepo {
         }))
     }
 
+    pub fn switch_worktree_for_branch_delete(
+        &self,
+        resolution: &BranchDeleteResolution,
+    ) -> Result<BranchDeleteSwitchTarget> {
+        let switch_error =
+            if let BranchDeleteSwitchTarget::Branch(target) = &resolution.switch_target {
+                match self.switch_branch_in(&resolution.worktree.path, target) {
+                    Ok(()) => return Ok(BranchDeleteSwitchTarget::Branch(target.clone())),
+                    Err(error) => Some(error),
+                }
+            } else {
+                None
+            };
+
+        let output = self.run_git(&resolution.worktree.path, &["switch", "--detach"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if let Some(switch_error) = switch_error {
+                anyhow::bail!(
+                    "{}; fallback git switch --detach failed in '{}': {}",
+                    switch_error,
+                    resolution.worktree.path.display(),
+                    stderr
+                );
+            }
+            anyhow::bail!(
+                "git switch --detach failed in '{}': {}",
+                resolution.worktree.path.display(),
+                stderr
+            );
+        }
+
+        Ok(BranchDeleteSwitchTarget::Detach)
+    }
+
     pub fn branch_delete_resolution_hint(&self, branch: &str) -> Result<Option<String>> {
         let Some(resolution) = self.branch_delete_resolution(branch)? else {
             return Ok(None);
@@ -894,54 +964,39 @@ impl GitRepo {
         // Collect indices that need computation (cache misses).
         let mut misses: Vec<(usize, String, String)> = Vec::new();
         for (i, ((base, head), sha_pair)) in pairs.iter().zip(shas.iter()).enumerate() {
-            if let Some((base_sha, head_sha)) = sha_pair {
-                if let Some(cached) = cache.get(base_sha, head_sha) {
-                    results[i] = Some(cached);
-                    continue;
-                }
+            if let Some((base_sha, head_sha)) = sha_pair
+                && let Some(cached) = cache.get(base_sha, head_sha)
+            {
+                results[i] = Some(cached);
+                continue;
             }
             misses.push((i, base.clone(), head.clone()));
         }
 
         if !misses.is_empty() {
-            // Compute all misses in parallel git subprocesses.
-            let handles: Vec<_> = misses
-                .iter()
-                .map(|(_, base, head)| {
-                    let workdir = workdir.clone();
+            // Compute cache misses with a shared concurrency cap.
+            let computed: Vec<Result<(usize, usize)>> =
+                crate::parallel::map_ordered(&misses, |(_, base, head)| {
                     let range = format!("{}...{}", base, head);
-                    std::thread::spawn(move || -> Result<(usize, usize)> {
-                        let output = Command::new("git")
-                            .args(["rev-list", "--left-right", "--count", &range])
-                            .current_dir(&workdir)
-                            .output()
+                    let output =
+                        command::output(&workdir, &["rev-list", "--left-right", "--count", &range])
                             .context("git rev-list failed")?;
 
-                        if !output.status.success() {
-                            return Ok((0, 0));
-                        }
+                    if !output.status.success() {
+                        return Ok((0, 0));
+                    }
 
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let parts: Vec<&str> = stdout.trim().split('\t').collect();
-                        if parts.len() != 2 {
-                            return Ok((0, 0));
-                        }
-                        // left  = commits in base not in head → behind
-                        // right = commits in head not in base → ahead
-                        let behind: usize = parts[0].parse().unwrap_or(0);
-                        let ahead: usize = parts[1].parse().unwrap_or(0);
-                        Ok((ahead, behind))
-                    })
-                })
-                .collect();
-
-            let computed: Vec<Result<(usize, usize)>> = handles
-                .into_iter()
-                .map(|h| {
-                    h.join()
-                        .unwrap_or_else(|_| anyhow::bail!("ahead/behind worker panicked"))
-                })
-                .collect();
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let parts: Vec<&str> = stdout.trim().split('\t').collect();
+                    if parts.len() != 2 {
+                        return Ok((0, 0));
+                    }
+                    // left  = commits in base not in head → behind
+                    // right = commits in head not in base → ahead
+                    let behind: usize = parts[0].parse().unwrap_or(0);
+                    let ahead: usize = parts[1].parse().unwrap_or(0);
+                    Ok((ahead, behind))
+                });
 
             let mut cache_dirty = false;
             for ((orig_idx, _, _), result) in misses.iter().zip(computed.iter()) {
@@ -977,10 +1032,10 @@ impl GitRepo {
         let mut commits = Vec::new();
         for oid in revwalk {
             let oid = oid?;
-            if let Ok(commit) = self.repo.find_commit(oid) {
-                if let Ok(Some(msg)) = commit.summary() {
-                    commits.push(msg.to_string());
-                }
+            if let Ok(commit) = self.repo.find_commit(oid)
+                && let Ok(Some(msg)) = commit.summary()
+            {
+                commits.push(msg.to_string());
             }
         }
 
@@ -1001,22 +1056,22 @@ impl GitRepo {
 
     fn resolve_to_oid_in(repo: &Repository, refspec: &str) -> Result<git2::Oid> {
         // Try as local branch first
-        if let Ok(branch) = repo.find_branch(refspec, BranchType::Local) {
-            if let Some(oid) = branch.get().target() {
-                return Ok(oid);
-            }
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Local)
+            && let Some(oid) = branch.get().target()
+        {
+            return Ok(oid);
         }
         // Try as remote branch (e.g., "origin/main")
-        if let Ok(branch) = repo.find_branch(refspec, BranchType::Remote) {
-            if let Some(oid) = branch.get().target() {
-                return Ok(oid);
-            }
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Remote)
+            && let Some(oid) = branch.get().target()
+        {
+            return Ok(oid);
         }
         // Try as reference
-        if let Ok(reference) = repo.find_reference(refspec) {
-            if let Some(oid) = reference.target() {
-                return Ok(oid);
-            }
+        if let Ok(reference) = repo.find_reference(refspec)
+            && let Some(oid) = reference.target()
+        {
+            return Ok(oid);
         }
         // Try revparse
         let obj = repo.revparse_single(refspec)?;
@@ -1110,7 +1165,7 @@ impl GitRepo {
     }
 
     fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", onto])
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto])
     }
 
     fn rebase_onto_upstream_in_path(
@@ -1119,7 +1174,7 @@ impl GitRepo {
         onto: &str,
         upstream: &str,
     ) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--onto", onto, upstream])
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", "--onto", onto, upstream])
     }
 
     fn reset_hard_in_path(&self, cwd: &Path, target: &str) -> Result<()> {
@@ -1133,6 +1188,74 @@ impl GitRepo {
                 stderr
             );
         }
+        Ok(())
+    }
+
+    /// Remove untracked files and directories from a worktree.
+    ///
+    /// This deliberately uses `git clean -fd` and NEVER `-x`: gitignored
+    /// dependency directories (node_modules, .venv, vendor, ...) must survive so
+    /// a recycled warm slot stays warm. Adding `-x` would wipe them.
+    pub fn git_clean_fd(&self, cwd: &Path) -> Result<()> {
+        let output = self.run_git(cwd, &["clean", "-fd"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git clean -fd failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(())
+    }
+
+    /// Create and switch to a brand-new `branch` at `base` inside a worktree.
+    pub fn switch_new_branch_in(&self, cwd: &Path, branch: &str, base: &str) -> Result<()> {
+        let output = self.run_git(cwd, &["switch", "-c", branch, base])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch -c {} {} failed in '{}': {}",
+                branch,
+                base,
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
+    /// Switch an existing `branch` inside a worktree.
+    pub fn switch_branch_in(&self, cwd: &Path, branch: &str) -> Result<()> {
+        let output = self.run_git(cwd, &["switch", branch])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch {} failed in '{}': {}",
+                branch,
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
+    /// Park a slot for reuse: move it OFF its lane branch (so that branch can be
+    /// checked out elsewhere), reset it hard to `trunk`, and remove untracked
+    /// files while preserving gitignored dependency dirs.
+    pub fn park_slot(&self, cwd: &Path, trunk: &str) -> Result<()> {
+        // Detaching first avoids "branch already checked out" if the lane branch
+        // is later adopted into another worktree; reset --hard onto trunk then
+        // gives the slot trunk's tree without holding trunk's ref checked out.
+        if self.switch_branch_in(cwd, trunk).is_err() {
+            let output = self.run_git(cwd, &["switch", "--detach"])?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!(
+                    "git switch --detach failed in '{}': {}",
+                    cwd.display(),
+                    stderr
+                );
+            }
+        }
+        self.reset_hard_in_path(cwd, trunk)?;
+        self.git_clean_fd(cwd)?;
         Ok(())
     }
 
@@ -1458,12 +1581,6 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(RebaseOutcome { result, timings })
     }
 
-    /// Rebase current branch onto target
-    #[allow(dead_code)] // Kept for compatibility with existing APIs and future command flows
-    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
-        self.rebase_in_path(self.workdir()?, onto)
-    }
-
     /// Rebase the target branch onto another branch, using the branch's owning worktree.
     /// If the target branch is not checked out in any worktree, it falls back to current workdir.
     pub fn rebase_branch_onto(
@@ -1475,22 +1592,54 @@ Use --auto-stash-pop or stash/commit changes first.",
         self.rebase_branch_onto_with_provenance(branch, onto, "", auto_stash_pop)
     }
 
-    /// Continue a rebase after resolving conflicts
+    /// Continue a rebase after resolving conflicts.
+    ///
+    /// If `git rebase --continue` stops again because the next commit became
+    /// empty (not because of real conflicts), automatically `--skip` it and
+    /// keep going, so users aren't stuck on commits stax should have dropped.
     pub fn rebase_continue(&self) -> Result<RebaseResult> {
-        let status = Command::new("git")
-            .args(["rebase", "--continue"])
-            .env("GIT_EDITOR", "true")
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git rebase --continue")?;
+        let workdir = self.workdir()?.to_path_buf();
 
-        if status.success() {
-            Ok(RebaseResult::Success)
-        } else if self.rebase_in_progress()? {
-            Ok(RebaseResult::Conflict)
-        } else {
-            anyhow::bail!("git rebase --continue failed")
+        for _ in 0..1000 {
+            let output = Command::new("git")
+                .args(["rebase", "--continue"])
+                .env("GIT_EDITOR", "true")
+                .current_dir(&workdir)
+                .output()
+                .context("Failed to run git rebase --continue")?;
+
+            if output.status.success() {
+                return Ok(RebaseResult::Success);
+            }
+
+            if !self.rebase_in_progress()? {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!("git rebase --continue failed: {}", stderr);
+            }
+
+            if self.has_conflicts_in(&workdir)? {
+                return Ok(RebaseResult::Conflict);
+            }
+
+            let skip_output = Command::new("git")
+                .args(["rebase", "--skip"])
+                .env("GIT_EDITOR", "true")
+                .current_dir(&workdir)
+                .output()
+                .context("Failed to run git rebase --skip")?;
+
+            if !skip_output.status.success() && self.rebase_in_progress()? {
+                if self.has_conflicts_in(&workdir)? {
+                    return Ok(RebaseResult::Conflict);
+                }
+                let stderr = String::from_utf8_lossy(&skip_output.stderr)
+                    .trim()
+                    .to_string();
+                anyhow::bail!("git rebase --skip failed: {}", stderr);
+            }
         }
+
+        anyhow::bail!("git rebase --continue did not converge after 1000 iterations")
     }
 
     /// Check if a rebase is in progress
@@ -1603,14 +1752,12 @@ Use --auto-stash-pop or stash/commit changes first.",
             let branch_commit = branch.get().peel_to_commit()?;
             let mut candidate_bases = vec![self.trunk_branch()?];
 
-            if let Ok(Some(json)) = crate::git::refs::read_metadata(&self.repo, name) {
-                if let Ok(meta) = serde_json::from_str::<BranchParentMetadata>(&json) {
-                    if meta.parent_branch_name != name
-                        && !candidate_bases.contains(&meta.parent_branch_name)
-                    {
-                        candidate_bases.insert(0, meta.parent_branch_name);
-                    }
-                }
+            if let Ok(Some(json)) = crate::git::refs::read_metadata(&self.repo, name)
+                && let Ok(meta) = serde_json::from_str::<BranchParentMetadata>(&json)
+                && meta.parent_branch_name != name
+                && !candidate_bases.contains(&meta.parent_branch_name)
+            {
+                candidate_bases.insert(0, meta.parent_branch_name);
             }
 
             let merged_into_any_base = candidate_bases.into_iter().any(|base| {
@@ -1661,6 +1808,58 @@ Use --auto-stash-pop or stash/commit changes first.",
             .filter(|value| !value.trim().is_empty())
     }
 
+    /// Branch names that already have an upstream remote configured
+    /// (`branch.<name>.remote` set). Used to avoid overwriting an upstream a
+    /// pre-existing local branch may have intentionally pointed at a fork or a
+    /// different remote. Exit code 1 from `git config --get-regexp` means "no
+    /// matches" in a repo with no branch config yet — that is not an error, it
+    /// is the normal case, so it maps to an empty set rather than propagating.
+    pub fn branches_with_configured_upstream(&self) -> Result<HashSet<String>> {
+        let output = self.run_git(
+            self.workdir()?,
+            &["config", "--local", "--get-regexp", r"^branch\..*\.remote$"],
+        )?;
+        if !output.status.success() {
+            return Ok(HashSet::new());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(crate::application::parse_branches_with_upstream(&stdout))
+    }
+
+    /// Configure `branch` to pull from and push to `remote`. Writes
+    /// `branch.<branch>.merge` before `branch.<branch>.remote` deliberately: if
+    /// the second write fails, git defaults an unset `branch.<name>.remote` to
+    /// `origin`, so the partial state still usually works. The reverse order
+    /// would leave `git pull` erroring with "did not specify a branch".
+    ///
+    /// Uses `--local` rather than `--worktree` because branch upstream config
+    /// is shared across linked worktrees.
+    pub fn set_branch_upstream(&self, branch: &str, remote: &str) -> Result<()> {
+        let workdir = self.workdir()?;
+        let merge_key = format!("branch.{}.merge", branch);
+        let merge_value = format!("refs/heads/{}", branch);
+        let output = self.run_git(workdir, &["config", "--local", &merge_key, &merge_value])?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to set '{}': {}",
+                merge_key,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let remote_key = format!("branch.{}.remote", branch);
+        let output = self.run_git(workdir, &["config", "--local", &remote_key, remote])?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to set '{}': {}",
+                remote_key,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(())
+    }
+
     /// Get underlying repository (for advanced operations)
     pub fn inner(&self) -> &Repository {
         &self.repo
@@ -1676,12 +1875,11 @@ Use --auto-stash-pop or stash/commit changes first.",
         revwalk.push(branch_commit.id())?;
 
         // If parent specified, exclude its commits
-        if let Some(parent_name) = parent {
-            if let Ok(parent_ref) = self.repo.find_branch(parent_name, BranchType::Local) {
-                if let Ok(parent_commit) = parent_ref.get().peel_to_commit() {
-                    revwalk.hide(parent_commit.id())?;
-                }
-            }
+        if let Some(parent_name) = parent
+            && let Ok(parent_ref) = self.repo.find_branch(parent_name, BranchType::Local)
+            && let Ok(parent_commit) = parent_ref.get().peel_to_commit()
+        {
+            revwalk.hide(parent_commit.id())?;
         }
 
         for oid in revwalk.take(5) {
@@ -1724,11 +1922,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         let workdir = self.workdir()?;
         let since_arg = format!("--since={} hours ago", hours);
 
-        let output = Command::new("git")
-            .args(["log", &since_arg, "--oneline", branch])
-            .current_dir(workdir)
-            .output()
-            .context("Failed to run git log")?;
+        let output = self.run_git(workdir, &["log", since_arg.as_str(), "--oneline", branch])?;
 
         if !output.status.success() {
             return Ok(None);
@@ -1846,9 +2040,14 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
     }
 
-    /// Check if a branch has a remote tracking branch (origin/<branch>)
+    /// Check if a branch has an origin remote-tracking branch.
     pub fn has_remote(&self, branch: &str) -> bool {
-        let remote_name = format!("origin/{}", branch);
+        self.has_remote_named("origin", branch)
+    }
+
+    /// Check if a branch has a remote-tracking branch for the named remote.
+    pub fn has_remote_named(&self, remote: &str, branch: &str) -> bool {
+        let remote_name = format!("{remote}/{branch}");
         self.repo
             .find_branch(&remote_name, BranchType::Remote)
             .is_ok()
@@ -1864,19 +2063,25 @@ Use --auto-stash-pop or stash/commit changes first.",
             .context("Failed to glob remote refs")?;
         let mut names = HashSet::new();
         for r in refs.flatten() {
-            if let Ok(name) = r.name() {
-                if let Some(branch) = name.strip_prefix(&prefix) {
-                    names.insert(branch.to_string());
-                }
+            if let Ok(name) = r.name()
+                && let Some(branch) = name.strip_prefix(&prefix)
+            {
+                names.insert(branch.to_string());
             }
         }
         Ok(names)
     }
 
-    /// Get commits ahead/behind compared to remote tracking branch (origin/branch)
+    /// Get commits ahead/behind compared to the origin remote-tracking branch.
     /// Returns (unpushed, unpulled) or None if no remote tracking branch exists
     pub fn commits_vs_remote(&self, branch: &str) -> Option<(usize, usize)> {
-        let remote_name = format!("origin/{}", branch);
+        self.commits_vs_remote_named("origin", branch)
+    }
+
+    /// Get commits ahead/behind compared to a named remote-tracking branch.
+    /// Returns (unpushed, unpulled) or None if no remote tracking branch exists.
+    pub fn commits_vs_remote_named(&self, remote: &str, branch: &str) -> Option<(usize, usize)> {
+        let remote_name = format!("{remote}/{branch}");
         if self
             .repo
             .find_branch(&remote_name, BranchType::Remote)
@@ -1888,19 +2093,65 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
     }
 
+    /// Resolve the refs for a diff once so subsequent work cannot observe ref movement.
+    pub(crate) fn resolve_diff_target(&self, branch: &str, parent: &str) -> Result<DiffTarget> {
+        let parent_oid = self.resolve_to_oid(parent).with_context(|| {
+            format!("Failed to resolve parent '{parent}' for branch '{branch}'")
+        })?;
+        let branch_oid = self
+            .resolve_to_oid(branch)
+            .with_context(|| format!("Failed to resolve branch '{branch}' against '{parent}'"))?;
+        let merge_base_oid = self
+            .repo
+            .merge_base(parent_oid, branch_oid)
+            .with_context(|| {
+                format!("Failed to find merge base for parent '{parent}' and branch '{branch}'")
+            })?;
+
+        Ok(DiffTarget {
+            parent_oid: parent_oid.to_string(),
+            branch_oid: branch_oid.to_string(),
+            merge_base_oid: merge_base_oid.to_string(),
+        })
+    }
+
     /// Get diff between a branch and its parent
     pub fn diff_against_parent(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
-        // Use merge-base diff (A...B) to match PR semantics and avoid showing unrelated
-        // parent-side changes when the parent branch has advanced.
-        let range = format!("{}...{}", parent, branch);
-        let output = Command::new("git")
-            .args(["diff", "--color=never", &range])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to get diff")?;
+        let target = self.resolve_diff_target(branch, parent)?;
+        self.diff_against_target(branch, parent, &target)
+    }
+
+    /// Get a patch from a previously captured merge base and branch tip.
+    pub(crate) fn diff_against_target(
+        &self,
+        branch: &str,
+        parent: &str,
+        target: &DiffTarget,
+    ) -> Result<Vec<String>> {
+        let output = command::output(
+            self.workdir()?,
+            &[
+                "diff",
+                "--color=never",
+                &target.merge_base_oid,
+                &target.branch_oid,
+            ],
+        )
+        .context("Failed to get diff")?;
 
         if !output.status.success() {
-            return Ok(Vec::new());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git diff patch for branch '{}' against parent '{}' failed with {}: {}",
+                branch,
+                parent,
+                output.status,
+                if stderr.is_empty() {
+                    "<no stderr>"
+                } else {
+                    &stderr
+                }
+            );
         }
 
         let diff = String::from_utf8_lossy(&output.stdout);
@@ -1909,15 +2160,41 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Get diff stat (numstat) between a branch and its parent
     pub fn diff_stat(&self, branch: &str, parent: &str) -> Result<Vec<(String, usize, usize)>> {
-        let range = format!("{}...{}", parent, branch);
-        let output = Command::new("git")
-            .args(["diff", "--numstat", &range])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to get diff stat")?;
+        let target = self.resolve_diff_target(branch, parent)?;
+        self.diff_stat_at_target(branch, parent, &target)
+    }
+
+    /// Get a diffstat from a previously captured merge base and branch tip.
+    pub(crate) fn diff_stat_at_target(
+        &self,
+        branch: &str,
+        parent: &str,
+        target: &DiffTarget,
+    ) -> Result<Vec<(String, usize, usize)>> {
+        let output = command::output(
+            self.workdir()?,
+            &[
+                "diff",
+                "--numstat",
+                &target.merge_base_oid,
+                &target.branch_oid,
+            ],
+        )
+        .context("Failed to get diff stat")?;
 
         if !output.status.success() {
-            return Ok(Vec::new());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git diff --numstat for branch '{}' against parent '{}' failed with {}: {}",
+                branch,
+                parent,
+                output.status,
+                if stderr.is_empty() {
+                    "<no stderr>"
+                } else {
+                    &stderr
+                }
+            );
         }
 
         let stat = String::from_utf8_lossy(&output.stdout);
@@ -1969,18 +2246,17 @@ Use --auto-stash-pop or stash/commit changes first.",
 
         // Use git merge-tree to check for conflicts
         // git merge-tree --write-tree <base> <onto> <branch>
-        let output = Command::new("git")
-            .args([
+        let output = self.run_git(
+            self.workdir()?,
+            &[
                 "merge-tree",
                 "--write-tree",
                 "--no-messages",
-                &merge_base,
+                merge_base.as_str(),
                 onto,
                 branch,
-            ])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git merge-tree")?;
+            ],
+        )?;
 
         // If the command fails (non-zero exit), there are conflicts
         // The output will contain the conflicting files
@@ -2033,43 +2309,6 @@ Use --auto-stash-pop or stash/commit changes first.",
                 },
             )
             .collect()
-    }
-
-    /// Get files modified in a branch compared to its parent
-    #[allow(dead_code)] // Reserved for future conflict detection improvements
-    pub fn files_modified(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
-        let output = Command::new("git")
-            .args(["diff", "--name-only", parent, branch])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to get modified files")?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let files = String::from_utf8_lossy(&output.stdout);
-        Ok(files.lines().map(|s| s.to_string()).collect())
-    }
-
-    /// Check for overlapping files between two branches that could cause conflicts
-    #[allow(dead_code)] // Reserved for future conflict detection improvements
-    pub fn check_overlapping_files(
-        &self,
-        branch1: &str,
-        branch2: &str,
-        common_parent: &str,
-    ) -> Result<Vec<String>> {
-        let files1 = self.files_modified(branch1, common_parent)?;
-        let files2 = self.files_modified(branch2, common_parent)?;
-
-        let files1_set: std::collections::HashSet<_> = files1.into_iter().collect();
-        let overlapping: Vec<String> = files2
-            .into_iter()
-            .filter(|f| files1_set.contains(f))
-            .collect();
-
-        Ok(overlapping)
     }
 
     /// Abort an in-progress rebase
@@ -2151,13 +2390,9 @@ Use --auto-stash-pop or stash/commit changes first.",
             return Ok(());
         }
 
-        let status = Command::new("git")
-            .arg("add")
-            .arg("--")
-            .args(paths)
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git add")?;
+        let mut args: Vec<&str> = vec!["add", "--"];
+        args.extend(paths.iter().map(String::as_str));
+        let status = command::status(self.workdir()?, &args)?;
 
         if !status.success() {
             anyhow::bail!("git add failed");
@@ -2200,11 +2435,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Resolve a refspec to an OID (git rev-parse)
     pub fn rev_parse(&self, refspec: &str) -> Result<String> {
-        let output = Command::new("git")
-            .args(["rev-parse", refspec])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git rev-parse")?;
+        let output = self.run_git(self.workdir()?, &["rev-parse", refspec])?;
 
         if !output.status.success() {
             anyhow::bail!("git rev-parse {} failed", refspec);
@@ -2215,11 +2446,10 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Lease-protected force push a branch to the remote.
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
-        let output = Command::new("git")
-            .args(["push", "--force-with-lease", "--atomic", remote, branch])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git push")?;
+        let output = self.run_git(
+            self.workdir()?,
+            &["push", "--force-with-lease", "--atomic", remote, branch],
+        )?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2235,11 +2465,10 @@ Use --auto-stash-pop or stash/commit changes first.",
     }
 
     fn force_push_non_atomic(&self, remote: &str, branch: &str) -> Result<()> {
-        let status = Command::new("git")
-            .args(["push", "--force-with-lease", remote, branch])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git push --force-with-lease")?;
+        let status = command::status(
+            self.workdir()?,
+            &["push", "--force-with-lease", remote, branch],
+        )?;
 
         if !status.success() {
             anyhow::bail!("git push --force-with-lease {} {} failed", remote, branch);
@@ -2254,11 +2483,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Enable git rerere (reuse recorded resolution) for this repository
     pub fn enable_rerere(&self) -> Result<()> {
-        let status = Command::new("git")
-            .args(["config", "rerere.enabled", "true"])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to enable rerere")?;
+        let status = command::status(self.workdir()?, &["config", "rerere.enabled", "true"])?;
 
         if !status.success() {
             anyhow::bail!("Failed to set rerere.enabled config");
@@ -2268,11 +2493,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Check if git rerere is enabled for this repository
     pub fn rerere_enabled(&self) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["config", "--get", "rerere.enabled"])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to check rerere config")?;
+        let output = self.run_git(self.workdir()?, &["config", "--get", "rerere.enabled"])?;
 
         Ok(output.status.success() && output.stdout.starts_with(b"true"))
     }
@@ -2361,6 +2582,19 @@ mod tests {
         );
     }
 
+    /// Run git and return stdout, tolerating a non-zero exit. Callers assert on the
+    /// value, not the status: `git config --get <key>` exits 1 when the key is unset,
+    /// which is a legitimate "no value" answer (and exactly what the upstream tests
+    /// assert before configuring one).
+    fn run_git_capture(path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to run git");
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
     #[test]
     fn test_format_duration_just_now() {
         assert_eq!(format_duration(0), "just now");
@@ -2426,6 +2660,106 @@ mod tests {
                 .expect("canonical workdir"),
             std::fs::canonicalize(path).expect("canonical temp repo path")
         );
+    }
+
+    #[test]
+    fn refresh_sees_a_branch_created_by_a_subprocess() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+
+        // Create a branch via subprocess — the original handle's refdb cache will not see it.
+        run_git(path, &["branch", "new-branch"]);
+
+        let refreshed = repo.refresh().expect("refresh");
+        let oid = refreshed.rev_parse("new-branch");
+        assert!(
+            oid.is_ok(),
+            "refreshed repo should see subprocess-created branch"
+        );
+    }
+
+    #[test]
+    fn configured_remote_helpers_use_the_named_tracking_ref() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["switch", "-c", "feature"]);
+        fs::write(path.join("feature.txt"), "feature\n").expect("write feature");
+        run_git(path, &["add", "feature.txt"]);
+        run_git(path, &["commit", "-m", "Feature commit"]);
+        run_git(
+            path,
+            &["update-ref", "refs/remotes/upstream/feature", "main"],
+        );
+        run_git(
+            path,
+            &["update-ref", "refs/remotes/origin/feature", "feature"],
+        );
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+
+        assert!(repo.has_remote_named("upstream", "feature"));
+        assert_eq!(
+            repo.commits_vs_remote_named("upstream", "feature"),
+            Some((1, 0))
+        );
+        assert!(!repo.has_remote_named("missing", "feature"));
+        assert_eq!(repo.commits_vs_remote_named("missing", "feature"), None);
+        assert!(repo.has_remote("feature"));
+        assert_eq!(repo.commits_vs_remote("feature"), Some((0, 0)));
+    }
+
+    #[test]
+    fn resolved_diff_target_remains_stable_after_branch_moves() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["switch", "-c", "feature"]);
+        fs::write(path.join("captured.txt"), "captured\n").expect("write captured");
+        run_git(path, &["add", "captured.txt"]);
+        run_git(path, &["commit", "-m", "Captured feature"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let target = repo
+            .resolve_diff_target("feature", "main")
+            .expect("resolve immutable target");
+
+        fs::write(path.join("moved.txt"), "moved\n").expect("write moved");
+        run_git(path, &["add", "moved.txt"]);
+        run_git(path, &["commit", "-m", "Move feature"]);
+        assert_ne!(
+            target.branch_oid,
+            repo.rev_parse("feature").expect("moved feature oid")
+        );
+
+        let stat = repo
+            .diff_stat_at_target("feature", "main", &target)
+            .expect("diff stat at captured target");
+        assert_eq!(stat, vec![("captured.txt".to_string(), 1, 0)]);
+
+        let patch = repo
+            .diff_against_target("feature", "main", &target)
+            .expect("patch at captured target");
+        assert!(patch.iter().any(|line| line == "+captured"));
+        assert!(!patch.iter().any(|line| line == "+moved"));
     }
 
     #[test]
@@ -2585,5 +2919,106 @@ mod tests {
         ]);
 
         assert_eq!(names, vec!["main", "00cb/stax", "073a/stax"]);
+    }
+
+    #[test]
+    fn set_branch_upstream_configures_pull_target() {
+        let remote_dir = TempDir::new().expect("tempdir");
+        run_git(remote_dir.path(), &["init", "--bare", "-b", "main"]);
+
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(
+            path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().expect("utf8 path"),
+            ],
+        );
+        run_git(path, &["push", "origin", "main"]);
+
+        // Mirror how `stax branch track --all-prs` creates a local branch: a
+        // refspec fetch from a remote that already has it, not `git branch`.
+        run_git(path, &["switch", "-c", "copied"]);
+        fs::write(path.join("copied.txt"), "copied\n").expect("write copied");
+        run_git(path, &["add", "copied.txt"]);
+        run_git(path, &["commit", "-m", "Copied commit"]);
+        run_git(path, &["push", "origin", "copied"]);
+        run_git(path, &["switch", "main"]);
+        run_git(path, &["branch", "-D", "copied"]);
+        run_git(path, &["fetch", "--no-tags", "origin", "copied:copied"]);
+
+        let before = run_git_capture(
+            path,
+            &["config", "--local", "--get", "branch.copied.remote"],
+        );
+        assert!(
+            before.trim().is_empty(),
+            "upstream should be unset before configuring it"
+        );
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        repo.set_branch_upstream("copied", "origin")
+            .expect("set upstream");
+
+        let remote_value = run_git_capture(
+            path,
+            &["config", "--local", "--get", "branch.copied.remote"],
+        );
+        assert_eq!(remote_value.trim(), "origin");
+        let merge_value =
+            run_git_capture(path, &["config", "--local", "--get", "branch.copied.merge"]);
+        assert_eq!(merge_value.trim(), "refs/heads/copied");
+
+        let upstream = run_git_capture(path, &["rev-parse", "--abbrev-ref", "copied@{upstream}"]);
+        assert_eq!(upstream.trim(), "origin/copied");
+    }
+
+    #[test]
+    fn set_branch_upstream_is_readable_by_branches_with_configured_upstream() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["branch", "copied"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        repo.set_branch_upstream("copied", "origin")
+            .expect("set upstream");
+
+        let configured = repo
+            .branches_with_configured_upstream()
+            .expect("read configured upstreams");
+        assert!(configured.contains("copied"));
+    }
+
+    #[test]
+    fn branches_with_configured_upstream_is_empty_when_no_branch_config() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let configured = repo
+            .branches_with_configured_upstream()
+            .expect("no branch config should not be an error");
+        assert!(configured.is_empty());
     }
 }

@@ -2,6 +2,594 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.106.0] - 2026-08-26
+
+### 🚀 Features
+
+- *(gh-stack)* Support gh-stack v0.1.0 atomic stack merges ([#794](https://github.com/cesarferreira/stax/issues/794))
+
+### 🐛 Bug Fixes
+
+- Fix ready refresh after PR merges ([#796](https://github.com/cesarferreira/stax/issues/796))
+
+### 💼 Other
+
+- Add localhost web workspace with redesigned layout ([#791](https://github.com/cesarferreira/stax/issues/791))
+- Remove the native macOS desktop app now that st web is the graphical workspace. ([#792](https://github.com/cesarferreira/stax/issues/792))
+- Add screenshot to README for visual reference
+- Removed plans
+- New screenshot
+
+### 🧪 Testing
+
+- Isolate GitHub CLI auth in test repos ([#789](https://github.com/cesarferreira/stax/issues/789))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Tier draft PR verification ([#797](https://github.com/cesarferreira/stax/issues/797))
+## [0.105.1] - 2026-08-23
+
+### 🧪 Testing
+
+- *(ci)* Make stax ci integration coverage deterministic ([#788](https://github.com/cesarferreira/stax/issues/788))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.105.0] - 2026-08-23
+
+### 🐛 Bug Fixes
+
+- Report installed skills correctly ([#779](https://github.com/cesarferreira/stax/issues/779))
+
+### 💼 Other
+
+- Improve error outside Git repositories ([#784](https://github.com/cesarferreira/stax/issues/784))
+- Octocrab 0.54.1, adapt to newly-required PR fields ([#785](https://github.com/cesarferreira/stax/issues/785))
+
+### 🧪 Testing
+
+- Cover every skills update --all harness ([#782](https://github.com/cesarferreira/stax/issues/782))
+
+### ⚙️ Miscellaneous Tasks
+
+- Move the toolchain to 1.98.0 everywhere ([#786](https://github.com/cesarferreira/stax/issues/786))
+- Release
+## [0.104.8] - 2026-08-19
+
+### ⚡ Performance
+
+- Replay temporary submit restacks in the object database ([#776](https://github.com/cesarferreira/stax/issues/776))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.104.7] - 2026-08-18
+
+### 🐛 Bug Fixes
+
+- Parse commented skill versions ([#772](https://github.com/cesarferreira/stax/issues/772))
+- Reject non-positive standup hours ([#770](https://github.com/cesarferreira/stax/issues/770))
+- Stop submit stalling silently on temporary restacks ([#775](https://github.com/cesarferreira/stax/issues/775))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.104.6] - 2026-08-14
+
+### 🐛 Bug Fixes
+
+- Stop the Windows CI check-runs mock from losing responses ([#769](https://github.com/cesarferreira/stax/issues/769))
+
+### 💼 Other
+
+- Bump version
+- Bump version
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.104.4] - 2026-08-14
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.104.3] - 2026-08-14
+
+### 💼 Other
+
+- --skill feature
+- Fix standup forge mock timestamps so they stay within --hours window.
+
+### 🧪 Testing
+
+- Cover single-quoted skill versions ([#767](https://github.com/cesarferreira/stax/issues/767))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+- Release
+## [0.104.1] - 2026-08-10
+
+### 🚀 Features
+
+- Add stax watch --iterations to bound the refresh loop ([#748](https://github.com/cesarferreira/stax/issues/748))
+
+### 🐛 Bug Fixes
+
+- Remove the last if_same_then_else site and enforce the lint ([#750](https://github.com/cesarferreira/stax/issues/750))
+- Surface the token-permissions hint on pr list and issue list ([#751](https://github.com/cesarferreira/stax/issues/751))
+- Stop stax ci and stax ready reporting "no CI" when the API call failed ([#754](https://github.com/cesarferreira/stax/issues/754))
+- Enrich authenticated-user lookup errors ([#760](https://github.com/cesarferreira/stax/issues/760))
+
+### 📚 Documentation
+
+- Document refresh --all-stacks workflow ([#753](https://github.com/cesarferreira/stax/issues/753))
+
+### 🧪 Testing
+
+- Cover mutually-exclusive flag validation across 8 commands ([#743](https://github.com/cesarferreira/stax/issues/743))
+- Cover dirty-working-tree and main-worktree guard rails ([#744](https://github.com/cesarferreira/stax/issues/744))
+- Cover GitHub API failure modes (403, 404, 409, unreachable host) ([#745](https://github.com/cesarferreira/stax/issues/745))
+- Cover stax prev, tmux popup guard, and watch interval selection ([#746](https://github.com/cesarferreira/stax/issues/746))
+- Cover Transaction rollback-on-drop and the unexercised tx API ([#747](https://github.com/cesarferreira/stax/issues/747))
+- Make the CLI-unreachable guards reachable instead of deleting them ([#752](https://github.com/cesarferreira/stax/issues/752))
+- Add standup output contracts ([#742](https://github.com/cesarferreira/stax/issues/742))
+- Cover branch track --all-prs import workflow ([#759](https://github.com/cesarferreira/stax/issues/759))
+- Cover refresh --all-stacks conflict recovery ([#758](https://github.com/cesarferreira/stax/issues/758))
+
+### ⚙️ Miscellaneous Tasks
+
+- Close the gaps in forge API call accounting ([#755](https://github.com/cesarferreira/stax/issues/755))
+- Release
+- Release
+## [0.103.1] - 2026-08-09
+
+### 🐛 Bug Fixes
+
+- Preserve stacked PR merged state ([#739](https://github.com/cesarferreira/stax/issues/739))
+
+### 🧪 Testing
+
+- Cover refresh --all-stacks submission ([#740](https://github.com/cesarferreira/stax/issues/740))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.103.0] - 2026-08-05
+
+### 🚀 Features
+
+- *(refresh)* Add --all-stacks to refresh every stack in one pass ([#730](https://github.com/cesarferreira/stax/issues/730))
+
+### 🧪 Testing
+
+- Lock down sync dry-run no-fetch guarantee ([#732](https://github.com/cesarferreira/stax/issues/732))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.102.2] - 2026-07-31
+
+### 🐛 Bug Fixes
+
+- *(restack)* Drop become-empty commits instead of erroring ([#728](https://github.com/cesarferreira/stax/issues/728))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.102.1] - 2026-07-31
+
+### 💼 Other
+
+- Let setup and skills update target selected agent harnesses only. ([#727](https://github.com/cesarferreira/stax/issues/727))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.102.0] - 2026-07-30
+
+### 🚀 Features
+
+- *(sync)* Warn on leaked auto-stash, stale stack fallback, and show deleted tip SHAs ([#714](https://github.com/cesarferreira/stax/issues/714))
+- *(sync)* Make sync undoable and add GitRepo::refresh() ([#715](https://github.com/cesarferreira/stax/issues/715))
+- *(sync)* Add --dry-run/--plan preview to stax sync ([#716](https://github.com/cesarferreira/stax/issues/716))
+- *(sync)* Add --json machine-readable output ([#717](https://github.com/cesarferreira/stax/issues/717))
+- *(sync)* Add --stash/--no-stash, actionable dirty-tree error, deprecate --prune ([#718](https://github.com/cesarferreira/stax/issues/718))
+- *(sync)* Show one interactive Sync plan before trunk update and deletions ([#719](https://github.com/cesarferreira/stax/issues/719))
+
+### 🐛 Bug Fixes
+
+- *(track)* Stop --all-prs flattening stacked PRs onto trunk ([#721](https://github.com/cesarferreira/stax/issues/721))
+- *(sync)* Don't prompt when the only change is a trunk fast-forward ([#723](https://github.com/cesarferreira/stax/issues/723))
+- *(track)* Set upstream on branches fetched by --all-prs ([#724](https://github.com/cesarferreira/stax/issues/724))
+
+### 💼 Other
+
+- Improve --default-config ([#722](https://github.com/cesarferreira/stax/issues/722))
+- Reuse sync plan merged detection after trunk update ([#725](https://github.com/cesarferreira/stax/issues/725))
+
+### 🚜 Refactor
+
+- *(sync)* Extract SyncContext and split run() into phase methods ([#711](https://github.com/cesarferreira/stax/issues/711))
+- *(sync)* Dedupe trunk fast-forward ladders into one helper ([#712](https://github.com/cesarferreira/stax/issues/712))
+- *(sync)* Dedupe merged and upstream-gone cleanup pipelines ([#713](https://github.com/cesarferreira/stax/issues/713))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.101.1] - 2026-07-30
+
+### 🚀 Features
+
+- Support GitLab stack merges ([#701](https://github.com/cesarferreira/stax/issues/701))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Detect squash-merged branches on first rs ([#702](https://github.com/cesarferreira/stax/issues/702))
+- Preserve stacked PR merged state ([#699](https://github.com/cesarferreira/stax/issues/699))
+- *(test)* Make native tests resilient to PATH clobbering ([#710](https://github.com/cesarferreira/stax/issues/710))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.101.0] - 2026-07-28
+
+### 🚀 Features
+
+- *(ready)* Make `st ready` the `st ci -1 -w` oneline watch view over all tracked branches ([#694](https://github.com/cesarferreira/stax/issues/694))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Skip push-delete for merged branches already gone from remote ([#691](https://github.com/cesarferreira/stax/issues/691))
+- *(create)* Honor -m message with explicit name; dedupe doubled user prefix ([#692](https://github.com/cesarferreira/stax/issues/692))
+- *(cli)* Allow read-only commands during an active rebase ([#696](https://github.com/cesarferreira/stax/issues/696))
+- *(ready)* Readable selection bg, live scope refresh, safe merge cleanup, draft/undraft shortcut ([#698](https://github.com/cesarferreira/stax/issues/698))
+
+### 💼 Other
+
+- Use ⎇ as the linked-worktree indicator in stack views ([#693](https://github.com/cesarferreira/stax/issues/693))
+- Warn when a merged/closed-PR branch has unpushed commits ([#695](https://github.com/cesarferreira/stax/issues/695))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.100.0] - 2026-07-27
+
+### 🚀 Features
+
+- *(agents)* Support pi as an AI agent and skills install target ([#690](https://github.com/cesarferreira/stax/issues/690))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.99.0] - 2026-07-27
+
+### 🚀 Features
+
+- *(update)* Polish `st update` header with tree-glyph step rendering ([#688](https://github.com/cesarferreira/stax/issues/688))
+- *(cli)* Make `refresh` the primary name for `st update` (kept as alias) + clarify cascade help ([#689](https://github.com/cesarferreira/stax/issues/689))
+
+### 🐛 Bug Fixes
+
+- *(merge)* Show what the merge is waiting for instead of 'Waiting for waiting' ([#687](https://github.com/cesarferreira/stax/issues/687))
+
+### 💼 Other
+
+- Updated skills
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Add git-native stax-dev multi-agent pipeline ([#686](https://github.com/cesarferreira/stax/issues/686))
+- Gitignore stax-dev harness run artifacts (_workspace, .pi-subagents)
+- *(harness)* Set cross-model matrix for stax-dev agents (opus 5 for plan/review, composer-2.5 elsewhere)
+- Release
+## [0.98.2] - 2026-07-25
+
+### 🚀 Features
+
+- *(resolve)* Retry AI conflict resolution with feedback on invalid output ([#659](https://github.com/cesarferreira/stax/issues/659))
+- *(resolve)* Retry AI conflict resolution with feedback on invalid output ([#683](https://github.com/cesarferreira/stax/issues/683))
+
+### 💼 Other
+
+- Add `st --default-config` flag to print default config.toml ([#684](https://github.com/cesarferreira/stax/issues/684))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Track stax-dev pipeline and use sonnet for implementer ([#685](https://github.com/cesarferreira/stax/issues/685))
+- Release
+## [0.98.1] - 2026-07-24
+
+### 🚀 Features
+
+- Add curl-install script for the macOS GUI ([#680](https://github.com/cesarferreira/stax/issues/680))
+
+### 🐛 Bug Fixes
+
+- *(restack)* Repair stale parent metadata after external rebase ([#682](https://github.com/cesarferreira/stax/issues/682))
+
+### 💼 Other
+
+- Add bug report issue template modeled on #679 ([#681](https://github.com/cesarferreira/stax/issues/681))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.98.0] - 2026-07-23
+
+### 🚀 Features
+
+- *(gui)* Persist window size ([#666](https://github.com/cesarferreira/stax/issues/666))
+- Unstack native stacks by number ([#668](https://github.com/cesarferreira/stax/issues/668))
+- Add --stack to draft and undraft commands ([#676](https://github.com/cesarferreira/stax/issues/676))
+
+### 🐛 Bug Fixes
+
+- Support gh-stack v0.0.8 authentication ([#667](https://github.com/cesarferreira/stax/issues/667))
+- Handle append-only native stack updates ([#669](https://github.com/cesarferreira/stax/issues/669))
+
+### ⚡ Performance
+
+- Strip symbols from released binaries
+
+### 🧪 Testing
+
+- Cover parallel untracked worktree recovery ([#662](https://github.com/cesarferreira/stax/issues/662))
+
+### ⚙️ Miscellaneous Tasks
+
+- Split macOS GUI checks into fast PR and packaging jobs ([#677](https://github.com/cesarferreira/stax/issues/677))
+- Drop main-branch GUI packaging job ([#678](https://github.com/cesarferreira/stax/issues/678))
+- Release
+## [0.97.1] - 2026-07-21
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.97.0] - 2026-07-21
+
+### 🚀 Features
+
+- *(generate)* Refresh Claude models, add live Anthropic Models API fetch ([#655](https://github.com/cesarferreira/stax/issues/655))
+
+### 🐛 Bug Fixes
+
+- Describe native stack commands in help ([#639](https://github.com/cesarferreira/stax/issues/639))
+- Preserve auth for gh-stack probes ([#648](https://github.com/cesarferreira/stax/issues/648))
+- Diagnose missing gh-stack OAuth login ([#652](https://github.com/cesarferreira/stax/issues/652))
+- Resolve all clippy warnings ([#658](https://github.com/cesarferreira/stax/issues/658))
+- *(worktree)* Handle external relative roots ([#664](https://github.com/cesarferreira/stax/issues/664))
+- *(ci)* Use live PR head for status ([#665](https://github.com/cesarferreira/stax/issues/665))
+- Display quoted split-hunk paths correctly ([#663](https://github.com/cesarferreira/stax/issues/663))
+- Exclude docs screenshots from published crate
+
+### 💼 Other
+
+- Revamped st ready
+
+### 🚜 Refactor
+
+- *(forge)* Introduce Forge trait seam and neutral model module ([#642](https://github.com/cesarferreira/stax/issues/642))
+- *(merge)* Consolidate duplicated helpers across the merge family ([#643](https://github.com/cesarferreira/stax/issues/643))
+- *(ci)* Fix the CI layer inversion ([#644](https://github.com/cesarferreira/stax/issues/644))
+- *(submit)* Unify branch-selection into one canonical function ([#645](https://github.com/cesarferreira/stax/issues/645))
+- *(git)* Unify git invocation inside the git module ([#646](https://github.com/cesarferreira/stax/issues/646))
+
+### 🧪 Testing
+
+- Tighten merged branch cleanup assertion ([#653](https://github.com/cesarferreira/stax/issues/653))
+- Cover worktree hook semantics ([#661](https://github.com/cesarferreira/stax/issues/661))
+- Validate documented CLI aliases and subcommands ([#657](https://github.com/cesarferreira/stax/issues/657))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.7] - 2026-07-16
+
+### 🐛 Bug Fixes
+
+- Serialize CI test config environment
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.6] - 2026-07-16
+
+### 🐛 Bug Fixes
+
+- Abort restack when trunk diverges ([#633](https://github.com/cesarferreira/stax/issues/633))
+- Ignore empty config directory override ([#637](https://github.com/cesarferreira/stax/issues/637))
+
+### 💼 Other
+
+- Keep linked worktrees during sync cleanup ([#638](https://github.com/cesarferreira/stax/issues/638))
+
+### 📚 Documentation
+
+- Scope test runs to changed tests during iteration ([#632](https://github.com/cesarferreira/stax/issues/632))
+
+### ⚙️ Miscellaneous Tasks
+
+- Pay down legacy clippy lint debt ([#634](https://github.com/cesarferreira/stax/issues/634))
+- Release
+## [0.96.5] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Require notarized macOS app releases
+- Ad-hoc sign macOS app releases
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.4] - 2026-07-15
+
+### 🧪 Testing
+
+- Make diff failure assertion cross-platform
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.3] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Honor HOME for config directory
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.2] - 2026-07-15
+
+### 🧪 Testing
+
+- Align PID lease checks with platform behavior
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.1] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Make cache timestamp tests Windows-safe
+
+### ⚡ Performance
+
+- Streamline Clippy workflow ([#630](https://github.com/cesarferreira/stax/issues/630))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.96.0] - 2026-07-15
+
+### 🚀 Features
+
+- *(gui)* Restore and switch projects ([#626](https://github.com/cesarferreira/stax/issues/626))
+
+### 🐛 Bug Fixes
+
+- Preserve promoted worktree after partial retirement ([#621](https://github.com/cesarferreira/stax/issues/621))
+- Fixed st pr panic
+- Clarify diverged trunk sync recovery ([#620](https://github.com/cesarferreira/stax/issues/620))
+- Preserve st pr lookup errors ([#625](https://github.com/cesarferreira/stax/issues/625))
+
+### 💼 Other
+
+- Fix GUI screenshot link in docs ([#623](https://github.com/cesarferreira/stax/issues/623))
+- Guard CI tests with explicit config dir and vendored OpenSSL for GUI
+- Removed unnecessary files
+- Fix worktree promotion for nested worktrees ([#629](https://github.com/cesarferreira/stax/issues/629))
+
+### 📚 Documentation
+
+- *(gui)* Add missing GUI screenshot to interface page ([#619](https://github.com/cesarferreira/stax/issues/619))
+
+### 🧪 Testing
+
+- Cover worktree promotion safety guards ([#609](https://github.com/cesarferreira/stax/issues/609))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.95.0] - 2026-07-13
+
+### 🚀 Features
+
+- Preview submits and generate completions ([#598](https://github.com/cesarferreira/stax/issues/598))
+- Add stack review inbox and next navigation ([#599](https://github.com/cesarferreira/stax/issues/599))
+- Parallelize stack checks and freeze branches ([#600](https://github.com/cesarferreira/stax/issues/600))
+- Make sync summaries actionable ([#604](https://github.com/cesarferreira/stax/issues/604))
+- Add GPUI desktop read-only cockpit ([#611](https://github.com/cesarferreira/stax/issues/611))
+- Add GPUI everyday stack operations ([#612](https://github.com/cesarferreira/stax/issues/612))
+
+### 🐛 Bug Fixes
+
+- Make CLI runtime behavior consistent and non-blocking ([#596](https://github.com/cesarferreira/stax/issues/596))
+- Explain forced native stack setup gaps ([#589](https://github.com/cesarferreira/stax/issues/589))
+- Always show sync diff stats
+
+### 💼 Other
+
+- Make test and CI inputs reproducible ([#595](https://github.com/cesarferreira/stax/issues/595))
+- Promote linked worktrees to the main checkout ([#605](https://github.com/cesarferreira/stax/issues/605))
+- Regenerated cargo.lock
+
+### 📚 Documentation
+
+- Clarify native stack unlink limits ([#593](https://github.com/cesarferreira/stax/issues/593))
+- Design the GPUI desktop app ([#607](https://github.com/cesarferreira/stax/issues/607))
+- *(gui)* Design phase 3 parity ([#615](https://github.com/cesarferreira/stax/issues/615))
+- *(gui)* Design phase 4 distribution ([#616](https://github.com/cesarferreira/stax/issues/616))
+
+### ⚡ Performance
+
+- Bound stack fan-out and add tracing ([#597](https://github.com/cesarferreira/stax/issues/597))
+- *(test)* Reduce native macOS test overhead ([#606](https://github.com/cesarferreira/stax/issues/606))
+- *(gui)* Reuse cached branch diffs instantly ([#617](https://github.com/cesarferreira/stax/issues/617))
+
+### 🎨 Styling
+
+- *(gui)* Adopt a Codex-inspired workspace ([#618](https://github.com/cesarferreira/stax/issues/618))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.94.0] - 2026-07-07
+
+### 🚀 Features
+
+- Native GitHub Stacked PR integration ([#565](https://github.com/cesarferreira/stax/issues/565))
+
+### 🐛 Bug Fixes
+
+- Render forked stack siblings at equal depth in Stack Links ([#587](https://github.com/cesarferreira/stax/issues/587))
+## [0.93.1] - 2026-07-07
+
+### 🐛 Bug Fixes
+
+- Persist TUI pane visibility ([#585](https://github.com/cesarferreira/stax/issues/585))
+
+### 🚜 Refactor
+
+- Remove tracked file count helper ([#581](https://github.com/cesarferreira/stax/issues/581))
+## [0.93.0] - 2026-07-06
+
+### 🚀 Features
+
+- *(worktree)* Auto-seed dependencies into new worktrees ([#570](https://github.com/cesarferreira/stax/issues/570))
+
+### 🐛 Bug Fixes
+
+- Let GitHub mark downstack stack PRs merged ([#574](https://github.com/cesarferreira/stax/issues/574))
+- Fail closed on release build failures ([#576](https://github.com/cesarferreira/stax/issues/576))
+- Speed up native full-test path ([#578](https://github.com/cesarferreira/stax/issues/578))
+
+### 💼 Other
+
+- Add native GitHub Stacked PR integration ([#564](https://github.com/cesarferreira/stax/issues/564))
+- Revert "Add native GitHub Stacked PR integration ([#564](https://github.com/cesarferreira/stax/issues/564))" ([#566](https://github.com/cesarferreira/stax/issues/566))
+- Increase GitHub Pages deploy timeout to handle queued deployments ([#569](https://github.com/cesarferreira/stax/issues/569))
+- Fix full stack temporary submit restacks ([#572](https://github.com/cesarferreira/stax/issues/572))
+
+### 📚 Documentation
+
+- Remove nonexistent task install path ([#575](https://github.com/cesarferreira/stax/issues/575))
+- Document merge when-ready queue conflict ([#580](https://github.com/cesarferreira/stax/issues/580))
+- Cover visible commands in reference ([#582](https://github.com/cesarferreira/stax/issues/582))
+
+### 🧪 Testing
+
+- Cover copy pr clipboard fallback ([#577](https://github.com/cesarferreira/stax/issues/577))
+## [0.92.0] - 2026-07-02
+
+### 🐛 Bug Fixes
+
+- Keep skills.md version marker in sync and clarify update output ([#561](https://github.com/cesarferreira/stax/issues/561))
+- Add TUI pane visibility toggles ([#555](https://github.com/cesarferreira/stax/issues/555))
+- Don't flag empty never-pushed branches as merged ([#562](https://github.com/cesarferreira/stax/issues/562))
 ## [0.91.2] - 2026-07-02
 
 ### 🐛 Bug Fixes

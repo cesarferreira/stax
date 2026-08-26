@@ -64,25 +64,24 @@ fn render_commits(f: &mut Frame, app: &SplitApp, area: Rect) {
         items.push(item);
 
         // Add split marker line after this commit if there's a split point
-        if has_split {
-            if let Some(sp) = app
+        if has_split
+            && let Some(sp) = app
                 .split_points
                 .iter()
                 .find(|sp| sp.after_commit_index == i)
-            {
-                let split_line = Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled("──── ", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        format!("split: {} ", sp.branch_name),
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("────", Style::default().fg(Color::Green)),
-                ]);
-                items.push(ListItem::new(split_line));
-            }
+        {
+            let split_line = Line::from(vec![
+                Span::raw("  "),
+                Span::styled("──── ", Style::default().fg(Color::Green)),
+                Span::styled(
+                    format!("split: {} ", sp.branch_name),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("────", Style::default().fg(Color::Green)),
+            ]);
+            items.push(ListItem::new(split_line));
         }
     }
 

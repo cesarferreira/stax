@@ -20,6 +20,9 @@ Runs:
 
 Exit code `0` if healthy, `1` if issues found.
 
+Validation and other read commands never delete metadata. Orphaned refs remain
+available for inspection until an explicit `st fix` removes them.
+
 ## `st doctor --fix`
 
 Check repo/config health, print a repair plan, and apply safe local repairs after one confirmation.
@@ -107,3 +110,7 @@ Failed branches:
 ```
 
 Exit code `1` if any branch fails.
+
+If a restack stops on a conflict, both executable names (`st` and `stax`) return
+exit code `2`; the conflict details are printed once before control returns to
+the shell.

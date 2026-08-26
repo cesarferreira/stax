@@ -35,7 +35,7 @@ fn models_file() -> &'static ModelsFile {
     })
 }
 
-const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "pi"];
 
 #[derive(Clone, Copy, Debug)]
 enum GenerateTarget {
@@ -697,6 +697,7 @@ fn auto_detect_agent(available: &[String]) -> Result<String> {
          - codex  (https://github.com/openai/codex)\n  \
          - gemini (https://github.com/google-gemini/gemini-cli)\n  \
          - opencode (https://opencode.ai)\n  \
+         - pi (https://pi.dev)\n  \
          Or set manually in ~/.config/stax/config.toml:\n    \
          [ai]\n    \
          agent = \"claude\"",
@@ -733,17 +734,17 @@ pub(crate) fn resolve_model(
     if let Some(model) = config.ai.model_for(feature) {
         // If resolved model is a known model for a different agent, ignore it and
         // fall back to the selected agent default.
-        if let Some(model_agent) = known_agent_for_model(model) {
-            if model_agent != agent {
-                eprintln!(
-                    "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
-                    "⚠".yellow(),
-                    model.yellow(),
-                    model_agent,
-                    agent
-                );
-                return Ok(None);
-            }
+        if let Some(model_agent) = known_agent_for_model(model)
+            && model_agent != agent
+        {
+            eprintln!(
+                "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
+                "⚠".yellow(),
+                model.yellow(),
+                model_agent,
+                agent
+            );
+            return Ok(None);
         }
         validate_model_soft(agent, model);
         return Ok(Some(model.to_string()));
@@ -766,15 +767,29 @@ fn model_picker_items(models: &[ModelOption]) -> Vec<String> {
     items
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ModelPickerSelection {
+    Default,
+    Known(String),
+    EditConfig,
+}
+
+fn model_picker_selection(models: &[ModelOption], selection: usize) -> ModelPickerSelection {
+    if selection == 0 {
+        ModelPickerSelection::Default
+    } else if selection == models.len() + 1 {
+        ModelPickerSelection::EditConfig
+    } else {
+        ModelPickerSelection::Known(models[selection - 1].id.clone())
+    }
+}
+
 fn pick_model_interactive(
     agent: &str,
     config: &mut Config,
     feature: &str,
 ) -> Result<Option<String>> {
     let models = available_models_for(agent);
-    if models.is_empty() {
-        return Ok(None);
-    }
 
     // "Default" is always item 0 — selecting it saves model=None so the agent
     // picks its own default rather than pinning a specific version.
@@ -786,32 +801,58 @@ fn pick_model_interactive(
         .default(0)
         .interact()?;
 
-    if selection == 0 {
-        Ok(None)
-    } else if selection == items.len() - 1 {
-        edit_config_for_custom_model(config, feature)?;
-        Ok(model_from_config(config, feature))
-    } else {
-        Ok(Some(models[selection - 1].id.clone()))
+    match model_picker_selection(&models, selection) {
+        ModelPickerSelection::Default => Ok(None),
+        ModelPickerSelection::Known(model) => Ok(Some(model)),
+        ModelPickerSelection::EditConfig => {
+            edit_config_for_custom_model(config, feature)?;
+            Ok(model_from_config(config, feature))
+        }
     }
 }
 
 fn edit_config_for_custom_model(config: &mut Config, feature: &str) -> Result<()> {
-    config.save()?;
     let path = Config::path()?;
+    edit_config_for_custom_model_with(config, feature, &path, open_config_in_editor)
+}
+
+fn edit_config_for_custom_model_with(
+    config: &mut Config,
+    feature: &str,
+    path: &Path,
+    edit: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    ensure_user_config_file(path)?;
     println!(
         "  {} Edit {} and set `{}` to the model id you want.",
         "Tip:".dimmed(),
         path.display(),
-        if feature == "global" {
-            "[ai].model"
-        } else {
-            "model"
-        }
+        model_config_key(feature)
     );
-    open_config_in_editor(&path)?;
-    *config = load_user_config_file(&path)?;
+    edit(path)?;
+    *config = load_user_config_file(path)?;
     Ok(())
+}
+
+fn model_config_key(feature: &str) -> String {
+    if feature == "global" {
+        "[ai].model".to_string()
+    } else {
+        format!("[ai.{}].model", feature)
+    }
+}
+
+fn ensure_user_config_file(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
+    }
+    let content = toml::to_string_pretty(&Config::default())?;
+    std::fs::write(path, content)
+        .with_context(|| format!("Failed to initialize user config {}", path.display()))
 }
 
 fn load_user_config_file(path: &Path) -> Result<Config> {
@@ -826,21 +867,41 @@ fn load_user_config_file(path: &Path) -> Result<Config> {
 }
 
 fn model_from_config(config: &Config, feature: &str) -> Option<String> {
-    if feature == "global" {
-        config.ai.model.clone()
-    } else {
-        config.ai.model_for(feature).map(ToString::to_string)
+    match feature {
+        "generate" => config.ai.generate.model.clone(),
+        "standup" => config.ai.standup.model.clone(),
+        "resolve" => config.ai.resolve.model.clone(),
+        "lane" => config.ai.lane.model.clone(),
+        _ => config.ai.model.clone(),
     }
 }
 
 fn open_config_in_editor(path: &Path) -> Result<()> {
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .context("$EDITOR is not set; set EDITOR to edit the stax config file")?;
-    if editor.trim().is_empty() {
-        bail!("$EDITOR is empty; set EDITOR to edit the stax config file");
-    }
+    let editor =
+        configured_editor_from(std::env::var("EDITOR").ok(), std::env::var("VISUAL").ok())?;
+    open_config_in_editor_with(path, &editor)
+}
 
+fn configured_editor_from(editor: Option<String>, visual: Option<String>) -> Result<String> {
+    let (name, editor) = match editor {
+        Some(editor) => ("$EDITOR", editor),
+        None => match visual {
+            Some(visual) => ("$VISUAL", visual),
+            None => {
+                bail!("$EDITOR or $VISUAL is not set; configure one to edit the stax config file")
+            }
+        },
+    };
+    if editor.trim().is_empty() {
+        bail!(
+            "{} is empty; configure it to edit the stax config file",
+            name
+        );
+    }
+    Ok(editor)
+}
+
+fn open_config_in_editor_with(path: &Path, editor: &str) -> Result<()> {
     let status = if cfg!(windows) {
         Command::new("cmd")
             .args(["/C", &format!("{} \"{}\"", editor, path.display())])
@@ -853,10 +914,10 @@ fn open_config_in_editor(path: &Path) -> Result<()> {
             .arg(path)
             .status()
     }
-    .context("Failed to launch $EDITOR")?;
+    .context("Failed to launch editor")?;
 
     if !status.success() {
-        bail!("$EDITOR exited with status {}", status);
+        bail!("editor exited with status {}", status);
     }
 
     Ok(())
@@ -963,9 +1024,7 @@ fn persist_prompt_selection(
     };
 
     if should_save {
-        config.ai.agent = Some(agent.to_string());
-        config.ai.model = model.clone();
-        config.save()?;
+        persist_ai_selection_with(config, "global", agent, model.clone(), Config::save)?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -976,6 +1035,23 @@ fn persist_prompt_selection(
     }
 
     Ok(())
+}
+
+fn persist_ai_selection_with(
+    config: &mut Config,
+    feature: &str,
+    agent: &str,
+    model: Option<String>,
+    save: impl FnOnce(&Config) -> Result<()>,
+) -> Result<()> {
+    if let Some(feature_config) = config.ai.feature_config_mut(feature) {
+        feature_config.agent = Some(agent.to_string());
+        feature_config.model = model;
+    } else {
+        config.ai.agent = Some(agent.to_string());
+        config.ai.model = model;
+    }
+    save(config)
 }
 
 /// Interactively pick agent+model for a specific feature and persist to `[ai.<feature>]`.
@@ -1023,10 +1099,9 @@ pub(crate) fn prompt_for_feature_ai(
     let model = pick_model_interactive(&agent, config, feature)?;
 
     // Persist to feature-specific config, or global if feature is "global"/unknown.
-    if let Some(feat_cfg) = config.ai.feature_config_mut(feature) {
-        feat_cfg.agent = Some(agent.clone());
-        feat_cfg.model = model.clone();
-        config.save()?;
+    let feature_specific = matches!(feature, "generate" | "standup" | "resolve" | "lane");
+    persist_ai_selection_with(config, feature, &agent, model.clone(), Config::save)?;
+    if feature_specific {
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved [ai.{}] agent = \"{}\", model = \"{}\"",
@@ -1036,10 +1111,6 @@ pub(crate) fn prompt_for_feature_ai(
             model_display
         );
     } else {
-        // "global" or unknown feature — write to top-level [ai]
-        config.ai.agent = Some(agent.clone());
-        config.ai.model = model.clone();
-        config.save()?;
         let model_display = model.as_deref().unwrap_or("agent default");
         println!(
             "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
@@ -1072,14 +1143,39 @@ struct ModelOption {
 }
 
 fn available_models_for(agent: &str) -> Vec<ModelOption> {
-    if agent == "codex" {
-        if let Ok(models) = fetch_openai_codex_models() {
-            if !models.is_empty() {
-                return models;
-            }
-        }
+    let live = match agent {
+        "codex" => fetch_openai_codex_models().ok(),
+        "claude" => fetch_anthropic_models().ok(),
+        _ => None,
+    };
+    match live {
+        Some(models) if !models.is_empty() => models,
+        _ => known_models_for(agent),
     }
-    known_models_for(agent)
+}
+
+/// Fetch and deserialize a models listing, applying the shared timeouts.
+///
+/// `authorize` adds whatever auth/version headers the provider requires.
+fn fetch_models_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    authorize: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<T> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime
+        .block_on(async {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .timeout(std::time::Duration::from_secs(5))
+                .build()?;
+            authorize(client.get(url))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<T>()
+                .await
+        })
+        .map_err(Into::into)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1099,22 +1195,64 @@ fn fetch_openai_codex_models() -> Result<Vec<ModelOption>> {
         .unwrap_or_else(|_| "https://api.openai.com".to_string());
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
 
-    let runtime = tokio::runtime::Runtime::new()?;
-    let response = runtime.block_on(async {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(5))
-            .build()?
-            .get(&url)
-            .bearer_auth(api_key)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<OpenAiModelsResponse>()
-            .await
-    })?;
+    let response: OpenAiModelsResponse =
+        fetch_models_json(&url, |request| request.bearer_auth(api_key))?;
 
     Ok(filter_live_codex_models(response.data))
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicModelsResponse {
+    data: Vec<AnthropicModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicModel {
+    id: String,
+    display_name: Option<String>,
+    created_at: Option<String>,
+}
+
+fn fetch_anthropic_models() -> Result<Vec<ModelOption>> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY is not set; falling back to local claude model list")?;
+    let base_url = std::env::var("STAX_ANTHROPIC_API_BASE_URL")
+        .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+    let url = format!("{}/v1/models?limit=100", base_url.trim_end_matches('/'));
+
+    let response: AnthropicModelsResponse = fetch_models_json(&url, |request| {
+        request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+    })?;
+
+    Ok(filter_live_anthropic_models(response.data))
+}
+
+/// Keep Claude models only, newest first. The API paginates newest-last, and
+/// `created_at` is ISO-8601 so it sorts lexicographically.
+fn filter_live_anthropic_models(models: Vec<AnthropicModel>) -> Vec<ModelOption> {
+    let mut models: Vec<AnthropicModel> = models
+        .into_iter()
+        .filter(|model| model.id.starts_with("claude-"))
+        .collect();
+
+    models.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    models
+        .into_iter()
+        .map(|model| ModelOption {
+            description: match model.display_name {
+                Some(name) => format!("{} · live via Anthropic Models API", name),
+                None => "live via Anthropic Models API".to_string(),
+            },
+            id: model.id,
+        })
+        .collect()
 }
 
 fn filter_live_codex_models(models: Vec<OpenAiModel>) -> Vec<ModelOption> {
@@ -1356,6 +1494,12 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
             args.push(prompt.to_string());
             write_prompt_to_stdin = false;
         }
+        "pi" => {
+            args.push("-p".into());
+            if let Some(m) = model {
+                args.extend(["--model".into(), m.into()]);
+            }
+        }
         _ => bail!("Unsupported agent: {}", agent),
     }
 
@@ -1427,6 +1571,16 @@ mod tests {
     }
 
     #[test]
+    fn validate_agent_name_accepts_pi() {
+        assert!(validate_agent_name("pi").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_unknown() {
+        assert!(validate_agent_name("nope").is_err());
+    }
+
+    #[test]
     fn known_models_include_gemini_defaults() {
         let models = known_models_for("gemini");
         assert!(models.iter().any(|m| m.id == "gemini-2.5-pro"));
@@ -1449,6 +1603,42 @@ mod tests {
     }
 
     #[test]
+    fn known_models_include_current_claude_defaults() {
+        let models = known_models_for("claude");
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
+        assert!(models.iter().any(|m| m.id == "claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn live_anthropic_model_filter_sorts_newest_first() {
+        let filtered = filter_live_anthropic_models(vec![
+            AnthropicModel {
+                id: "claude-sonnet-4-6".to_string(),
+                display_name: Some("Claude Sonnet 4.6".to_string()),
+                created_at: Some("2025-11-14T00:00:00Z".to_string()),
+            },
+            AnthropicModel {
+                id: "some-other-model".to_string(),
+                display_name: None,
+                created_at: Some("2026-06-24T00:00:00Z".to_string()),
+            },
+            AnthropicModel {
+                id: "claude-opus-4-8".to_string(),
+                display_name: Some("Claude Opus 4.8".to_string()),
+                created_at: Some("2026-04-01T00:00:00Z".to_string()),
+            },
+        ]);
+
+        let ids: Vec<&str> = filtered.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-4-6"]);
+        assert_eq!(
+            filtered[0].description,
+            "Claude Opus 4.8 · live via Anthropic Models API"
+        );
+    }
+
+    #[test]
     fn model_picker_includes_config_edit_entry_after_known_models() {
         let models = vec![ModelOption {
             id: "opencode/gpt-5.5-fast".to_string(),
@@ -1466,11 +1656,41 @@ mod tests {
     }
 
     #[test]
+    fn model_picker_includes_config_edit_entry_when_known_models_are_empty() {
+        let items = model_picker_items(&[]);
+
+        assert_eq!(
+            items,
+            vec!["Default — let the agent decide", EDIT_CONFIG_MODEL_ITEM]
+        );
+    }
+
+    #[test]
+    fn model_picker_interprets_final_item_as_config_edit_when_models_are_empty() {
+        assert_eq!(
+            model_picker_selection(&[], 1),
+            ModelPickerSelection::EditConfig
+        );
+    }
+
+    #[test]
+    fn model_picker_interprets_known_model_without_changing_its_id() {
+        let models = vec![ModelOption {
+            id: "opencode/custom-provider-model".to_string(),
+            description: "provider model".to_string(),
+        }];
+
+        assert_eq!(
+            model_picker_selection(&models, 1),
+            ModelPickerSelection::Known("opencode/custom-provider-model".to_string())
+        );
+    }
+
+    #[test]
     fn model_from_config_uses_feature_override_before_global() {
         let mut config = Config::default();
         config.ai.model = Some("global-model".to_string());
         config.ai.generate.model = Some("custom-generate-model".to_string());
-
         assert_eq!(
             model_from_config(&config, "generate"),
             Some("custom-generate-model".to_string())
@@ -1481,10 +1701,171 @@ mod tests {
     fn model_from_config_reads_global_model_for_global_feature() {
         let mut config = Config::default();
         config.ai.model = Some("custom-global-model".to_string());
-
         assert_eq!(
             model_from_config(&config, "global"),
             Some("custom-global-model".to_string())
+        );
+    }
+
+    #[test]
+    fn model_from_config_does_not_inherit_global_model_for_lane() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+        assert_eq!(model_from_config(&config, "lane"), None);
+    }
+
+    #[test]
+    fn model_from_config_returns_none_when_exact_feature_model_is_absent() {
+        assert_eq!(model_from_config(&Config::default(), "generate"), None);
+    }
+
+    #[test]
+    fn custom_model_edit_hint_names_the_exact_selected_scope() {
+        assert_eq!(model_config_key("global"), "[ai].model");
+        assert_eq!(model_config_key("lane"), "[ai.lane].model");
+    }
+
+    #[test]
+    fn configured_editor_rejects_missing_editor_values() {
+        let err = configured_editor_from(None, None).unwrap_err();
+        assert!(err.to_string().contains("$EDITOR or $VISUAL is not set"));
+    }
+
+    #[test]
+    fn configured_editor_rejects_blank_editor_value() {
+        let err = configured_editor_from(Some("  ".to_string()), None).unwrap_err();
+        assert!(err.to_string().contains("$EDITOR is empty"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editor_non_zero_exit_is_contextual() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let err = open_config_in_editor_with(&path, "false").unwrap_err();
+        assert!(err.to_string().contains("editor exited with status"));
+    }
+
+    #[test]
+    fn absent_user_config_is_initialized_without_merged_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("nested").join("config.toml");
+        ensure_user_config_file(&path).unwrap();
+        let loaded = load_user_config_file(&path).unwrap();
+        assert!(path.exists());
+        assert_eq!(loaded.ai.agent, None);
+        assert_eq!(loaded.ai.model, None);
+    }
+
+    #[test]
+    fn malformed_edited_user_config_returns_contextual_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, "[ai\nmodel =").unwrap();
+        let err = load_user_config_file(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse edited config"));
+    }
+
+    #[test]
+    fn unreadable_edited_user_config_returns_contextual_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let err = load_user_config_file(temp.path()).unwrap_err();
+        assert!(err.to_string().contains("Failed to read edited config"));
+    }
+
+    #[test]
+    fn edited_global_custom_model_reloads_and_preserves_feature_scopes_when_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        edit_config_for_custom_model_with(&mut config, "global", &path, |edited_path| {
+            std::fs::write(
+                edited_path,
+                r#"
+[ai]
+agent = "claude"
+model = "gateway/custom-global"
+
+[ai.generate]
+agent = "codex"
+model = "gpt-5.5-fast"
+
+[ai.lane]
+agent = "pi"
+model = "anthropic/claude-opus-4-8"
+"#,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let selected_model = model_from_config(&config, "global");
+        persist_ai_selection_with(
+            &mut config,
+            "global",
+            "opencode",
+            selected_model,
+            |persisted| {
+                std::fs::write(&path, toml::to_string_pretty(persisted)?)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let persisted = load_user_config_file(&path).unwrap();
+        assert_eq!(persisted.ai.agent.as_deref(), Some("opencode"));
+        assert_eq!(persisted.ai.model.as_deref(), Some("gateway/custom-global"));
+        assert_eq!(persisted.ai.generate.agent.as_deref(), Some("codex"));
+        assert_eq!(persisted.ai.generate.model.as_deref(), Some("gpt-5.5-fast"));
+        assert_eq!(persisted.ai.lane.agent.as_deref(), Some("pi"));
+        assert_eq!(
+            persisted.ai.lane.model.as_deref(),
+            Some("anthropic/claude-opus-4-8")
+        );
+    }
+
+    #[test]
+    fn edited_feature_custom_model_reloads_and_preserves_other_scopes_when_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let mut config = Config::default();
+        edit_config_for_custom_model_with(&mut config, "generate", &path, |edited_path| {
+            std::fs::write(
+                edited_path,
+                r#"
+[ai]
+agent = "claude"
+model = "claude-sonnet-5"
+
+[ai.generate]
+agent = "opencode"
+model = "provider/custom-generate"
+
+[ai.standup]
+agent = "gemini"
+model = "gemini-2.5-flash"
+"#,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let selected_model = model_from_config(&config, "generate");
+        persist_ai_selection_with(&mut config, "generate", "pi", selected_model, |persisted| {
+            std::fs::write(&path, toml::to_string_pretty(persisted)?)?;
+            Ok(())
+        })
+        .unwrap();
+        let persisted = load_user_config_file(&path).unwrap();
+        assert_eq!(persisted.ai.agent.as_deref(), Some("claude"));
+        assert_eq!(persisted.ai.model.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(persisted.ai.generate.agent.as_deref(), Some("pi"));
+        assert_eq!(
+            persisted.ai.generate.model.as_deref(),
+            Some("provider/custom-generate")
+        );
+        assert_eq!(persisted.ai.standup.agent.as_deref(), Some("gemini"));
+        assert_eq!(
+            persisted.ai.standup.model.as_deref(),
+            Some("gemini-2.5-flash")
         );
     }
 

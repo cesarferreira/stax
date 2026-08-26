@@ -1,0 +1,92 @@
+name: Bug report
+description: Report incorrect stax behavior with reproduction steps and analysis
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Clear reproduction steps, version info, and root-cause notes (when you have them) help us fix issues faster.
+
+  - type: input
+    id: version
+    attributes:
+      label: Stax version
+      description: Output of `stax --version`, or the release you observed the bug on
+      placeholder: "0.98.0"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Summarize the bug and its impact
+      placeholder: |
+        `st restack` can replay an outdated commit range when a branch has already been rebased onto its parent but Stax metadata still records the previous parent revision.
+
+        This can reintroduce commits that were already squash-merged, and repeated `st restack` invocations can repeat the same rebase.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Numbered steps to reproduce the issue
+      value: |
+        1.
+        2.
+        3.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead?
+      placeholder: |
+        Stax should recognize that the branch is already based on the current parent tip, repair its stored parent revision, and avoid replaying commits.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+      placeholder: |
+        Restack may use the stale stored revision as the replay boundary. Commits from the outdated range can be replayed, including commits already represented on the parent through squash merges.
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root cause
+      description: Optional — if you've investigated, explain why you think this happens
+      placeholder: |
+        The restack preflight only treats the stored boundary as suspicious when the replay range exceeds its size/ratio heuristic.
+
+        It misses the stronger structural signal:
+
+        - the current parent tip equals the branch merge-base; and
+        - the stored parent revision differs from that tip.
+
+  - type: textarea
+    id: suggested-fix
+    attributes:
+      label: Suggested fix
+      description: Optional — propose a fix or regression test approach
+      placeholder: |
+        When the parent tip equals the merge-base but differs from the stored parent revision, treat the metadata as stale and use the merge-base as the corrected upstream boundary.
+
+        A regression test can:
+
+        1. Create a feature branch with two commits.
+        2. Advance `main`.
+        3. Externally rebase the feature onto `main`.
+        4. Preserve the old Stax parent revision.
+        5. Run `st restack`.
+        6. Assert that the branch SHA and its feature commits remain unchanged and the metadata no longer reports a restack requirement.

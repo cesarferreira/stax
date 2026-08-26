@@ -280,12 +280,12 @@ impl WorktreeApp {
     pub fn confirm_delete(&mut self) {
         if let Some(record) = self.selected() {
             // Check if worktree is dirty and details are loaded
-            if let Some(details) = &record.details {
-                if details.dirty {
-                    // Dirty worktree: show force confirmation
-                    self.mode = DashboardMode::ConfirmForceDelete;
-                    return;
-                }
+            if let Some(details) = &record.details
+                && details.dirty
+            {
+                // Dirty worktree: show force confirmation
+                self.mode = DashboardMode::ConfirmForceDelete;
+                return;
             }
 
             // Clean worktree or details not loaded: proceed with removal
@@ -616,7 +616,13 @@ fn spawn_removal_operation(
         let _ = sender.send(RemovalUpdate::RunningPreHook);
         let _ = sender.send(RemovalUpdate::RemovingWorktree);
 
-        match remove_worktree_with_hooks(&repo, &config, &worktree, force) {
+        match remove_worktree_with_hooks(
+            &repo,
+            &config,
+            &worktree,
+            force,
+            crate::commands::worktree::remove::RemovalMode::AllowParking,
+        ) {
             Ok(display_name) => {
                 let _ = sender.send(RemovalUpdate::Success {
                     removed_name: display_name,
@@ -652,13 +658,12 @@ fn tmux_state_for(
 }
 
 pub fn default_selection(records: &[WorktreeRecord], preferred: Option<&str>) -> usize {
-    if let Some(preferred) = preferred {
-        if let Some(index) = records
+    if let Some(preferred) = preferred
+        && let Some(index) = records
             .iter()
             .position(|record| record.info.name == preferred)
-        {
-            return index;
-        }
+    {
+        return index;
     }
 
     records

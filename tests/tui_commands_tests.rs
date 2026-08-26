@@ -178,23 +178,27 @@ fn test_tui_submit_no_prompt_does_not_hang() {
     // The important thing is it didn't hang waiting for interactive prompts
 }
 
-/// Test that `stax pr` works (TUI KeyAction::OpenPr)
-/// Note: This will fail if no PR exists, which is expected behavior
+/// Test that `stax pr` preserves a remote-configuration failure (TUI KeyAction::OpenPr).
 #[test]
-fn test_tui_pr_no_pr_exists() {
+fn test_tui_pr_preserves_remote_configuration_failure() {
     let repo = TestRepo::new();
 
-    // Create a tracked branch
+    // Create a tracked branch without configuring a trusted remote.
     repo.run_stax(&["create", "pr-test"]).assert_success();
 
     // TUI calls: run_external_command(app, &["pr"])
-    // Should fail gracefully since there's no PR
     let output = repo.run_stax(&["pr"]);
     output.assert_failure();
 
-    // Should mention that no PR exists
     let stderr = TestRepo::stderr(&output);
-    assert!(stderr.contains("No PR") || stderr.contains("submit"));
+    assert!(
+        stderr.contains("Repository network access is not trusted for this remote"),
+        "expected the structured remote-configuration failure, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("No PR found for branch"),
+        "remote-configuration failure must not be reported as a missing PR:\n{stderr}"
+    );
 }
 
 /// Test that branch creation with empty name fails gracefully

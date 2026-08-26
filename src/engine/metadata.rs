@@ -19,6 +19,9 @@ pub struct BranchMetadata {
     /// them, but submit should not push or update their PRs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_remote: Option<String>,
+    /// Protect this branch from history-rewriting bulk operations.
+    #[serde(default)]
+    pub frozen: bool,
     /// PR information (if submitted)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_info: Option<PrInfo>,
@@ -42,6 +45,7 @@ impl BranchMetadata {
             parent_branch_name: parent_name.to_string(),
             parent_branch_revision: parent_revision.to_string(),
             source_remote: None,
+            frozen: false,
             pr_info: None,
         }
     }
@@ -59,14 +63,12 @@ impl BranchMetadata {
                         refs::read_trunk(repo)?.unwrap_or_else(|| "main".to_string());
                 }
 
-                if meta.parent_branch_revision.trim().is_empty() {
-                    if let Ok(parent_ref) =
+                if meta.parent_branch_revision.trim().is_empty()
+                    && let Ok(parent_ref) =
                         repo.find_branch(&meta.parent_branch_name, git2::BranchType::Local)
-                    {
-                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
-                            meta.parent_branch_revision = commit.id().to_string();
-                        }
-                    }
+                    && let Ok(commit) = parent_ref.get().peel_to_commit()
+                {
+                    meta.parent_branch_revision = commit.id().to_string();
                 }
 
                 Ok(Some(meta))
@@ -84,6 +86,11 @@ impl BranchMetadata {
     /// Delete metadata for a branch
     pub fn delete(repo: &Repository, branch: &str) -> Result<()> {
         refs::delete_metadata(repo, branch)
+    }
+
+    /// Whether a tracked branch is protected from restack operations.
+    pub fn is_frozen(repo: &Repository, branch: &str) -> Result<bool> {
+        Ok(Self::read(repo, branch)?.is_some_and(|metadata| metadata.frozen))
     }
 
     /// Check if the branch needs restacking (parent has moved)

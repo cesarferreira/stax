@@ -1,5 +1,6 @@
 //! Undo the last stax operation (or a specific one).
 
+use crate::application::{NoopOperationReporter, OperationOutcome, RepositorySession};
 use crate::config::Config;
 use crate::git::GitRepo;
 use crate::ops;
@@ -78,74 +79,20 @@ pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Resu
         }
     }
 
-    // Restore local refs
-    let mut restored_count = 0;
-    let head_branch_before = receipt.head_branch_before.clone();
-
     if !quiet {
         println!();
         println!("{}", "Restoring local refs...".bold());
     }
 
-    for entry in &receipt.local_refs {
-        if let Some(oid_before) = &entry.oid_before {
-            if !quiet {
-                print!(
-                    "  {} {} → {}... ",
-                    "▸".dimmed(),
-                    entry.branch.cyan(),
-                    &oid_before[..10]
-                );
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
-
-            // Update the ref to the before-OID
-            repo.update_ref(&entry.refname, oid_before)?;
-
-            if !quiet {
-                println!("{}", "done".green());
-            }
-            restored_count += 1;
-        } else if entry.existed_before {
-            // Ref existed but we don't have the OID - skip
-            if !quiet {
-                println!(
-                    "  {} {} - skipped (no before-OID recorded)",
-                    "▸".dimmed(),
-                    entry.branch.yellow()
-                );
-            }
-        }
-    }
-
-    // If the head branch was modified, reset the working tree
-    if receipt
-        .local_refs
-        .iter()
-        .any(|r| r.branch == head_branch_before)
-    {
-        if !quiet {
-            println!(
-                "  {} Resetting working tree to {}...",
-                "▸".dimmed(),
-                head_branch_before.cyan()
-            );
-        }
-
-        // Make sure we're on that branch
-        repo.checkout(&head_branch_before)?;
-
-        // Reset to the restored ref
-        if let Some(entry) = receipt
-            .local_refs
-            .iter()
-            .find(|r| r.branch == head_branch_before)
-        {
-            if let Some(oid_before) = &entry.oid_before {
-                repo.reset_hard(oid_before)?;
-            }
-        }
-    }
+    let operation = RepositorySession::open(repo.workdir()?)?.undo_transaction(
+        Some(&receipt.op_id),
+        false,
+        &mut NoopOperationReporter,
+    )?;
+    let restored_count = match operation.outcome {
+        OperationOutcome::TransactionUndone { changed_refs, .. } => changed_refs.len(),
+        _ => 0,
+    };
 
     // Handle remote refs
     if receipt.has_remote_changes() && !no_push {

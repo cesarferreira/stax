@@ -25,6 +25,26 @@ fn parse_cli(args: &[&str]) -> Cli {
 }
 
 #[test]
+fn parses_default_config_flag() {
+    let cli = parse_cli(&["stax", "--default-config"]);
+    assert!(cli.default_config);
+    assert!(!cli.skill);
+    assert!(cli.command.is_none());
+
+    let bare = parse_cli(&["stax"]);
+    assert!(!bare.default_config);
+    assert!(!bare.skill);
+}
+
+#[test]
+fn parses_skill_flag() {
+    let cli = parse_cli(&["stax", "--skill"]);
+    assert!(cli.skill);
+    assert!(!cli.default_config);
+    assert!(cli.command.is_none());
+}
+
+#[test]
 fn interactive_terminal_requires_both_stdio_streams() {
     assert!(has_interactive_terminal(true, true));
     assert!(!has_interactive_terminal(true, false));
@@ -116,6 +136,17 @@ fn worktree_cleanup_subcommand_parses() {
                 dry_run: true,
                 yes: true
             })
+        })
+    ));
+}
+
+#[test]
+fn worktree_promote_subcommand_parses_shell_output() {
+    let cli = parse_cli(&["stax", "wt", "promote", "--shell-output"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Worktree {
+            command: Some(WorktreeCommands::Promote { shell_output: true })
         })
     ));
 }
@@ -407,8 +438,24 @@ fn sync_continue_is_marked_as_rebase_safe() {
 }
 
 #[test]
-fn status_requires_clean_repo_state() {
+fn status_is_read_only_during_rebase() {
     let cli = parse_cli(&["stax", "status"]);
+    let cmd = cli.command.expect("command");
+    assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+    assert!(cmd.allows_during_rebase());
+}
+
+#[test]
+fn ready_is_read_only_during_rebase() {
+    let cli = parse_cli(&["stax", "ready"]);
+    let cmd = cli.command.expect("command");
+    assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+    assert!(cmd.allows_during_rebase());
+}
+
+#[test]
+fn submit_requires_clean_repo_state() {
+    let cli = parse_cli(&["stax", "submit"]);
     let cmd = cli.command.expect("command");
     assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
     assert!(!cmd.allows_during_rebase());

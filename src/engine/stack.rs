@@ -1,7 +1,6 @@
 use crate::engine::BranchMetadata;
 use crate::git::{GitRepo, refs};
 use anyhow::Result;
-use git2::BranchType;
 use std::collections::{HashMap, HashSet};
 
 /// Represents a branch in the stack
@@ -36,13 +35,13 @@ impl Stack {
 
         // First pass: load all metadata
         for branch_name in &tracked_branches {
-            // Metadata can outlive branches (e.g. interrupted delete). Ignore and prune it.
+            // Metadata can outlive branches (e.g. interrupted delete). Reads stay
+            // side-effect free; `stax fix` owns explicit metadata cleanup.
             if repo
                 .inner()
-                .find_branch(branch_name, BranchType::Local)
+                .find_branch(branch_name, git2::BranchType::Local)
                 .is_err()
             {
-                let _ = BranchMetadata::delete(repo.inner(), branch_name);
                 continue;
             }
 

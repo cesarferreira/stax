@@ -278,3 +278,170 @@ fn test_stack_run_all_excludes_trunk() {
         stdout
     );
 }
+
+#[test]
+fn test_stack_run_parallel_uses_isolated_worktrees_and_restores_current_branch() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["parallel-a", "parallel-b"]);
+    let original = repo.current_branch();
+
+    let output = repo.run_stax(&["run", "--parallel", "--jobs", "2", "pwd"]);
+    output.assert_success();
+    output.assert_stdout_contains("parallel worktree");
+    assert_eq!(repo.current_branch(), original);
+    for branch in branches {
+        output.assert_stdout_contains(&branch);
+    }
+
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(worktrees.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_exposes_original_branch_name() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["parallel-context-a", "parallel-context-b"]);
+
+    let output = repo.run_stax(&[
+        "run",
+        "--parallel",
+        "--jobs",
+        "2",
+        "printf 'context=%s\\n' \"$STAX_RUN_BRANCH\"",
+    ]);
+
+    output.assert_success();
+    for branch in branches {
+        output.assert_stdout_contains(&format!("context={branch}"));
+    }
+}
+
+#[test]
+fn test_stack_run_parallel_propagates_failures_and_cleans_worktrees() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-fail-a", "parallel-fail-b"]);
+
+    let output = repo.run_stax(&["run", "--parallel", "false"]);
+    output.assert_failure();
+    output.assert_stdout_contains("2 failed");
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(worktrees.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_preserves_untracked_changes_for_recovery() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-untracked-a", "parallel-untracked-b"]);
+
+    let output = repo.run_stax(&[
+        "run",
+        "--parallel",
+        "--jobs",
+        "2",
+        "printf report > untracked-report",
+    ]);
+
+    output.assert_failure();
+    output.assert_stdout_contains("Command left uncommitted changes; preserved for recovery at");
+
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    let preserved_paths: Vec<_> = worktrees
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter(|path| *path != repo.path().to_string_lossy())
+        .collect();
+    assert_eq!(
+        preserved_paths.len(),
+        2,
+        "Expected both dirty worktrees to be preserved"
+    );
+    assert!(
+        preserved_paths
+            .iter()
+            .all(|path| path.contains("stax-run-")),
+        "Expected preserved worktrees to use stax-run recovery paths: {worktrees}"
+    );
+    let recovery_root = std::path::Path::new(preserved_paths[0])
+        .parent()
+        .expect("Preserved worktree should have a recovery root")
+        .to_path_buf();
+
+    for path in preserved_paths {
+        repo.git(&["worktree", "remove", "--force", path])
+            .assert_success();
+    }
+    std::fs::remove_dir_all(&recovery_root).expect("Failed to remove recovery root");
+    let remaining = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(remaining.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_preserves_tracked_changes_for_recovery() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-tracked-a", "parallel-tracked-b"]);
+
+    let output = repo.run_stax(&[
+        "run",
+        "--parallel",
+        "--jobs",
+        "2",
+        "printf report > tracked-report && git add tracked-report",
+    ]);
+
+    output.assert_failure();
+    output.assert_stdout_contains("Command left uncommitted changes; preserved for recovery at");
+
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    let preserved_paths: Vec<_> = worktrees
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter(|path| *path != repo.path().to_string_lossy())
+        .collect();
+    assert_eq!(
+        preserved_paths.len(),
+        2,
+        "Expected both dirty worktrees to be preserved"
+    );
+    let recovery_root = std::path::Path::new(preserved_paths[0])
+        .parent()
+        .expect("Preserved worktree should have a recovery root")
+        .to_path_buf();
+
+    for path in preserved_paths {
+        repo.git(&["worktree", "remove", "--force", path])
+            .assert_success();
+    }
+    std::fs::remove_dir_all(&recovery_root).expect("Failed to remove recovery root");
+    let remaining = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(remaining.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_cleans_ignored_artifacts() {
+    let repo = TestRepo::new();
+    repo.create_file(".gitignore", "ignored-report\n");
+    repo.commit("Add ignored parallel-run artifact");
+    repo.create_stack(&["parallel-ignored-a", "parallel-ignored-b"]);
+
+    let output = repo.run_stax(&[
+        "run",
+        "--parallel",
+        "--jobs",
+        "2",
+        "printf report > ignored-report",
+    ]);
+
+    output.assert_success();
+    output.assert_stdout_not_contains("preserved for recovery");
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(worktrees.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_rejects_zero_jobs() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-jobs"]);
+    let output = repo.run_stax(&["run", "--parallel", "--jobs", "0", "true"]);
+    output.assert_failure();
+    output.assert_stderr_contains("invalid value");
+}

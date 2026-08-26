@@ -5,6 +5,75 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use std::fs;
+
+fn set_pr_state(repo: &TestRepo, branch: &str, parent: &str, number: u64, state: &str) {
+    let metadata = serde_json::json!({
+        "parentBranchName": parent,
+        "parentBranchRevision": repo.get_commit_sha(parent),
+        "prInfo": { "number": number, "state": state }
+    });
+    let file = tempfile::NamedTempFile::new().expect("metadata file");
+    fs::write(file.path(), metadata.to_string()).expect("metadata contents");
+    let hash = repo.git(&["hash-object", "-w", file.path().to_str().unwrap()]);
+    hash.assert_success();
+    repo.git(&[
+        "update-ref",
+        &format!("refs/branch-metadata/{branch}"),
+        TestRepo::stdout(&hash).trim(),
+    ])
+    .assert_success();
+}
+
+#[test]
+fn test_next_advances_to_the_next_stack_branch() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["next-one", "next-two"]);
+    repo.run_stax(&["checkout", &branches[0]]).assert_success();
+
+    repo.run_stax(&["next"]).assert_success();
+    assert_eq!(repo.current_branch(), branches[1]);
+}
+
+#[test]
+fn test_next_at_top_is_a_safe_noop() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["only-next"]);
+
+    let output = repo.run_stax(&["next"]);
+    output.assert_success();
+    output.assert_stdout_contains("No unmerged branch");
+    assert_eq!(repo.current_branch(), branches[0]);
+}
+
+#[test]
+fn test_next_chooses_fork_children_by_branch_name() {
+    let repo = TestRepo::new();
+    let z_child = repo.create_stack(&["z-next-child"]).remove(0);
+    repo.run_stax(&["trunk"]).assert_success();
+    let a_child = repo.create_stack(&["a-next-child"]).remove(0);
+    repo.run_stax(&["trunk"]).assert_success();
+
+    repo.run_stax(&["next"]).assert_success();
+
+    assert_eq!(repo.current_branch(), a_child);
+    assert_ne!(repo.current_branch(), z_child);
+}
+
+#[test]
+fn test_next_skips_merged_fork_children() {
+    let repo = TestRepo::new();
+    let merged = repo.create_stack(&["a-merged-child"]).remove(0);
+    repo.run_stax(&["trunk"]).assert_success();
+    let open = repo.create_stack(&["b-open-child"]).remove(0);
+    set_pr_state(&repo, &merged, "main", 51, "MERGED");
+    set_pr_state(&repo, &open, "main", 52, "OPEN");
+    repo.run_stax(&["trunk"]).assert_success();
+
+    repo.run_stax(&["next"]).assert_success();
+
+    assert_eq!(repo.current_branch(), open);
+}
 
 // =============================================================================
 // Top Command Tests

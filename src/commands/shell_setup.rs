@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -29,11 +29,12 @@ pub enum AuthSetupMode {
     ImportFromGh,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SetupOptions {
     pub auto_accept: bool,
     pub skill_install_mode: SkillInstallMode,
     pub auth_setup_mode: AuthSetupMode,
+    pub skill_selection: Option<crate::commands::skills::HarnessSelection>,
 }
 
 /// The shell function block that users source in their shell config.
@@ -101,26 +102,6 @@ __stax_exec() {
   "$bin" "$@"
 }
 
-__stax_insert_shell_output() {
-  local out=()
-  local inserted=0
-  local arg
-
-  for arg in "$@"; do
-    if [[ $inserted -eq 0 && "$arg" == "--" ]]; then
-      out+=("--shell-output")
-      inserted=1
-    fi
-    out+=("$arg")
-  done
-
-  if [[ $inserted -eq 0 ]]; then
-    out+=("--shell-output")
-  fi
-
-  printf '%s\0' "${out[@]}"
-}
-
 __stax_run_worktree_shell() {
   local raw
   local target_path=""
@@ -128,11 +109,20 @@ __stax_run_worktree_shell() {
   local message=""
   local passthrough=()
   local cmd=()
+  local inserted=0
   local item
 
-  while IFS= read -r -d '' item; do
+  for item in "$@"; do
+    if [[ $inserted -eq 0 && "$item" == "--" ]]; then
+      cmd+=("--shell-output")
+      inserted=1
+    fi
     cmd+=("$item")
-  done < <(__stax_insert_shell_output "$@")
+  done
+
+  if [[ $inserted -eq 0 ]]; then
+    cmd+=("--shell-output")
+  fi
 
   raw=$(__stax_exec "${cmd[@]}") || return $?
 
@@ -202,7 +192,7 @@ __stax_dispatch() {
       fi ;;
     worktree|wt)
       case "$2" in
-        go|create|c)
+        go|create|c|promote)
           __stax_run_worktree_shell "$@" ;;
         remove|rm)
           if [[ -z "$3" || "$3" == -* ]]; then
@@ -356,7 +346,7 @@ function __stax_dispatch
             end
         case worktree wt
             switch "$argv[2]"
-                case go create c
+                case go create c promote
                     __stax_run_worktree_shell $argv
                 case remove rm
                     if test (count $argv) -lt 3; or string match -qr '^-' -- "$argv[3]"
@@ -413,8 +403,8 @@ pub fn run(print: bool, refresh: bool, options: SetupOptions) -> Result<()> {
     // Always enable rerere when in a git repo (unless we're just printing)
     if shell_setup_completed && !print {
         enable_rerere_if_in_repo()?;
-        maybe_install_skills(options)?;
-        maybe_setup_auth(options)?;
+        maybe_install_skills(&options)?;
+        maybe_setup_auth(&options)?;
     }
 
     Ok(())
@@ -559,28 +549,67 @@ fn install_to_shell_config(auto_accept: bool) -> Result<bool> {
     Ok(true)
 }
 
-fn maybe_install_skills(options: SetupOptions) -> Result<()> {
-    let should_install = match options.skill_install_mode {
-        SkillInstallMode::Install => true,
-        SkillInstallMode::Skip => false,
-        SkillInstallMode::Ask => {
-            if options.auto_accept {
-                true
-            } else {
-                prompt_for_skill_install()?
-            }
-        }
-    };
+fn maybe_install_skills(options: &SetupOptions) -> Result<()> {
+    use crate::commands::skills::{self, HarnessSelection};
 
-    if !should_install {
+    if matches!(options.skill_install_mode, SkillInstallMode::Skip) {
         return Ok(());
     }
 
+    let selection = if let Some(sel) = &options.skill_selection {
+        sel.clone()
+    } else {
+        match options.skill_install_mode {
+            SkillInstallMode::Install => {
+                if can_prompt() {
+                    prompt_for_harness_selection()?
+                } else {
+                    HarnessSelection::All
+                }
+            }
+            SkillInstallMode::Ask => {
+                if options.auto_accept {
+                    HarnessSelection::Detected
+                } else {
+                    // A non-interactive shell and an explicit "no" are distinct
+                    // reasons that share one outcome: skip the skills install.
+                    // `&&` short-circuits, so we only prompt when we can prompt.
+                    let opted_in = can_prompt() && prompt_for_skill_install()?;
+                    if !opted_in {
+                        return Ok(());
+                    }
+                    prompt_for_harness_selection()?
+                }
+            }
+            SkillInstallMode::Skip => return Ok(()),
+        }
+    };
+
+    let ids = skills::resolve_ids(&selection);
+    if ids.is_empty() {
+        println!(
+            "{}",
+            "No agent harnesses selected — skipping skills install.".dimmed()
+        );
+        return Ok(());
+    }
+
+    if let Err(err) = crate::config::Config::set_skill_harnesses(&ids) {
+        eprintln!(
+            "{}",
+            format!("Warning: could not save skills harness selection: {err}").yellow()
+        );
+    }
+
     println!();
-    crate::commands::skills::run_update(false)
+    skills::run_update_with(
+        false,
+        &HarnessSelection::Only(ids),
+        skills::SkillsUpdateOrigin::Setup,
+    )
 }
 
-fn maybe_setup_auth(options: SetupOptions) -> Result<()> {
+fn maybe_setup_auth(options: &SetupOptions) -> Result<()> {
     let status = crate::config::Config::github_auth_status();
     if has_non_gh_auth(&status) {
         return Ok(());
@@ -644,6 +673,54 @@ fn prompt_for_skill_install() -> Result<bool> {
         .with_prompt("Install stax AI agent skills too?")
         .default(true)
         .interact()?)
+}
+
+fn prompt_for_harness_selection() -> Result<crate::commands::skills::HarnessSelection> {
+    use crate::commands::skills::{self, HarnessSelection};
+
+    if !can_prompt() {
+        return Ok(HarnessSelection::Detected);
+    }
+
+    let harnesses = skills::harnesses();
+    let items: Vec<String> = harnesses
+        .iter()
+        .map(|h| {
+            let path = harness_detect_path(h.id);
+            if h.detected {
+                format!("{}  ~/{} (detected)", h.name, path)
+            } else {
+                format!("{}  ~/{}", h.name, path)
+            }
+        })
+        .collect();
+    let defaults: Vec<bool> = harnesses.iter().map(|h| h.detected).collect();
+
+    eprintln!();
+    let selected = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt(
+            "Which agent harnesses should get stax skills? (space toggles, enter confirms)",
+        )
+        .items(&items)
+        .defaults(&defaults)
+        .interact()?;
+
+    let ids: Vec<String> = selected
+        .into_iter()
+        .map(|idx| harnesses[idx].id.to_string())
+        .collect();
+    Ok(HarnessSelection::Only(ids))
+}
+
+fn harness_detect_path(id: &str) -> &'static str {
+    match id {
+        "codex" => ".codex/skills/stax/SKILL.md",
+        "opencode" => ".config/opencode/skills/stax/SKILL.md",
+        "claude" => ".claude/skills/stax/SKILL.md",
+        "cursor" => ".cursor/skills/stax/SKILL.md",
+        "pi" => ".pi/agent/skills/stax/SKILL.md",
+        _ => "",
+    }
 }
 
 fn prompt_for_gh_auth_import() -> Result<bool> {
@@ -959,6 +1036,38 @@ mod tests {
     use std::{fs, io::ErrorKind, path::Path, process::Command};
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    fn zsh_available_with_flags(flags: &str) -> bool {
+        let mut cmd = Command::new("zsh");
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+        cmd.arg("exit").arg("0");
+        match cmd.output() {
+            Ok(output) => output.status.success(),
+            Err(err) if err.kind() == ErrorKind::NotFound => false,
+            Err(err) => panic!("failed to probe zsh: {err}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn zsh_posix_snippet_preamble(snippet_path: &Path, fake_stax: &Path) -> String {
+        format!(
+            "source \"{}\"; __STAX_BIN=\"{}\"",
+            snippet_path.display(),
+            fake_stax.display(),
+        )
+    }
+
+    #[cfg(unix)]
+    fn zsh_posix_snippet_path_preamble(snippet_path: &Path, bin_dir: &Path) -> String {
+        format!(
+            "export PATH=\"{}:$PATH\"; source \"{}\"",
+            bin_dir.display(),
+            snippet_path.display(),
+        )
+    }
+
     #[test]
     fn posix_shell_snippet_clears_aliases_before_function_definitions() {
         let snippet = shell_snippet(ShellKind::Posix);
@@ -985,16 +1094,146 @@ mod tests {
         assert!(snippet.contains("__stax_exec()"));
     }
 
+    #[test]
+    fn posix_shell_snippet_builds_shell_output_args_without_process_substitution() {
+        let snippet = shell_snippet(ShellKind::Posix);
+
+        assert!(
+            !snippet.contains("< <(__stax_insert_shell_output"),
+            "shell-output argument handling must not leave asynchronous process-substitution children"
+        );
+    }
+
+    #[test]
+    fn fish_shell_snippet_routes_worktree_promote_through_shell_output() {
+        let snippet = shell_snippet(ShellKind::Fish);
+
+        assert!(snippet.contains("case go create c promote"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_wraps_worktree_promote_in_zsh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if !zsh_available_with_flags("-dfc") {
+            return;
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(&fake_stax, "#!/bin/sh\nprintf 'args:%s\\n' \"$*\"\n").expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let command = format!(
+            "{}; st wt promote",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
+        let output = Command::new("zsh")
+            .arg("-dfc")
+            .arg(&command)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("args:wt promote --shell-output"),
+            "expected promote to inject --shell-output, got:\n{stdout}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_relocates_after_successful_promote_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if !zsh_available_with_flags("-dfc") {
+            return;
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        let source = dir.path().join("source");
+        let target = dir.path().join("main");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&source).expect("create source dir");
+        fs::create_dir_all(&target).expect("create target dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'STAX_SHELL_PATH=%s\\n' \"$PROMOTE_TARGET\"\nprintf 'STAX_SHELL_MESSAGE=promoted\\n'\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+        let command = format!(
+            "{}; cd \"{}\"; st wt promote; printf 'cwd:%s\\n' \"$PWD\"",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax),
+            source.display()
+        );
+        let output = Command::new("zsh")
+            .arg("-dfc")
+            .arg(&command)
+            .env("PROMOTE_TARGET", &target)
+            .output()
+            .expect("run successful promote wrapper");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("cwd:{}", target.display()))
+        );
+
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'STAX_SHELL_PATH=%s\\n' \"$PROMOTE_TARGET\"\nexit 1\n",
+        )
+        .expect("write failing fake stax");
+        let command = format!(
+            "{}; cd \"{}\"; st wt promote || true; printf 'cwd:%s\\n' \"$PWD\"",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax),
+            source.display()
+        );
+        let output = Command::new("zsh")
+            .arg("-dfc")
+            .arg(&command)
+            .env("PROMOTE_TARGET", &target)
+            .output()
+            .expect("run failing promote wrapper");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("cwd:{}", source.display()))
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn posix_shell_snippet_resolves_real_binary_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1016,13 +1255,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st config", snippet_path.display());
+        let command = format!(
+            "{}; st config",
+            zsh_posix_snippet_path_preamble(&snippet_path, &bin_dir)
+        );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1051,11 +1290,8 @@ mod tests {
     fn posix_shell_snippet_keeps_path_for_worktree_shell_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1077,13 +1313,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st wtgo demo-lane", snippet_path.display());
+        let command = format!(
+            "{}; st wtgo demo-lane",
+            zsh_posix_snippet_path_preamble(&snippet_path, &bin_dir)
+        );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1112,11 +1348,8 @@ mod tests {
     fn posix_shell_snippet_wraps_lane_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1138,13 +1371,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st lane review-pass", snippet_path.display());
+        let command = format!(
+            "{}; st lane review-pass",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1173,11 +1406,8 @@ mod tests {
     fn posix_shell_snippet_wraps_checkout_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1199,13 +1429,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st bco feature", snippet_path.display());
+        let command = format!(
+            "{}; st bco feature",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 

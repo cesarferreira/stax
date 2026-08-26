@@ -3,6 +3,7 @@ use crate::git::{GitRepo, checkout_branch_in, local_branch_exists_in, refs};
 use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use std::collections::VecDeque;
 
 /// Move up the stack (to child branches)
 /// If count > 1, moves up multiple branches
@@ -228,6 +229,48 @@ pub fn prev() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Move to the first unmerged descendant. Branch-name ordering makes the
+/// choice deterministic when the current branch has multiple children.
+pub fn next() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let workdir = repo.workdir()?.to_path_buf();
+    let current = repo.current_branch()?;
+    let stack = Stack::load(&repo)?;
+    let mut queue = VecDeque::new();
+    enqueue_sorted_children(&stack, &current, &mut queue);
+
+    while let Some(candidate) = queue.pop_front() {
+        let is_merged = stack
+            .branches
+            .get(&candidate)
+            .and_then(|branch| branch.pr_state.as_deref())
+            .is_some_and(|state| state.eq_ignore_ascii_case("merged"));
+        if !is_merged {
+            drop(repo);
+            switch_branch(&workdir, &current, &candidate)?;
+            println!("Switched to branch '{}'", candidate.bright_cyan());
+            return Ok(());
+        }
+        enqueue_sorted_children(&stack, &candidate, &mut queue);
+    }
+
+    println!(
+        "{}",
+        "No unmerged branch remains above the current branch.".dimmed()
+    );
+    Ok(())
+}
+
+fn enqueue_sorted_children(stack: &Stack, branch: &str, queue: &mut VecDeque<String>) {
+    let mut children = stack
+        .branches
+        .get(branch)
+        .map(|branch| branch.children.clone())
+        .unwrap_or_default();
+    children.sort();
+    queue.extend(children);
 }
 
 fn switch_branch(workdir: &std::path::Path, previous: &str, target: &str) -> Result<()> {

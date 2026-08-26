@@ -2,12 +2,13 @@ use colored::Colorize;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use update_informer::{Check, registry};
 
 const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
+const UPDATE_WORKER_ENV: &str = "STAX_UPDATE_CHECK_WORKER";
 
 fn update_checks_disabled() -> bool {
     std::env::var("STAX_DISABLE_UPDATE_CHECK")
@@ -89,36 +90,44 @@ fn binstall_metadata_contains_stax(cargo_home: Option<&Path>) -> bool {
         .any(|record| record.name == PKG_NAME)
 }
 
-/// A handle to the background update-check thread.
-/// Joins the thread when dropped, ensuring the cache write completes before the process exits.
-pub struct UpdateHandle(Option<thread::JoinHandle<()>>);
-
-impl Drop for UpdateHandle {
-    fn drop(&mut self) {
-        if let Some(handle) = self.0.take() {
-            let _ = handle.join();
-        }
-    }
+fn should_spawn_background_check(disabled: bool, is_worker: bool) -> bool {
+    !disabled && !is_worker
 }
 
-/// Spawn a background thread to check for updates.
-/// Returns an `UpdateHandle` that must be kept alive until the end of the command —
-/// dropping it joins the thread so the cache write completes before the process exits.
-/// Results are cached by update-informer for 24 hours.
-pub fn check_in_background() -> UpdateHandle {
-    if update_checks_disabled() {
-        return UpdateHandle(None);
+/// Spawn a detached worker process that refreshes the update cache.
+///
+/// The command never waits for the worker, so fast local commands do not inherit
+/// network latency. The worker uses the same executable and exits after one check.
+pub fn spawn_background_check() {
+    let is_worker = std::env::var_os(UPDATE_WORKER_ENV).is_some();
+    if !should_spawn_background_check(update_checks_disabled(), is_worker) {
+        return;
     }
 
-    let handle = thread::spawn(|| {
-        let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
-            .timeout(Duration::from_secs(1))
-            .interval(Duration::from_secs(60 * 60 * 24)); // 24 hours
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
 
-        let _ = informer.check_version();
-    });
+    let _ = Command::new(executable)
+        .arg("__update-check")
+        .env(UPDATE_WORKER_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
 
-    UpdateHandle(Some(handle))
+/// Refresh the update cache from the hidden worker command.
+pub fn run_background_check() {
+    if update_checks_disabled() {
+        return;
+    }
+
+    let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
+        .timeout(Duration::from_secs(1))
+        .interval(Duration::from_secs(60 * 60 * 24));
+
+    let _ = informer.check_version();
 }
 
 /// Check for cached update info and display if a new version is available.
@@ -196,6 +205,14 @@ mod tests {
         )
         .expect("metadata");
         temp
+    }
+
+    #[test]
+    fn background_check_spawns_only_for_normal_enabled_commands() {
+        assert!(should_spawn_background_check(false, false));
+        assert!(!should_spawn_background_check(true, false));
+        assert!(!should_spawn_background_check(false, true));
+        assert!(!should_spawn_background_check(true, true));
     }
 
     #[test]

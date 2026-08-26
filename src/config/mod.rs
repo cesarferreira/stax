@@ -20,6 +20,8 @@ pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
+    pub display: DisplayConfig,
+    #[serde(default)]
     pub ai: AiConfig,
     #[serde(default)]
     pub auth: AuthConfig,
@@ -29,6 +31,29 @@ pub struct Config {
     pub git: GitConfig,
     #[serde(default)]
     pub restack: RestackConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
+}
+
+/// Which agent harnesses receive stax skill files.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`).
+    /// Unset = auto (detected harnesses plus any that already have a skill file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harnesses: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TrustedNetworkRepoConfig {
+    #[serde(default)]
+    remote: TrustedNetworkRepoRemoteConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TrustedNetworkRepoRemoteConfig {
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// User-configurable restack behaviour.
@@ -105,11 +130,18 @@ pub struct RemoteConfig {
     pub forge: Option<ForgeType>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
     pub stack_links: StackLinksMode,
+    /// Whether to register a native GitHub Stack via `gh stack` after submit.
+    #[serde(default)]
+    pub native_stack: NativeStackMode,
+    /// Whether stax-managed stack links should still sync when native stack
+    /// registration succeeds.
+    #[serde(default)]
+    pub stack_links_when_native: StackLinksWhenNative,
     /// Whether to sync stack links when the stack has only one PR.
     /// `On` (default) always syncs per `stack_links`. `Off` skips link sync
     /// (and cleans up stale links) while the stack has <= 1 PRs; once a 2nd
@@ -143,6 +175,23 @@ pub enum StackLinksMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
+pub enum NativeStackMode {
+    Off,
+    Link,
+    #[default]
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StackLinksWhenNative {
+    #[default]
+    Keep,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum SingleStackMode {
     #[default]
     On,
@@ -156,6 +205,25 @@ pub struct UiConfig {
     pub tips: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    /// Linked-worktree marker in stack views: "auto", "tree" (Nerd Font), or "wt" (ASCII).
+    #[serde(default = "default_worktree_glyph")]
+    pub worktree_glyph: String,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            worktree_glyph: default_worktree_glyph(),
+        }
+    }
+}
+
+fn default_worktree_glyph() -> String {
+    "auto".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct AiFeatureConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,7 +234,7 @@ pub struct AiFeatureConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AiConfig {
-    /// AI agent to use: "claude", "codex", "gemini", or "opencode" (default: auto-detect)
+    /// AI agent to use: "claude", "codex", "gemini", "opencode", or "pi" (default: auto-detect)
     #[serde(default)]
     pub agent: Option<String>,
     /// Model to use with the AI agent (default: agent's own default)
@@ -253,10 +321,22 @@ pub struct AuthConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorktreeConfig {
-    /// Directory for stax-managed worktrees. Empty means the default external root:
-    /// ~/.stax/worktrees/<repo>.
+    /// Directory for stax-managed worktrees. Relative paths resolve from the main
+    /// checkout. Empty means the default external root: ~/.stax/worktrees/<repo>.
     #[serde(default = "default_worktree_root_dir")]
     pub root_dir: String,
+    /// Recycle removed worktrees as warm slots instead of deleting them, so a new
+    /// lane can adopt an existing directory (keeping built gitignored deps) rather
+    /// than a cold `git worktree add` (default: true).
+    #[serde(default = "default_true")]
+    pub reuse_slots: bool,
+    /// Maximum number of idle warm slots to keep parked in the pool (default: 4).
+    #[serde(default = "default_max_idle_slots")]
+    pub max_idle_slots: usize,
+    /// Optional command run (non-fatally) inside a worktree after it is adopted
+    /// from the warm pool, to re-sync dependencies (e.g. "pnpm install").
+    #[serde(default)]
+    pub reconcile: Option<String>,
     #[serde(default)]
     pub hooks: WorktreeHooksConfig,
 }
@@ -284,6 +364,9 @@ impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             root_dir: default_worktree_root_dir(),
+            reuse_slots: true,
+            max_idle_slots: default_max_idle_slots(),
+            reconcile: None,
             hooks: WorktreeHooksConfig::default(),
         }
     }
@@ -304,6 +387,10 @@ impl Default for GitConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_idle_slots() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,15 +503,26 @@ fn default_allow_github_token_env() -> bool {
     false
 }
 
+fn config_dir_override() -> Option<PathBuf> {
+    std::env::var("STAX_CONFIG_DIR")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 impl Config {
     /// Get the config directory.
     /// Default: `~/.config/stax` (Unix) or `C:\Users\<you>\.config\stax` (Windows).
     /// Override with `STAX_CONFIG_DIR` env var for testing or custom locations.
     pub fn dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("STAX_CONFIG_DIR") {
-            return Ok(PathBuf::from(dir));
+        if let Some(dir) = config_dir_override() {
+            return Ok(dir);
         }
-        let home = dirs::home_dir().context("Could not find home directory")?;
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .or_else(dirs::home_dir)
+            .context("Could not find home directory")?;
         Ok(home.join(".config").join("stax"))
     }
 
@@ -463,7 +561,7 @@ impl Config {
     /// Load config from file
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
-        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+        if config_dir_override().is_some() {
             return Self::load_path_or_default(&path);
         }
 
@@ -473,6 +571,81 @@ impl Config {
         } else {
             Ok(config)
         }
+    }
+
+    /// Load global config with the selected repository's `stax.toml` overlay.
+    ///
+    /// `STAX_CONFIG_DIR` intentionally keeps its existing test-isolation
+    /// behavior and disables repository overlays.
+    pub(crate) fn load_for_repo(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let config = Self::load_path_or_default(&path)?;
+        if config_dir_override().is_some() {
+            return Ok(config);
+        }
+
+        let repo_path = root.join("stax.toml");
+        if repo_path.exists() {
+            Self::load_with_overlay(config, &repo_path)
+        } else {
+            Ok(config)
+        }
+    }
+
+    /// Load config for noninteractive credential-bearing repository network access.
+    ///
+    /// Repository-local config may select the non-secret Git remote name, but
+    /// network destinations, provider selection, and auth settings are loaded
+    /// only from the trusted global config.
+    pub(crate) fn load_for_trusted_network(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        let repo_path = root.join("stax.toml");
+        if !repo_path.exists() {
+            return Ok(config);
+        }
+
+        let repo_content = fs::read_to_string(&repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_config: TrustedNetworkRepoConfig = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        if let Some(remote_name) = repo_config
+            .remote
+            .name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+        {
+            config.remote.name = remote_name;
+        }
+        Ok(config)
+    }
+
+    /// Load global config plus repository-local submit preferences only.
+    ///
+    /// Unlike the general repository overlay, this method ignores repository
+    /// `remote.*`, `auth.*`, and provider/API settings so submit preferences
+    /// cannot redirect trusted network endpoints.
+    #[allow(dead_code)]
+    pub(crate) fn load_repository_submit_preferences(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        let repo_path = root.join("stax.toml");
+        if !repo_path.exists() {
+            return Ok(config);
+        }
+
+        let repo_content = fs::read_to_string(&repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_overlay: toml::Value = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        let Some(submit_overlay) = repo_overlay.get("submit").cloned() else {
+            return Ok(config);
+        };
+
+        let mut submit = toml::Value::try_from(config.submit.clone())?;
+        merge_toml_values(&mut submit, submit_overlay);
+        config.submit = submit.try_into()?;
+        Ok(config)
     }
 
     fn load_path_or_default(path: &Path) -> Result<Self> {
@@ -495,6 +668,11 @@ impl Config {
         Ok(base.try_into()?)
     }
 
+    /// Annotated default config template (commented keys and allowed values).
+    pub fn default_toml() -> Result<String> {
+        Ok(include_str!("default_config.toml").to_string())
+    }
+
     /// Save config to file
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
@@ -504,6 +682,14 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         fs::write(&path, content)?;
         Ok(())
+    }
+
+    /// Persist which agent harnesses should receive skill files (global config only).
+    pub fn set_skill_harnesses(harnesses: &[String]) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.skills.harnesses = Some(harnesses.to_vec());
+        config.save()
     }
 
     /// Clear any saved AI agent/model defaults so interactive commands can re-prompt.
@@ -538,6 +724,50 @@ impl Config {
     pub fn github_token_with_source() -> Option<(GitHubAuthSource, String)> {
         let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
         Self::resolve_github_auth_with_config(&auth_config)
+    }
+
+    /// Resolve GitHub auth for a validated trusted network destination.
+    ///
+    /// The gh CLI lookup is always scoped to the validated Git remote host. An
+    /// explicitly configured global hostname must match before gh is executed.
+    pub(crate) fn github_token_with_source_for_host(
+        &self,
+        validated_host: &str,
+    ) -> Result<Option<(GitHubAuthSource, String)>> {
+        if self
+            .auth
+            .gh_hostname
+            .as_deref()
+            .and_then(Self::normalize_token)
+            .is_some_and(|configured| !configured.eq_ignore_ascii_case(validated_host))
+        {
+            anyhow::bail!(
+                "Configured GitHub auth hostname does not match the validated Git remote \
+                 hostname; update global auth.gh_hostname before noninteractive repository network access"
+            );
+        }
+
+        if let Some(token) = Self::read_env_token("STAX_GITHUB_TOKEN") {
+            return Ok(Some((GitHubAuthSource::StaxGithubTokenEnv, token)));
+        }
+
+        if let Some(token) = Self::token_from_credentials_file() {
+            return Ok(Some((GitHubAuthSource::CredentialsFile, token)));
+        }
+
+        if self.auth.use_gh_cli
+            && let Some(token) = Self::token_from_gh_cli(Some(validated_host))?
+        {
+            return Ok(Some((GitHubAuthSource::GhCli, token)));
+        }
+
+        if self.auth.allow_github_token_env
+            && let Some(token) = Self::read_env_token("GITHUB_TOKEN")
+        {
+            return Ok(Some((GitHubAuthSource::GithubTokenEnv, token)));
+        }
+
+        Ok(None)
     }
 
     /// Get the saved credentials-file token written by `stax auth`.
@@ -669,16 +899,16 @@ impl Config {
             return Some((GitHubAuthSource::CredentialsFile, token));
         }
 
-        if auth_config.use_gh_cli {
-            if let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref()) {
-                return Some((GitHubAuthSource::GhCli, token));
-            }
+        if auth_config.use_gh_cli
+            && let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref())
+        {
+            return Some((GitHubAuthSource::GhCli, token));
         }
 
-        if auth_config.allow_github_token_env {
-            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
-                return Some((GitHubAuthSource::GithubTokenEnv, token));
-            }
+        if auth_config.allow_github_token_env
+            && let Some(token) = Self::read_env_token("GITHUB_TOKEN")
+        {
+            return Some((GitHubAuthSource::GithubTokenEnv, token));
         }
 
         None
@@ -730,10 +960,10 @@ impl Config {
             self.branch.prefix.clone()
         };
 
-        if let Some(prefix) = prefix {
-            if !result.starts_with(&prefix) {
-                result = format!("{}{}", prefix, result);
-            }
+        if let Some(prefix) = prefix
+            && !result.starts_with(&prefix)
+        {
+            result = format!("{}{}", prefix, result);
         }
 
         result
@@ -832,12 +1062,11 @@ impl Config {
         if let Ok(output) = std::process::Command::new("git")
             .args(["config", "user.name"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !name.is_empty() {
-                    return self.sanitize_branch_segment(&name);
-                }
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return self.sanitize_branch_segment(&name);
             }
         }
 

@@ -101,6 +101,20 @@ exec "$REAL_GIT" "$@"
 }
 
 #[cfg(unix)]
+fn assert_git_log_does_not_contain(log_path: &Path, forbidden_calls: &[&str], context: &str) {
+    let git_calls = fs::read_to_string(log_path).unwrap_or_default();
+    for forbidden in forbidden_calls {
+        assert!(
+            !git_calls.lines().any(|line| line == *forbidden),
+            "{} should not call `{}`; git calls were:\n{}",
+            context,
+            forbidden,
+            git_calls
+        );
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn status_uses_cached_repo_data_without_git_subprocess_scans() {
     let repo = TestRepo::new_with_remote();
@@ -134,30 +148,62 @@ fn status_uses_cached_repo_data_without_git_subprocess_scans() {
             ("PATH", path_env.as_str()),
             ("GIT_SHIM_LOG", log_env.as_str()),
             ("REAL_GIT", real_git.as_str()),
+            ("STAX_NERD_ICONS", "0"),
         ],
     );
     output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("☁") && stdout.contains("↳"),
+        stdout.contains("☁") && stdout.contains("wt"),
         "expected status to preserve remote and linked-worktree indicators, got:\n{}",
         stdout
     );
 
-    let git_calls = fs::read_to_string(&log_path).unwrap_or_default();
-    for forbidden in [
-        "rev-parse --git-dir",
-        "branch -r --format=%(refname)",
-        "worktree list --porcelain",
-    ] {
-        assert!(
-            !git_calls.lines().any(|line| line == forbidden),
-            "status should not call `{}`; git calls were:\n{}",
-            forbidden,
-            git_calls
-        );
-    }
+    assert_git_log_does_not_contain(
+        &log_path,
+        &[
+            "rev-parse --git-dir",
+            "branch -r --format=%(refname)",
+            "worktree list --porcelain",
+        ],
+        "status",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_create_does_not_count_tracked_files_with_ls_files() {
+    let repo = TestRepo::new();
+
+    let shim_dir = TempDir::new().expect("git shim tempdir");
+    git_shim_path(&shim_dir);
+    let log_path = shim_dir.path().join("git.log");
+    let path_env = format!(
+        "{}:{}",
+        shim_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let log_env = log_path.to_string_lossy().into_owned();
+    let real_git = real_git_path();
+
+    let output = repo.run_stax_with_env(
+        &[
+            "worktree",
+            "create",
+            "perf-guard",
+            "--no-verify",
+            "--shell-output",
+        ],
+        &[
+            ("PATH", path_env.as_str()),
+            ("GIT_SHIM_LOG", log_env.as_str()),
+            ("REAL_GIT", real_git.as_str()),
+        ],
+    );
+    output.assert_success();
+
+    assert_git_log_does_not_contain(&log_path, &["ls-files -z"], "worktree create");
 }
 
 #[test]
@@ -431,8 +477,12 @@ fn sync_keeps_metadata_when_branch_delete_blocked_by_worktree() {
     repo.git(&["push", "origin", "--delete", &a])
         .assert_success();
 
-    let output = repo.run_stax_in(&wt_a, &["sync", "--force", "--safe", "--quiet"]);
-    output.assert_success();
+    let output = repo.run_stax_in(&wt_a, &["sync", "--force", "--safe"]);
+    output
+        .assert_success()
+        .assert_stdout_contains(&format!("Cleanup skipped for {}", a))
+        .assert_stdout_contains("checkout failed")
+        .assert_stdout_contains("Next: st sweep");
 
     let branch_ref = format!("refs/heads/{}", a);
     repo.git(&["show-ref", "--verify", "--quiet", &branch_ref])
@@ -570,7 +620,7 @@ fn interactive_checkout_selector_routes_to_worktree() {
 }
 
 #[test]
-fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
+fn sync_force_preserves_safe_linked_worktree_when_branch_delete_confirmed() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -594,12 +644,12 @@ fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     assert!(
-        !wt_a.exists(),
-        "expected sync to remove the linked worktree after confirmation"
+        wt_a.exists(),
+        "expected sync --force to preserve the linked worktree"
     );
     assert!(
         !repo
@@ -618,56 +668,7 @@ fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
 }
 
 #[test]
-fn sync_confirmed_dirty_linked_worktree_removes_it_without_global_force() {
-    let repo = TestRepo::new_with_remote();
-
-    repo.run_stax(&["create", "A"]).assert_success();
-    let branch = repo.current_branch();
-    repo.create_file("a.txt", "A\n");
-    repo.commit("A commit");
-    repo.git(&["push", "-u", "origin", &branch])
-        .assert_success();
-    repo.run_stax(&["checkout", "main"]).assert_success();
-
-    let wt_a = repo.path().join("wt-a");
-    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
-        .assert_success();
-    fs::write(wt_a.join("dirty.txt"), "dirty\n").expect("write dirty worktree file");
-
-    repo.git(&["merge", "--no-ff", &branch, "-m", "Merge A"])
-        .assert_success();
-    repo.git(&["push", "origin", "main"]).assert_success();
-    repo.git(&["push", "origin", "--delete", &branch])
-        .assert_success();
-
-    let output = common::run_stax_in_script(&repo.path(), &["sync"], "printf 'y\\n'");
-    output
-        .assert_success()
-        .assert_stdout_contains("force-remove dirty linked worktree")
-        .assert_stdout_contains("removed linked worktree")
-        .assert_stdout_contains("deleted (local only)");
-
-    let stdout = TestRepo::stdout(&output);
-    assert!(
-        !stdout.contains("sync kept linked worktree"),
-        "expected interactive sync confirmation to remove the dirty linked worktree, got:\n{}",
-        stdout
-    );
-    assert!(
-        !wt_a.exists(),
-        "expected interactive sync confirmation to remove the dirty linked worktree"
-    );
-    assert!(
-        !repo
-            .list_branches()
-            .iter()
-            .any(|candidate| candidate == &branch),
-        "expected interactive sync confirmation to delete the local branch"
-    );
-}
-
-#[test]
-fn sync_force_removes_dirty_linked_worktree_and_local_branch() {
+fn sync_force_preserves_dirty_linked_worktree_and_deletes_local_branch() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -692,30 +693,30 @@ fn sync_force_removes_dirty_linked_worktree_and_local_branch() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        !stdout.contains("sync kept linked worktree"),
-        "expected sync --force to remove the dirty linked worktree, got:\n{}",
+        !stdout.contains("removed linked worktree"),
+        "expected sync --force to preserve the dirty linked worktree, got:\n{}",
         stdout
     );
     assert!(
-        !wt_a.exists(),
-        "expected sync --force to remove the dirty linked worktree"
+        wt_a.exists(),
+        "expected sync --force to preserve the dirty linked worktree"
     );
     assert!(
         !repo
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected sync --force to delete the local branch after removing the dirty worktree"
+        "expected sync --force to delete the local branch after preserving the dirty worktree"
     );
 }
 
 #[test]
-fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
+fn sync_force_preserves_dirty_linked_worktree_even_with_ambiguous_basename() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -750,7 +751,7 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     let stdout = TestRepo::stdout(&output);
@@ -760,8 +761,8 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
         stdout
     );
     assert!(
-        !wt_a.exists(),
-        "expected sync --force to remove the dirty linked worktree even when its basename is ambiguous"
+        wt_a.exists(),
+        "expected sync --force to preserve the dirty linked worktree even when its basename is ambiguous"
     );
     assert!(
         wt_side.exists(),
@@ -772,12 +773,12 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected sync --force to delete the local branch after removing the dirty worktree"
+        "expected sync --force to delete the local branch after preserving the dirty worktree"
     );
 }
 
 #[test]
-fn sync_delete_upstream_gone_removes_safe_linked_worktree() {
+fn sync_delete_upstream_gone_preserves_safe_linked_worktree() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "stale-lane"]).assert_success();
@@ -804,19 +805,19 @@ fn sync_delete_upstream_gone_removes_safe_linked_worktree() {
     let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     assert!(
-        !wt_lane.exists(),
-        "expected upstream-gone sync cleanup to remove the linked worktree"
+        wt_lane.exists(),
+        "expected upstream-gone sync cleanup to preserve the linked worktree"
     );
     assert!(
         !repo
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected upstream-gone branch to be deleted locally after linked worktree removal"
+        "expected upstream-gone branch to be deleted locally after linked worktree preservation"
     );
 }
 

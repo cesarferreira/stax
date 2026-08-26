@@ -1,7 +1,10 @@
 use super::{
-    remove,
-    shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
+    pool, remove,
+    shared::{
+        compute_worktree_details, managed_worktrees_dir, worktree_removal_blockers_for_cleanup,
+    },
 };
+use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::{Result, bail};
 use colored::Colorize;
@@ -59,7 +62,8 @@ struct StaleEntry {
 
 pub fn run(force: bool, yes: bool, dry_run: bool) -> Result<()> {
     let repo = GitRepo::open()?;
-    let plan = build_plan(&repo, force, dry_run)?;
+    let config = Config::load()?;
+    let plan = build_plan(&repo, &config, force, dry_run)?;
 
     print_prune_summary(&plan, dry_run);
 
@@ -138,7 +142,7 @@ pub fn run(force: bool, yes: bool, dry_run: bool) -> Result<()> {
     let mut removed = 0usize;
     let mut failed = 0usize;
     for candidate in &plan.candidates {
-        match remove::run(Some(candidate.path.display().to_string()), force, false) {
+        match remove::run_real_remove(Some(candidate.path.display().to_string()), force, false) {
             Ok(()) => removed += 1,
             Err(error) => {
                 failed += 1;
@@ -177,7 +181,11 @@ pub fn run(force: bool, yes: bool, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn build_plan(repo: &GitRepo, force: bool, dry_run: bool) -> Result<CleanupPlan> {
+fn build_plan(repo: &GitRepo, config: &Config, force: bool, dry_run: bool) -> Result<CleanupPlan> {
+    if !dry_run && config.worktree.reuse_slots {
+        evict_excess_idle_slots(repo, config)?;
+    }
+
     let before = repo.list_worktrees()?;
     let prune_candidates = before
         .iter()
@@ -251,6 +259,41 @@ fn build_plan(repo: &GitRepo, force: bool, dry_run: bool) -> Result<CleanupPlan>
         blocked,
         ignored,
     })
+}
+
+/// Evict idle warm slots beyond `max_idle_slots`, oldest `last_used` first, by
+/// doing a real `git worktree remove` and dropping the manifest entry.
+fn evict_excess_idle_slots(repo: &GitRepo, config: &Config) -> Result<()> {
+    let worktrees_dir = managed_worktrees_dir(repo, config)?;
+    if !worktrees_dir.exists() {
+        return Ok(());
+    }
+
+    let pool_snapshot = pool::load(&worktrees_dir)?;
+    let mut idle: Vec<pool::Slot> = pool_snapshot
+        .slots
+        .into_iter()
+        .filter(|slot| slot.state == pool::SlotState::Idle)
+        .collect();
+    if idle.len() <= config.worktree.max_idle_slots {
+        return Ok(());
+    }
+
+    idle.sort_by_key(|slot| slot.last_used);
+    let excess = idle.len() - config.worktree.max_idle_slots;
+
+    for slot in idle.into_iter().take(excess) {
+        if slot.path.exists() {
+            let _ = repo.worktree_remove(&slot.path, true);
+        }
+        let path = slot.path.clone();
+        let _ = pool::with_lock(&worktrees_dir, |pool| {
+            pool.remove_path(&path);
+            Ok(())
+        });
+    }
+
+    Ok(())
 }
 
 fn stale_entry_from(worktree: &crate::git::repo::WorktreeInfo) -> StaleEntry {

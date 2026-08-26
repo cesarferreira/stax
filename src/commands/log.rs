@@ -71,7 +71,7 @@ pub fn run(
     let workdir = repo.workdir()?;
     let config = Config::load()?;
     let has_tracked = stack.branches.len() > 1;
-    let git_dir = repo.git_dir()?;
+    let cache_dir = repo.common_git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
     let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
@@ -141,12 +141,17 @@ pub fn run(
     ordered_branches.push(stack.trunk.clone());
 
     // Load CI cache (refresh happens in `stax ci`)
-    let cache = CiCache::load(git_dir);
+    let cache = CiCache::load(&cache_dir);
 
     // Build CI states from cache
     let ci_states: HashMap<String, String> = ordered_branches
         .iter()
-        .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
+        .filter_map(|branch| {
+            let revision = repo.branch_commit(branch).ok()?;
+            cache
+                .get_ci_state_for_revision(branch, &revision)
+                .map(|state| (branch.clone(), state))
+        })
         .collect();
 
     let mut branch_logs: Vec<BranchLogJson> = Vec::new();
@@ -162,7 +167,7 @@ pub fn run(
 
         let pr_state = info
             .and_then(|b| b.pr_state.clone())
-            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
+            .filter(|s| !s.trim().is_empty());
 
         let pr_number = info.and_then(|b| b.pr_number);
         let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));

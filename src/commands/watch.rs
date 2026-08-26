@@ -5,7 +5,7 @@ use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::Local;
 use colored::Colorize;
 use std::collections::HashSet;
@@ -16,7 +16,11 @@ const DEFAULT_INTERVAL_ACTIVE: u64 = 15;
 const DEFAULT_INTERVAL_IDLE: u64 = 60;
 const DEFAULT_INTERVAL_QUIET: u64 = 120;
 
-pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
+pub fn run(current_only: bool, interval: Option<u64>, max_iterations: Option<usize>) -> Result<()> {
+    if max_iterations == Some(0) {
+        bail!("--iterations must be at least 1");
+    }
+
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
@@ -30,7 +34,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
         // Reload stack each iteration to pick up local branch changes
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
-        let git_dir = repo.git_dir()?;
+        let cache_dir = repo.common_git_dir()?;
         let workdir = repo.workdir()?;
 
         let branches_to_watch: Vec<String> = if current_only {
@@ -59,7 +63,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
                 }
                 Err(_) => {
                     // Fall back to cached data on network errors
-                    load_ci_from_cache(git_dir, &branches_to_watch)
+                    load_ci_from_cache(&repo, &cache_dir, &branches_to_watch)
                 }
             }
         } else {
@@ -99,6 +103,12 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
                 &ci_statuses,
                 &remote_branches,
             );
+        }
+
+        // Bounded mode: stop after the requested number of refreshes. Returns before
+        // the trailing sleep so the final iteration exits immediately.
+        if max_iterations.is_some_and(|max| iteration >= max) {
+            return Ok(());
         }
 
         // Decide next interval
@@ -223,29 +233,36 @@ fn render_watch_table(
     println!("  {}  {} {}", trunk_marker, trunk_cloud, trunk.dimmed());
 }
 
-fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<BranchCiStatus> {
-    let cache = CiCache::load(git_dir);
+fn load_ci_from_cache(
+    repo: &GitRepo,
+    cache_dir: &std::path::Path,
+    branches: &[String],
+) -> Vec<BranchCiStatus> {
+    let cache = CiCache::load(cache_dir);
     branches
         .iter()
-        .filter_map(|b| {
-            cache.get_ci_state(b).map(|_| {
-                let pr_is_draft = cache
-                    .branches
-                    .get(b.as_str())
-                    .and_then(|e| e.pr_state.as_deref())
-                    .map(|s| s.eq_ignore_ascii_case("draft"));
-                BranchCiStatus {
-                    branch: b.clone(),
-                    sha: String::new(),
-                    sha_short: String::new(),
-                    overall_status: cache.get_ci_state(b),
-                    check_runs: vec![],
-                    pr_number: None,
-                    pr_is_draft,
-                    pr_title: None,
-                    pr_review_decision: None,
-                }
-            })
+        .filter_map(|branch| {
+            let revision = repo.branch_commit(branch).ok()?;
+            cache
+                .get_ci_state_for_revision(branch, &revision)
+                .map(|overall_status| {
+                    let pr_is_draft = cache
+                        .branches
+                        .get(branch.as_str())
+                        .and_then(|e| e.pr_state.as_deref())
+                        .map(|s| s.eq_ignore_ascii_case("draft"));
+                    BranchCiStatus {
+                        branch: branch.clone(),
+                        sha_short: revision.chars().take(7).collect(),
+                        sha: revision,
+                        overall_status: Some(overall_status),
+                        check_runs: vec![],
+                        pr_number: None,
+                        pr_is_draft,
+                        pr_title: None,
+                        pr_review_decision: None,
+                    }
+                })
         })
         .collect()
 }
@@ -279,4 +296,99 @@ fn adaptive_interval(ci_statuses: &[BranchCiStatus], stack: &Stack, branches: &[
 
     // Nothing active — back off
     DEFAULT_INTERVAL_QUIET
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::CheckRunInfo;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
+
+    fn empty_stack() -> Stack {
+        Stack {
+            branches: HashMap::new(),
+            trunk: "main".to_string(),
+        }
+    }
+
+    fn ci_status_with_check(branch: &str, status: &str) -> BranchCiStatus {
+        BranchCiStatus {
+            branch: branch.to_string(),
+            sha: "abc123".to_string(),
+            sha_short: "abc123".to_string(),
+            overall_status: None,
+            check_runs: vec![CheckRunInfo {
+                name: "build".to_string(),
+                status: status.to_string(),
+                conclusion: None,
+                url: None,
+                started_at: None,
+                completed_at: None,
+                elapsed_secs: None,
+                average_secs: None,
+                completion_percent: None,
+            }],
+            pr_number: None,
+            pr_is_draft: None,
+            pr_title: None,
+            pr_review_decision: None,
+        }
+    }
+
+    fn branch_with_pr_state(name: &str, pr_state: Option<&str>) -> StackBranch {
+        StackBranch {
+            name: name.to_string(),
+            parent: Some("main".to_string()),
+            parent_revision: Some("abc123".to_string()),
+            children: Vec::new(),
+            needs_restack: false,
+            pr_number: Some(1),
+            pr_state: pr_state.map(|s| s.to_string()),
+            pr_is_draft: None,
+        }
+    }
+
+    #[test]
+    fn adaptive_interval_polls_fast_when_checks_running() {
+        let stack = empty_stack();
+        let ci_statuses = vec![ci_status_with_check("feature", "in_progress")];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_ACTIVE
+        );
+    }
+
+    #[test]
+    fn adaptive_interval_uses_idle_interval_with_open_prs() {
+        let mut stack = empty_stack();
+        stack.branches.insert(
+            "feature".to_string(),
+            branch_with_pr_state("feature", Some("open")),
+        );
+        let ci_statuses: Vec<BranchCiStatus> = vec![];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_IDLE
+        );
+    }
+
+    #[test]
+    fn adaptive_interval_backs_off_when_nothing_is_active() {
+        let mut stack = empty_stack();
+        stack
+            .branches
+            .insert("feature".to_string(), branch_with_pr_state("feature", None));
+        let ci_statuses: Vec<BranchCiStatus> = vec![];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_QUIET
+        );
+    }
 }

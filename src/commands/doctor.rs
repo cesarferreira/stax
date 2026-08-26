@@ -1,8 +1,12 @@
 use crate::commands::skills;
+use crate::commands::stack_palette;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
 use crate::git::{GitRepo, refs};
+use crate::github::gh_stack::{
+    self, ExtensionStatus, FeatureState, OAuthLoginStatus, VersionStatus,
+};
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Result, bail};
 use colored::Colorize;
@@ -33,6 +37,8 @@ enum RepairAction {
         key: &'static str,
         value: &'static str,
     },
+    InstallGhStackExtension,
+    UpgradeGhStackExtension,
     UpdateSkills,
 }
 
@@ -41,6 +47,12 @@ impl RepairAction {
         match self {
             RepairAction::SetGitConfig { key, value } => {
                 format!("Set git config {key}={value}")
+            }
+            RepairAction::InstallGhStackExtension => {
+                "Install GitHub gh-stack extension".to_string()
+            }
+            RepairAction::UpgradeGhStackExtension => {
+                "Upgrade outdated GitHub gh-stack extension".to_string()
             }
             RepairAction::UpdateSkills => "Update stale AI agent skill files".to_string(),
         }
@@ -125,6 +137,89 @@ pub fn run(fix: bool) -> Result<()> {
         );
     }
 
+    if remote_info
+        .as_ref()
+        .map(|info| info.forge == crate::remote::ForgeType::GitHub)
+        .unwrap_or(false)
+    {
+        match gh_stack::extension_status() {
+            ExtensionStatus::Installed => {
+                let feature = gh_stack::feature_enabled(repo.workdir()?);
+                let feature_label = match feature {
+                    FeatureState::Enabled => "repo feature cache: enabled",
+                    FeatureState::Disabled => "repo feature cache: disabled",
+                    FeatureState::Unknown => "repo feature cache: unknown",
+                };
+                let version = gh_stack::version_status();
+                let version_label = match &version {
+                    VersionStatus::Unknown => "version unknown".to_string(),
+                    VersionStatus::BelowRecommended { installed } => {
+                        format!("v{installed}, out of date")
+                    }
+                    VersionStatus::MeetsRecommended { installed } => {
+                        format!("v{installed}, up to date")
+                    }
+                };
+                println!(
+                    "{} {} {}",
+                    "✓".green(),
+                    "GitHub native stacks: gh-stack extension installed".dimmed(),
+                    format!("({version_label}; {feature_label})").dimmed()
+                );
+                if let VersionStatus::BelowRecommended { installed } = version {
+                    repair_plan.push(RepairAction::UpgradeGhStackExtension);
+                    println!(
+                        "{} {}",
+                        "⚠".yellow(),
+                        format!(
+                            "gh-stack v{installed} is out of date — v0.1.0+ adds `gh stack \
+                             merge` for atomic native stack merges (run `gh extension upgrade \
+                             stack`)"
+                        )
+                        .yellow()
+                    );
+                    if gh_stack::is_legacy_auth_version(&installed)
+                        && gh_stack::auth_override_env_present()
+                        && gh_stack::oauth_login_status() == OAuthLoginStatus::MissingOrInvalid
+                    {
+                        println!(
+                            "{} {}",
+                            "⚠".yellow(),
+                            "GitHub native stacks: this legacy gh-stack version cannot use \
+                             GH_TOKEN/GITHUB_TOKEN, and no usable OAuth-authenticated `gh` \
+                             account was found (run `gh auth login`, `gh auth switch`, or upgrade \
+                             gh-stack)"
+                                .yellow()
+                        );
+                    }
+                }
+            }
+            ExtensionStatus::Outdated => {
+                repair_plan.push(RepairAction::UpgradeGhStackExtension);
+                println!(
+                    "{} {}",
+                    "⚠".yellow(),
+                    "GitHub native stacks: gh-stack extension is outdated and lacks `gh stack link` (run `gh extension upgrade stack`)".yellow()
+                );
+            }
+            ExtensionStatus::NoExtension => {
+                repair_plan.push(RepairAction::InstallGhStackExtension);
+                println!(
+                    "{} {}",
+                    "⚠".yellow(),
+                    "GitHub native stacks: gh-stack extension missing (run `gh extension install github/gh-stack`)".yellow()
+                );
+            }
+            ExtensionStatus::NoGh => {
+                println!(
+                    "{} {}",
+                    "⚠".yellow(),
+                    "GitHub native stacks: GitHub CLI `gh` not found (optional)".yellow()
+                );
+            }
+        }
+    }
+
     if repo.is_dirty()? {
         println!("{} {}", "⚠".yellow(), "Working tree is dirty".yellow());
     } else {
@@ -142,10 +237,10 @@ pub fn run(fix: bool) -> Result<()> {
     if let Ok(stack) = Stack::load(&repo) {
         let mut orphaned = Vec::new();
         for (name, info) in &stack.branches {
-            if let Some(parent) = &info.parent {
-                if repo.branch_commit(parent).is_err() {
-                    orphaned.push((name.clone(), parent.clone()));
-                }
+            if let Some(parent) = &info.parent
+                && repo.branch_commit(parent).is_err()
+            {
+                orphaned.push((name.clone(), parent.clone()));
             }
         }
 
@@ -267,12 +362,11 @@ pub fn run(fix: bool) -> Result<()> {
             if local_branches.contains(branch_name) {
                 continue;
             }
-            if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch_name) {
-                if let Some(pr) = &meta.pr_info {
-                    if pr.state == "OPEN" {
-                        stale.push((branch_name.clone(), pr.number));
-                    }
-                }
+            if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch_name)
+                && let Some(pr) = &meta.pr_info
+                && pr.state == "OPEN"
+            {
+                stale.push((branch_name.clone(), pr.number));
             }
         }
 
@@ -322,6 +416,29 @@ pub fn run(fix: bool) -> Result<()> {
                     .unwrap_or_else(|| "no version marker".to_string());
                 println!("  {} ({})", name, version_note.dimmed());
             }
+        }
+    }
+
+    // Check: linked-worktree icons may need a Nerd Font or ASCII fallback.
+    {
+        let mode = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
+        if stack_palette::uses_nerd_worktree_glyph(mode) {
+            println!(
+                "{} {}",
+                "ℹ".bright_cyan(),
+                "Linked-worktree icons use Nerd Font glyphs. Set display.worktree_glyph = \"wt\" \
+                 in config.toml (or STAX_NERD_ICONS=0) if they render as boxes."
+                    .dimmed()
+            );
+        } else if mode == stack_palette::WorktreeGlyphMode::Auto {
+            println!(
+                "{} {}",
+                "ℹ".bright_cyan(),
+                "Linked-worktree icons use ASCII fallback (display.worktree_glyph = \"auto\"). \
+                 Set display.worktree_glyph = \"tree\" or STAX_NERD_ICONS=1 with a Nerd Font \
+                 terminal for icon mode."
+                    .dimmed()
+            );
         }
     }
 
@@ -389,6 +506,14 @@ fn apply_repair_action(action: &RepairAction) -> Result<()> {
         }
         RepairAction::UpdateSkills => {
             skills::run_update(false)?;
+        }
+        RepairAction::InstallGhStackExtension => {
+            gh_stack::install_extension()?;
+            println!("{} {}", "✓".green(), action.description().dimmed());
+        }
+        RepairAction::UpgradeGhStackExtension => {
+            gh_stack::upgrade_extension()?;
+            println!("{} {}", "✓".green(), action.description().dimmed());
         }
     }
 

@@ -1,4 +1,5 @@
-use crate::tui::app::{App, BranchDisplay, DiffLineType, FocusedPane};
+use crate::application::{DiffLine, DiffLineKind};
+use crate::tui::app::{App, BranchDisplay, FocusedPane};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,12 +15,12 @@ pub fn render_diff(f: &mut Frame, app: &App, area: Rect) {
 
     let title = if let Some(b) = branch {
         if let Some(parent) = &b.parent {
-            format!(" Patch: {} ← {} ", b.name, parent)
+            format!(" [3] Patch: {} ← {} ", b.name, parent)
         } else {
-            format!(" {} ", b.name)
+            format!(" [3] {} ", b.name)
         }
     } else {
-        " Patch ".to_string()
+        " [3] Patch ".to_string()
     };
 
     let (border_color, title_style) = if is_focused {
@@ -167,14 +168,14 @@ fn build_patch_lines(
 
     visible_diff_lines(&app.selected_diff, app.diff_scroll, visible_height)
         .map(|diff_line| {
-            let style = match diff_line.line_type {
-                DiffLineType::Addition => Style::default().fg(Color::Green),
-                DiffLineType::Deletion => Style::default().fg(Color::Red),
-                DiffLineType::Hunk => Style::default().fg(Color::Cyan),
-                DiffLineType::Header => Style::default()
+            let style = match diff_line.kind {
+                DiffLineKind::Addition => Style::default().fg(Color::Green),
+                DiffLineKind::Deletion => Style::default().fg(Color::Red),
+                DiffLineKind::Hunk => Style::default().fg(Color::Cyan),
+                DiffLineKind::Header => Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
-                DiffLineType::Context => Style::default().fg(Color::White),
+                DiffLineKind::Context => Style::default().fg(Color::White),
             };
 
             Line::from(Span::styled(diff_line.content.clone(), style))
@@ -183,22 +184,22 @@ fn build_patch_lines(
 }
 
 fn visible_diff_lines(
-    lines: &[crate::tui::app::DiffLine],
+    lines: &[DiffLine],
     scroll: usize,
     visible_height: usize,
-) -> impl Iterator<Item = &crate::tui::app::DiffLine> {
+) -> impl Iterator<Item = &DiffLine> {
     lines.iter().skip(scroll).take(visible_height.max(1))
 }
 
 #[cfg(test)]
 mod tests {
     use super::visible_diff_lines;
-    use crate::tui::app::{DiffLine, DiffLineType};
+    use crate::application::{DiffLine, DiffLineKind};
 
     fn line(content: &str) -> DiffLine {
         DiffLine {
             content: content.to_string(),
-            line_type: DiffLineType::Context,
+            kind: DiffLineKind::Context,
         }
     }
 

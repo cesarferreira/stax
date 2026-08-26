@@ -174,7 +174,7 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
             "{} {} {}",
             format!("[{}/{}]", i + 1, commits.len()).dimmed(),
             commit.short_sha().yellow(),
-            &commit.message
+            commit.message
         );
         println!("{}", prompt);
 
@@ -228,7 +228,7 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
             i + 1,
             action_str,
             commit.short_sha().yellow(),
-            &commit.message
+            commit.message
         );
     }
     if has_reword {

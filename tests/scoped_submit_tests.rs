@@ -323,6 +323,60 @@ async fn upstack_submit_pr_defaults_exclude_parent_commits_from_temporary_parent
 }
 
 #[tokio::test]
+async fn stack_submit_pr_defaults_exclude_rewritten_parent_commits() {
+    let mock_server = MockServer::start().await;
+    mock_github_pr_create(&mock_server).await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+
+    let branches = repo.create_stack(&["rewrite-parent", "rewrite-child"]);
+    let parent = &branches[0];
+    let child = &branches[1];
+
+    repo.run_stax(&["checkout", parent]).assert_success();
+    repo.create_file("rewrite-parent.txt", "rewritten parent\n");
+    repo.git(&["add", "-A"]).assert_success();
+    repo.git(&["commit", "--amend", "-m", "Rewritten parent"])
+        .assert_success();
+
+    repo.run_stax(&["checkout", child]).assert_success();
+    let output = repo.run_stax_with_env(
+        &[
+            "submit",
+            "--yes",
+            "--no-prompt",
+            "--publish",
+            "--no-template",
+        ],
+        &[("STAX_GITHUB_TOKEN", "test-token")],
+    );
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+    let requests = mock_server.received_requests().await.unwrap();
+    let child_payload = requests
+        .iter()
+        .filter(|request| {
+            request.method.as_str() == "POST"
+                && request.url.path() == "/repos/test-owner/test-repo/pulls"
+        })
+        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+        .find(|payload| payload["head"].as_str() == Some(child.as_str()))
+        .expect("missing child PR create payload");
+
+    assert_eq!(child_payload["title"], "Commit for rewrite-child");
+    assert!(
+        !child_payload["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Commit for rewrite-parent"),
+        "child PR body should not include stale parent commits: {child_payload}"
+    );
+}
+
+#[tokio::test]
 async fn branch_submit_pr_defaults_exclude_imported_parent_commits_after_temporary_restack() {
     let mock_server = MockServer::start().await;
     mock_github_pr_create(&mock_server).await;

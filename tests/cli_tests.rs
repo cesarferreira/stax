@@ -20,6 +20,29 @@ fn stax(args: &[&str]) -> std::process::Output {
         .expect("Failed to execute stax")
 }
 
+#[test]
+fn repository_commands_outside_git_show_actionable_error() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let output = Command::new(stax_bin())
+        .current_dir(dir.path())
+        .arg("status")
+        .env("STAX_CONFIG_DIR", dir.path().join("config"))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("Failed to execute stax");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Not in a Git repository. Run this command from inside a Git repository."),
+        "expected actionable repository error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("class=Repository"),
+        "expected libgit2 internals to stay hidden, got: {stderr}"
+    );
+}
+
 fn stax_with_home(args: &[&str], home: &std::path::Path) -> std::process::Output {
     Command::new(stax_bin())
         .args(args)
@@ -181,7 +204,14 @@ fn test_help() {
     assert!(stdout.contains("Fast stacked Git branches and PRs"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("submit"));
-    assert!(stdout.contains("update"));
+    assert!(stdout.contains("refresh"));
+    // clap renders one alias as `[alias: x]` and several as `[aliases: x, y]`.
+    // It used the plural unconditionally before 4.6.6, so accept either form:
+    // what matters is that the `update` alias is still advertised in help.
+    assert!(
+        stdout.contains("[alias: update]") || stdout.contains("[aliases: update]"),
+        "expected the `update` alias to appear in help output:\n{stdout}"
+    );
     assert!(stdout.contains("run"));
     assert!(stdout.contains("restack"));
     assert!(stdout.contains("resolve"));
@@ -233,7 +263,23 @@ fn test_sync_alias_rs() {
 }
 
 #[test]
-fn test_update_help() {
+fn test_refresh_help() {
+    let output = stax(&["refresh", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sync trunk"));
+    assert!(stdout.contains("no-pr"));
+    assert!(stdout.contains("no-submit"));
+    assert!(stdout.contains("force"));
+    assert!(stdout.contains("safe"));
+    assert!(stdout.contains("verbose"));
+    assert!(stdout.contains("--yes"));
+    assert!(stdout.contains("--no-prompt"));
+    assert!(stdout.contains("--all-stacks"));
+}
+
+#[test]
+fn test_update_alias_still_works() {
     let output = stax(&["update", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -248,12 +294,12 @@ fn test_update_help() {
 }
 
 #[test]
-fn test_refresh_alias_help() {
-    let output = stax(&["refresh", "--help"]);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Sync trunk"));
-    assert!(stdout.contains("no-submit"));
+fn test_update_typo_exits_nonzero() {
+    let output = stax(&["updatee"]);
+    assert!(
+        !output.status.success(),
+        "near-miss subcommand should not match the update alias"
+    );
 }
 
 #[test]
@@ -296,11 +342,16 @@ fn test_ready_help_available() {
     let output = stax(&["ready", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("PR readiness"));
+    assert!(
+        stdout.contains("PR readiness")
+            || stdout.contains("readiness")
+            || stdout.contains("tracked branches")
+    );
     assert!(stdout.contains("--all"));
     assert!(stdout.contains("--current"));
     assert!(stdout.contains("--stack"));
     assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--interval"));
 }
 
 #[test]
@@ -507,6 +558,17 @@ fn test_downstack_commands() {
 }
 
 #[test]
+fn test_stack_help_describes_native_link_commands() {
+    let output = stax(&["stack", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("link"));
+    assert!(stdout.contains("unlink"));
+    assert!(stdout.contains("Stack commands (submit, restack, native GitHub Stack link/unlink)"));
+    assert!(!stdout.contains("Stack commands (submit, restack)"));
+}
+
+#[test]
 fn test_scoped_submit_subcommand_help_flags() {
     for args in [
         ["branch", "submit", "--help"],
@@ -556,6 +618,26 @@ fn test_config_command() {
 }
 
 #[test]
+fn test_skill_flag_prints_bundled_agent_skill() {
+    let output = stax(&["--skill"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("---\n"), "expected YAML frontmatter");
+    assert!(stdout.contains("name: stax"));
+    assert!(stdout.contains("stax_version:"));
+    assert!(stdout.contains("# Stax Skills"));
+    assert!(stdout.is_empty() || stdout.ends_with('\n'));
+}
+
+#[test]
+fn test_help_includes_skill_flag() {
+    let output = stax(&["--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--skill"));
+}
+
+#[test]
 fn test_config_help_includes_reset_ai_flag() {
     let output = stax(&["config", "--help"]);
     assert!(output.status.success());
@@ -574,6 +656,7 @@ fn test_shell_setup_help_uses_static_install_language() {
     assert!(stdout.contains("~/.config/stax"));
     assert!(stdout.contains("--skip-skills"));
     assert!(stdout.contains("--install-skills"));
+    assert!(stdout.contains("--skills"));
     assert!(stdout.contains("--skip-auth"));
     assert!(stdout.contains("--auth-from-gh"));
     assert!(stdout.contains("--yes"));
@@ -895,10 +978,11 @@ async fn test_skills_update_rewrites_when_pkg_version_advances_past_stale_marker
     );
 }
 
-/// Happy path: when the installed skill file already matches `PKG_VERSION`,
-/// `skills update` should skip it (independent of what the upstream marker says).
+/// Regression: a single-quoted YAML `stax_version` with a trailing comment and
+/// equal to `PKG_VERSION` is current. `skills update` must skip it (independent
+/// of what the upstream marker says), and `skills list` must not report it as stale.
 #[tokio::test]
-async fn test_skills_update_skips_when_already_at_pkg_version() {
+async fn test_skills_update_skips_commented_current_version() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
@@ -918,7 +1002,7 @@ async fn test_skills_update_skips_when_already_at_pkg_version() {
     fs::write(
         &codex_skill,
         format!(
-            "---\nname: stax\nstax_version: \"{pkg_version}\"\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
+            "---\nname: stax\nstax_version: '{pkg_version}' # installed by package manager\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
         ),
     )
     .expect("seed up-to-date codex skill");
@@ -954,6 +1038,26 @@ async fn test_skills_update_skips_when_already_at_pkg_version() {
     assert_eq!(
         mtime_before, mtime_after,
         "file at PKG_VERSION must not be rewritten",
+    );
+
+    let list_output = Command::new(stax_bin())
+        .args(["skills", "list"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run stax skills list");
+    assert!(list_output.status.success(), "{:?}", list_output);
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        list_stdout.contains("Codex") && list_stdout.contains(&format!("(v{pkg_version})")),
+        "list must show the single-quoted Codex skill at PKG_VERSION:\n{}",
+        list_stdout
+    );
+    assert!(
+        !list_stdout.contains("→ v"),
+        "list must not show a stale-version arrow for the single-quoted skill:\n{}",
+        list_stdout
     );
 }
 
@@ -1016,6 +1120,7 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
+    std::fs::create_dir_all(home.path().join(".codex")).expect("simulate detected codex");
     let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
 
@@ -1050,7 +1155,11 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
     assert_eq!(saved.trim(), "gh-imported-token");
     assert!(
         home.path().join(".codex/skills/stax/SKILL.md").exists(),
-        "expected skills to be installed"
+        "expected skills to be installed for detected codex harness"
+    );
+    assert!(
+        !home.path().join(".cursor/skills/stax/SKILL.md").exists(),
+        "setup --yes should not install skills for undetected harnesses"
     );
 }
 

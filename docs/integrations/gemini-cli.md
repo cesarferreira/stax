@@ -13,6 +13,8 @@ Authenticate via the `gemini` login flow or set `GEMINI_API_KEY` (see the Gemini
 ## 2. Add stax instructions to the repo
 
 ```bash
+st --skill > GEMINI.md
+# or fetch the markdown body only (no SKILL.md frontmatter):
 curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 
@@ -31,5 +33,5 @@ st gen --commit-msg --agent gemini
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)

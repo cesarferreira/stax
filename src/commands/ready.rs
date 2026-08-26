@@ -15,8 +15,6 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-pub(crate) const READY_FETCH_CONCURRENCY: usize = 6;
-
 const ACTION_WIDTH: usize = 7;
 const PR_WIDTH: usize = 7;
 const REVIEWS_MIN_WIDTH: usize = 7;
@@ -42,7 +40,7 @@ impl ReadyAction {
             ReadyAction::Merge => "merge",
             ReadyAction::Ping => "ping",
             ReadyAction::Wait => "wait",
-            ReadyAction::Draft => "draft",
+            ReadyAction::Draft => "undraft",
         }
     }
 
@@ -84,25 +82,23 @@ pub struct CiSummary {
 
 impl CiSummary {
     fn from_checks(status: CiStatus, checks: &[CheckRunInfo]) -> Self {
-        match status {
-            CiStatus::Failure => {
-                let failed = checks
-                    .iter()
-                    .filter(|check| {
-                        check.status == "completed"
-                            && matches!(
-                                check.conclusion.as_deref(),
-                                Some("failure") | Some("timed_out") | Some("action_required")
-                            )
-                    })
-                    .count()
-                    .max(1);
-                Self::failed(failed)
-            }
-            CiStatus::Pending => Self::running(),
-            CiStatus::Success => Self::passed(),
-            CiStatus::NoCi => Self::no_ci(),
+        if checks.is_empty() {
+            return match status {
+                CiStatus::Failure => Self::failed(1),
+                CiStatus::Pending => Self::running(),
+                CiStatus::Success => Self::passed(),
+                CiStatus::NoCi => Self::no_ci(),
+            };
         }
+
+        let overall = match status {
+            CiStatus::Pending => Some("pending"),
+            CiStatus::Success => Some("success"),
+            CiStatus::Failure => Some("failure"),
+            CiStatus::NoCi => None,
+        };
+        let (status, text) = crate::commands::ci::compact_ci_status(checks, overall);
+        Self { status, text }
     }
 
     fn passed() -> Self {
@@ -115,7 +111,7 @@ impl CiSummary {
     fn failed(count: usize) -> Self {
         Self {
             status: CiStatus::Failure,
-            text: format!("{} {}", count, if count == 1 { "failed" } else { "failed" }),
+            text: format!("{count} failed"),
         }
     }
 
@@ -215,6 +211,13 @@ pub struct ReadyScope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReadyFetchOutcome {
+    Row(Box<PrReadinessRow>),
+    NoPr,
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadyRowState {
     Loading {
         branch: ReadyBranch,
@@ -232,14 +235,6 @@ impl ReadyRowState {
             ReadyRowState::Loading { branch } => &branch.name,
             ReadyRowState::Loaded(row) => &row.branch,
             ReadyRowState::Unavailable { branch, .. } => &branch.name,
-        }
-    }
-
-    pub fn pr_number(&self) -> Option<u64> {
-        match self {
-            ReadyRowState::Loading { branch } => branch.pr_number,
-            ReadyRowState::Loaded(row) => Some(row.pr_number),
-            ReadyRowState::Unavailable { branch, .. } => branch.pr_number,
         }
     }
 }
@@ -271,13 +266,13 @@ impl ReadyScopeMode {
     }
 }
 
-pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool) -> Result<()> {
+pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool, interval: u64) -> Result<()> {
     if json {
         return run_static(scope_mode, true);
     }
 
     if !plain && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return crate::tui::ready::run(scope_mode);
+        return crate::tui::ready::run(scope_mode, interval);
     }
 
     run_static(scope_mode, false)
@@ -357,9 +352,9 @@ pub(crate) async fn fetch_row_for_branch(
     remote: &RemoteInfo,
     stack: &Stack,
     branch: &ReadyBranch,
-) -> Result<Option<PrReadinessRow>> {
+) -> Result<ReadyFetchOutcome> {
     let Some(pr_number) = resolve_branch_pr(client, stack, branch).await? else {
-        return Ok(None);
+        return Ok(ReadyFetchOutcome::NoPr);
     };
 
     let status = client
@@ -367,34 +362,102 @@ pub(crate) async fn fetch_row_for_branch(
         .await
         .with_context(|| format!("Failed to fetch live readiness for PR #{}", pr_number))?;
 
-    let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &[]);
+    if is_merged_pr_status(&status) {
+        let _ = warm_pr_state_for_ready_status(repo, &branch.name, &status);
+        return Ok(ReadyFetchOutcome::Merged);
+    }
+
+    let ci_revision = status.head_sha.clone();
+    let check_runs = client
+        .fetch_checks(repo, &ci_revision)
+        .await
+        .with_context(|| format!("Failed to fetch CI checks for PR #{}", pr_number))
+        .map(|(_, runs)| runs)?;
+    let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &check_runs);
     let mut row = PrReadinessRow::from_status(&branch.name, status, ci_summary);
     row.pr_url = Some(remote.pr_url(pr_number));
-    let _ = warm_caches_for_ready_row(repo, &row);
-    Ok(Some(row))
+    let _ = warm_caches_for_ready_row(repo, &row, &ci_revision);
+    Ok(ReadyFetchOutcome::Row(Box::new(row)))
 }
 
-pub(crate) fn warm_caches_for_ready_row(repo: &GitRepo, row: &PrReadinessRow) -> Result<()> {
-    let git_dir = repo.git_dir()?;
-    let mut cache = CiCache::load(git_dir);
-    cache.update(
-        &row.branch,
-        Some(row.ci_status.clone()),
-        Some(ready_row_pr_cache_state(row)),
-    );
-    cache.mark_refreshed();
-    cache.save(git_dir)?;
+fn is_merged_pr_status(status: &PrMergeStatus) -> bool {
+    status.state.eq_ignore_ascii_case("merged")
+}
+
+pub(crate) fn warm_caches_for_ready_row(
+    repo: &GitRepo,
+    row: &PrReadinessRow,
+    ci_revision: &str,
+) -> Result<()> {
+    let cache_dir = repo.common_git_dir()?;
+    let pr_state = ready_row_pr_cache_state(row);
+    if ci_revision.trim().is_empty() {
+        CiCache::update_branch_pr(&cache_dir, &row.branch, Some(pr_state))?;
+    } else {
+        CiCache::refresh_branch_states(
+            &cache_dir,
+            &row.branch,
+            ci_revision,
+            Some(row.ci_status.clone()),
+            Some(pr_state),
+        )?;
+    }
 
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), &row.branch)? {
-        meta.pr_info = Some(PrInfo {
-            number: row.pr_number,
-            state: row.pr_state.clone(),
-            is_draft: Some(row.is_draft),
-        });
-        meta.write(repo.inner(), &row.branch)?;
+        update_ready_pr_metadata(
+            repo,
+            &row.branch,
+            &mut meta,
+            row.pr_number,
+            &row.pr_state,
+            row.is_draft,
+        )?;
     }
 
     Ok(())
+}
+
+fn warm_pr_state_for_ready_status(
+    repo: &GitRepo,
+    branch: &str,
+    status: &PrMergeStatus,
+) -> Result<()> {
+    let cache_dir = repo.common_git_dir()?;
+    let pr_state = if status.is_draft {
+        "draft".to_string()
+    } else {
+        status.state.clone()
+    };
+    CiCache::update_branch_pr(&cache_dir, branch, Some(pr_state))?;
+
+    if let Some(mut meta) = BranchMetadata::read(repo.inner(), branch)? {
+        update_ready_pr_metadata(
+            repo,
+            branch,
+            &mut meta,
+            status.number,
+            &status.state,
+            status.is_draft,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn update_ready_pr_metadata(
+    repo: &GitRepo,
+    branch: &str,
+    meta: &mut BranchMetadata,
+    number: u64,
+    state: &str,
+    is_draft: bool,
+) -> Result<()> {
+    meta.pr_info = Some(PrInfo {
+        number,
+        state: state.to_string(),
+        is_draft: Some(is_draft),
+    });
+    meta.write(repo.inner(), branch)
 }
 
 fn ready_row_pr_cache_state(row: &PrReadinessRow) -> String {
@@ -422,12 +485,12 @@ async fn fetch_readiness_rows(
             .iter()
             .map(|branch| fetch_row_for_branch(repo, client, remote, stack, branch)),
     )
-    .buffer_unordered(READY_FETCH_CONCURRENCY);
+    .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT);
 
     while let Some(result) = pending.next().await {
         match result? {
-            Some(row) => rows.push(row),
-            None => skipped += 1,
+            ReadyFetchOutcome::Row(row) => rows.push(*row),
+            ReadyFetchOutcome::NoPr | ReadyFetchOutcome::Merged => skipped += 1,
         }
     }
 
@@ -527,21 +590,15 @@ fn review_summary(status: &PrMergeStatus) -> String {
         return "draft".to_string();
     }
     if status.changes_requested || status.review_decision.as_deref() == Some("CHANGES_REQUESTED") {
-        return "changes requested".to_string();
+        return "changes".to_string();
     }
     if status.review_decision.as_deref() == Some("REVIEW_REQUIRED") {
-        return "missing review".to_string();
+        return "review".to_string();
     }
-    if status.approvals == 1 {
-        return "1 approval".to_string();
+    if status.review_decision.as_deref() == Some("APPROVED") || status.approvals > 0 {
+        return "approved".to_string();
     }
-    if status.approvals > 1 {
-        return format!("{} approvals", status.approvals);
-    }
-    if status.review_decision.is_none() {
-        return "not required".to_string();
-    }
-    "unknown".to_string()
+    String::new()
 }
 
 fn sort_ready_rows(rows: &mut [PrReadinessRow], branch_order: &[&str]) {
@@ -723,8 +780,21 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Merge);
         assert_eq!(row.reason, ReadyReason::Ready);
-        assert_eq!(row.review_summary, "1 approval");
+        assert_eq!(row.review_summary, "approved");
         assert_eq!(row.ci_summary, "passed");
+    }
+
+    #[test]
+    fn identifies_only_merged_pr_states_as_merged_outcomes() {
+        assert!(is_merged_pr_status(&status(|s| {
+            s.state = "MeRgEd".to_string()
+        })));
+        assert!(!is_merged_pr_status(&status(|s| {
+            s.state = "OPEN".to_string()
+        })));
+        assert!(!is_merged_pr_status(&status(|s| {
+            s.state = "CLOSED".to_string()
+        })));
     }
 
     #[test]
@@ -740,7 +810,7 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Ping);
         assert_eq!(row.reason, ReadyReason::ReviewRequired);
-        assert_eq!(row.review_summary, "missing review");
+        assert_eq!(row.review_summary, "review");
     }
 
     #[test]
@@ -756,7 +826,28 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Merge);
         assert_eq!(row.reason, ReadyReason::Ready);
-        assert_eq!(row.review_summary, "not required");
+        assert_eq!(row.review_summary, "");
+    }
+
+    #[test]
+    fn ci_summary_uses_check_fraction_when_runs_available() {
+        let checks = (0..12)
+            .map(|i| CheckRunInfo {
+                name: format!("check-{i}"),
+                status: "completed".to_string(),
+                conclusion: Some("success".to_string()),
+                url: None,
+                started_at: None,
+                completed_at: None,
+                elapsed_secs: None,
+                average_secs: None,
+                completion_percent: None,
+            })
+            .collect::<Vec<_>>();
+
+        let summary = CiSummary::from_checks(CiStatus::Success, &checks);
+
+        assert_eq!(summary.text, "12/12");
     }
 
     #[test]
@@ -785,7 +876,7 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Fix);
         assert_eq!(row.reason, ReadyReason::ChangesRequested);
-        assert_eq!(row.review_summary, "changes requested");
+        assert_eq!(row.review_summary, "changes");
     }
 
     #[test]
@@ -908,7 +999,7 @@ mod tests {
 
     #[test]
     fn readiness_fetches_multiple_rows_per_batch() {
-        assert!(READY_FETCH_CONCURRENCY > 1);
+        const { assert!(crate::parallel::IO_CONCURRENCY_LIMIT > 1) };
     }
 
     fn run_git(path: &std::path::Path, args: &[&str]) {
@@ -962,10 +1053,11 @@ mod tests {
             CiSummary::passed(),
         );
 
-        warm_caches_for_ready_row(&repo, &row).expect("warm cache");
+        warm_caches_for_ready_row(&repo, &row, "abc123").expect("warm cache");
 
-        let cache = CiCache::load(repo.git_dir().expect("git dir"));
+        let cache = CiCache::load(&repo.common_git_dir().expect("common git dir"));
         let entry = cache.branches.get(branch).expect("cache entry");
+        assert_eq!(entry.ci_revision.as_deref(), Some("abc123"));
         assert_eq!(entry.ci_state.as_deref(), Some("success"));
         assert_eq!(entry.pr_state.as_deref(), Some("draft"));
 
@@ -976,5 +1068,72 @@ mod tests {
         assert_eq!(pr.number, 123);
         assert_eq!(pr.state, "open");
         assert_eq!(pr.is_draft, Some(true));
+    }
+
+    #[test]
+    fn merged_ready_status_warms_pr_cache_and_branch_metadata() {
+        let (_temp, repo) = temp_repo();
+        let branch = "feature/cache-ready";
+        let meta = BranchMetadata {
+            pr_info: None,
+            ..BranchMetadata::new("main", "abc123")
+        };
+        meta.write(repo.inner(), branch).expect("write metadata");
+        let merged = status(|s| {
+            s.number = 123;
+            s.state = "merged".to_string();
+        });
+
+        warm_pr_state_for_ready_status(&repo, branch, &merged).expect("warm merged PR state");
+
+        let cache = CiCache::load(&repo.common_git_dir().expect("common git dir"));
+        let entry = cache.branches.get(branch).expect("cache entry");
+        assert_eq!(entry.pr_state.as_deref(), Some("merged"));
+
+        let updated = BranchMetadata::read(repo.inner(), branch)
+            .expect("read metadata")
+            .expect("metadata");
+        let pr = updated.pr_info.expect("pr info");
+        assert_eq!(pr.number, 123);
+        assert_eq!(pr.state, "merged");
+        assert_eq!(pr.is_draft, Some(false));
+    }
+
+    #[test]
+    fn ready_row_from_linked_worktree_warms_the_common_ci_cache() {
+        let (temp, main_repo) = temp_repo();
+        let linked_path = temp.path().join("linked");
+        run_git(
+            temp.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/linked-cache",
+                linked_path.to_str().unwrap(),
+            ],
+        );
+        let linked_repo = GitRepo::open_from_path(&linked_path).expect("open linked repo");
+        let row = PrReadinessRow::from_status(
+            "feature/linked-cache",
+            status(|s| {
+                s.state = "open".to_string();
+                s.is_draft = true;
+                s.ci_status = CiStatus::Success;
+            }),
+            CiSummary::passed(),
+        );
+
+        warm_caches_for_ready_row(&linked_repo, &row, "abc123").expect("warm linked cache");
+
+        let cache = CiCache::load(&main_repo.common_git_dir().expect("common git dir"));
+        let entry = cache
+            .branches
+            .get("feature/linked-cache")
+            .expect("common cache entry");
+        assert_eq!(entry.ci_revision.as_deref(), Some("abc123"));
+        assert_eq!(entry.ci_state.as_deref(), Some("success"));
+        assert_eq!(entry.pr_state.as_deref(), Some("draft"));
+        assert!(cache.last_refresh > 0);
     }
 }

@@ -1497,4 +1497,25 @@ Current Sprint: OBX Sprint
         let raw = "Current Sprint: Sprint\n\nNo tickets found in the current sprint.";
         assert!(parse_jit_summary(raw).is_err());
     }
+
+    #[test]
+    fn style_without_ai_is_rejected() {
+        let err = run(
+            false,
+            false,
+            24,
+            false,
+            false,
+            None,
+            None,
+            false,
+            SummaryStyle::Slack,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("--style only applies when used with --ai")
+        );
+    }
 }

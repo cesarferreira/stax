@@ -1,3 +1,7 @@
+use crate::application::{
+    NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
+    RepositorySession,
+};
 use crate::commands::github_list::{
     CellTone, TableCell, TableColumn, TruncationMode, format_relative_time, print_table,
     split_flexible_width, terminal_width,
@@ -28,7 +32,6 @@ pub fn run_open() -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
-    let config = Config::load()?;
 
     let branch_info = stack.branches.get(&current);
     if branch_info.is_none() {
@@ -39,18 +42,30 @@ pub fn run_open() -> Result<()> {
         );
     }
 
-    let pr_number = super::resolve_pr::resolve_pr_number(&repo, &stack, &current, &config)?;
-    if pr_number.is_none() {
-        anyhow::bail!(
+    let receipt = match RepositorySession::open(repo.workdir()?)?
+        .resolve_pull_request_url(&current, &mut NoopOperationReporter)
+    {
+        Ok(receipt) => receipt,
+        Err(error)
+            if error.kind == OperationErrorKind::PreconditionFailed
+                && matches!(error.details, OperationErrorDetails::PullRequest { .. }) =>
+        {
+            anyhow::bail!(
+                "No PR found for branch '{}'. Use {} to create one.",
+                current,
+                "stax submit".cyan()
+            )
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let pr_url = match receipt.outcome {
+        OperationOutcome::PullRequestResolved { url, .. } => url,
+        _ => anyhow::bail!(
             "No PR found for branch '{}'. Use {} to create one.",
             current,
             "stax submit".cyan()
-        );
-    }
-    let pr_number = pr_number.unwrap();
-
-    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
-    let pr_url = remote_info.pr_url(pr_number);
+        ),
+    };
 
     println!("Opening {} in browser...", pr_url.cyan());
     open_url_in_browser(&pr_url);
@@ -72,6 +87,7 @@ pub fn run_list(
             crate::commands::ready::ReadyScopeMode::from_flags(all, current, stack),
             json,
             plain,
+            15,
         );
     }
 

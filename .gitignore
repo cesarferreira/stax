@@ -8,12 +8,23 @@ Cargo.lock
 /.docker-cache
 /.container-cache
 .worktrees/
-.claude
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+!.claude/skills/
+!.claude/skills/**
+.claude/plans/
+.claude/settings.local.json
 .serena
 docs/plans/
+docs/install-gui.sh
 __pycache__/
 *.pyc
 .codegraph/
 
 .playwright-mcp/
 .superpowers/
+
+# stax-dev harness run artifacts (ephemeral, per-run, machine-local)
+.pi-subagents/
+_workspace/
