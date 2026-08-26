@@ -339,7 +339,7 @@ st config --set-ai
 | `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
-| `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
+| `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack; GitHub statuses and check runs are fetched across all pages before roll-up |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |

@@ -54,6 +54,21 @@ pub(crate) fn normalize_commit_statuses(
     statuses: Vec<CommitStatus>,
     now: DateTime<Utc>,
 ) -> Vec<CheckRunInfo> {
+    normalize_commit_statuses_with_history(Some(repo), statuses, now)
+}
+
+pub(crate) fn normalize_commit_statuses_without_history(
+    statuses: Vec<CommitStatus>,
+    now: DateTime<Utc>,
+) -> Vec<CheckRunInfo> {
+    normalize_commit_statuses_with_history(None, statuses, now)
+}
+
+fn normalize_commit_statuses_with_history(
+    repo: Option<&GitRepo>,
+    statuses: Vec<CommitStatus>,
+    now: DateTime<Utc>,
+) -> Vec<CheckRunInfo> {
     let mut by_context: HashMap<String, Vec<CommitStatus>> = HashMap::new();
     for status in statuses {
         by_context
@@ -74,7 +89,7 @@ pub(crate) fn normalize_commit_statuses(
 }
 
 fn normalize_commit_status_context(
-    repo: &GitRepo,
+    repo: Option<&GitRepo>,
     context: &str,
     events: &[CommitStatus],
     now: DateTime<Utc>,
@@ -84,10 +99,10 @@ fn normalize_commit_status_context(
         .max_by_key(|status| commit_status_event_time(status))?;
     let latest_time = commit_status_event_time(latest)?;
 
-    let average_secs = match history::load_check_history(repo, context) {
+    let average_secs = repo.and_then(|repo| match history::load_check_history(repo, context) {
         Ok(hist) => history::calculate_average(&hist),
         Err(_) => None,
-    };
+    });
 
     let pending_start = events
         .iter()
@@ -267,7 +282,8 @@ mod tests {
             updated_at: Some("2026-01-16T12:00:00Z".to_string()),
         }];
 
-        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
+        let run =
+            normalize_commit_status_context(Some(&repo), "android suite", &events, now).unwrap();
         assert_eq!(run.status, "in_progress");
         assert_eq!(run.elapsed_secs, Some(1500));
         assert_eq!(run.average_secs, Some(1500));
@@ -295,7 +311,8 @@ mod tests {
             },
         ];
 
-        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
+        let run =
+            normalize_commit_status_context(Some(&repo), "android suite", &events, now).unwrap();
         assert_eq!(run.status, "completed");
         assert_eq!(run.conclusion.as_deref(), Some("success"));
         assert_eq!(run.started_at.as_deref(), Some("2026-01-16T12:00:00+00:00"));

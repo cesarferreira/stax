@@ -10,7 +10,7 @@ use common::{OutputAssertions, TestRepo};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const REMOTE_URL: &str = "https://github.com/test-owner/test-repo.git";
@@ -56,6 +56,8 @@ async fn mount_checks(server: &MockServer, sha: &str, runs: Vec<Value>) {
     let check_runs_path = format!("/repos/test-owner/test-repo/commits/{sha}/check-runs");
     Mock::given(method("GET"))
         .and(path(check_runs_path))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "total_count": runs.len(),
             "check_runs": runs,
@@ -66,6 +68,8 @@ async fn mount_checks(server: &MockServer, sha: &str, runs: Vec<Value>) {
     let statuses_path = format!("/repos/test-owner/test-repo/commits/{sha}/statuses");
     Mock::given(method("GET"))
         .and(path(statuses_path))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
         .mount(server)
         .await;
@@ -302,6 +306,236 @@ async fn ci_json_output_reports_failure_status() {
     assert_eq!(json[0]["check_runs"][0]["conclusion"], "failure");
 }
 
+#[tokio::test]
+async fn ci_includes_failed_check_run_from_later_page() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let (_branch, sha) = tracked_branch(&repo, "feature");
+    let check_runs_path = format!("/repos/test-owner/test-repo/commits/{sha}/check-runs");
+    let first_page: Vec<Value> = (0..100)
+        .map(|index| {
+            serde_json::json!({
+                "id": index,
+                "name": if index == 0 { "build".to_string() } else { format!("check-{index}") },
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": null,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:01:00Z"
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path(check_runs_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 101,
+            "check_runs": first_page
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(check_runs_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 101,
+            "check_runs": [{
+                "id": 2,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "failure",
+                "html_url": null,
+                "started_at": "2026-01-02T00:00:00Z",
+                "completed_at": "2026-01-02T00:01:00Z"
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/test-owner/test-repo/commits/{sha}/statuses"
+        )))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci", "--json"], &auth_env());
+    output.assert_success();
+
+    let json: Value = serde_json::from_str(&TestRepo::stdout(&output)).expect("valid JSON");
+    assert_eq!(json[0]["overall_status"], "failure");
+    let checks = json[0]["check_runs"].as_array().expect("check runs array");
+    let build_checks: Vec<&Value> = checks
+        .iter()
+        .filter(|check| check["name"] == "build")
+        .collect();
+    assert_eq!(build_checks.len(), 1);
+    assert_eq!(build_checks[0]["conclusion"], "failure");
+
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn ci_does_not_trust_decreasing_check_run_total_count() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let (_branch, sha) = tracked_branch(&repo, "feature");
+    let check_runs_path = format!("/repos/test-owner/test-repo/commits/{sha}/check-runs");
+
+    for (page, total_count) in [(1, 201), (2, 150)] {
+        let runs: Vec<Value> = (0..100)
+            .map(|index| {
+                serde_json::json!({
+                    "id": page * 100 + index,
+                    "name": format!("check-{page}-{index}"),
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": null,
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z"
+                })
+            })
+            .collect();
+        Mock::given(method("GET"))
+            .and(path(check_runs_path.clone()))
+            .and(query_param("per_page", "100"))
+            .and(query_param("page", page.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": total_count,
+                "check_runs": runs
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path(check_runs_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 201,
+            "check_runs": [{
+                "id": 301,
+                "name": "late-failure",
+                "status": "completed",
+                "conclusion": "failure",
+                "html_url": null,
+                "started_at": "2026-01-02T00:00:00Z",
+                "completed_at": "2026-01-02T00:01:00Z"
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/test-owner/test-repo/commits/{sha}/statuses"
+        )))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci", "--json"], &auth_env());
+    output.assert_success();
+
+    let json: Value = serde_json::from_str(&TestRepo::stdout(&output)).expect("valid JSON");
+    assert_eq!(json[0]["overall_status"], "failure");
+    assert!(
+        json[0]["check_runs"]
+            .as_array()
+            .expect("check runs array")
+            .iter()
+            .any(|check| check["name"] == "late-failure")
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn ci_includes_pending_commit_status_from_later_page() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let (_branch, sha) = tracked_branch(&repo, "feature");
+    let check_runs_path = format!("/repos/test-owner/test-repo/commits/{sha}/check-runs");
+    let statuses_path = format!("/repos/test-owner/test-repo/commits/{sha}/statuses");
+
+    Mock::given(method("GET"))
+        .and(path(check_runs_path))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 0,
+            "check_runs": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let first_page: Vec<Value> = (0..100)
+        .map(|_| {
+            serde_json::json!({
+                "context": "build",
+                "state": "success",
+                "target_url": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:00Z"
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(statuses_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(first_page))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(statuses_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "2"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "context": "build",
+                "state": "pending",
+                "target_url": null,
+                "created_at": "2026-01-02T00:00:00Z",
+                "updated_at": "2026-01-02T00:00:00Z"
+            }])),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci", "--json"], &auth_env());
+    output.assert_success();
+
+    let json: Value = serde_json::from_str(&TestRepo::stdout(&output)).expect("valid JSON");
+    assert_eq!(json[0]["overall_status"], "pending");
+    let checks = json[0]["check_runs"].as_array().expect("check runs array");
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["name"], "build");
+    assert_eq!(checks[0]["status"], "in_progress");
+
+    server.verify().await;
+}
+
 // =============================================================================
 // Scope selection
 // =============================================================================
@@ -480,6 +714,8 @@ async fn ci_surfaces_forge_failures_with_branch_context() {
         .and(path(format!(
             "/repos/test-owner/test-repo/commits/{sha}/check-runs"
         )))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
         .respond_with(
             ResponseTemplate::new(401)
                 .set_body_json(serde_json::json!({ "message": "Bad credentials" })),
@@ -491,6 +727,68 @@ async fn ci_surfaces_forge_failures_with_branch_context() {
     output
         .assert_failure()
         .assert_stderr_contains(&format!("Failed to fetch CI checks for branch '{branch}'"));
+}
+
+#[tokio::test]
+async fn ci_surfaces_later_page_github_failure() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let (branch, sha) = tracked_branch(&repo, "feature");
+    let check_runs_path = format!("/repos/test-owner/test-repo/commits/{sha}/check-runs");
+    let first_page: Vec<Value> = (0..100)
+        .map(|index| {
+            serde_json::json!({
+                "id": index,
+                "name": format!("check-{index}"),
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": null,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:01:00Z"
+            })
+        })
+        .collect();
+
+    Mock::given(method("GET"))
+        .and(path(check_runs_path.clone()))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 101,
+            "check_runs": first_page
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(check_runs_path))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "2"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_json(serde_json::json!({ "message": "server error" })),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/test-owner/test-repo/commits/{sha}/statuses"
+        )))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci"], &auth_env());
+    output
+        .assert_failure()
+        .assert_stderr_contains(&format!("Failed to fetch CI checks for branch '{branch}'"))
+        .assert_stderr_contains("Failed to fetch check runs");
+    server.verify().await;
 }
 
 #[test]
