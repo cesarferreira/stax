@@ -44,7 +44,7 @@ Flow: **worktree → planner → codex → claude-reviewer → verifier**, then 
 ```
 [ { agent: "codex",           task: "Implement `_workspace/<run_id>/01_plan.md` inside the run worktree. Load /skill:stax-implement. Write source, tests, docs; write `_workspace/<run_id>/02_impl.md`. Do NOT commit. Return changed files + self-verify (cargo check + make lint-fast) results." },
   { agent: "claude-reviewer", task: "Review the implementation against the plan and repo conventions. Load /skill:stax-review. Read 01_plan.md, 02_impl.md, and `git diff`. Write `_workspace/<run_id>/03_review.md`. Return PASS/FAIL + blocker/major counts. Context: {previous}" },
-  { agent: "verifier",        task: "Run the mechanical gate (build/lint/tests) per repo policy. Load /skill:stax-verify. Read 01_plan.md, 02_impl.md. Write `_workspace/<run_id>/04_verify.md`. Return PASS/FAIL/BLOCKED + reason. Context: {previous}" } ]
+  { agent: "verifier",        task: "Run the scoped draft gate (build/lint/focused tests), widening to the full gate only when repo risk criteria require it. Load /skill:stax-verify. Read 01_plan.md, 02_impl.md. Write `_workspace/<run_id>/04_verify.md`. Return PASS/FAIL/BLOCKED + reason. Context: {previous}" } ]
 ```
 > The main agent decides routing from both `03_review.md` and `04_verify.md`.
 
@@ -83,5 +83,6 @@ Read `03_review.md` and `04_verify.md`.
 - **Happy:** standard request → worktree → plan → impl → review PASS → verify PASS → (non-perf: bench skipped) → commit + draft PR. `01–05` present; `manifest.md` shows all stages done, "repair passes used: 0 / 2".
 - **Repair:** verify FAIL (a failing test) → codex fixes only that test → re-review + re-verify PASS → commit + draft PR. `manifest.md` shows "repair passes used: 1 / 2".
 - **Perf-sensitive:** plan marks change in `engine/stack.rs` perf-sensitive → benchmarker runs → REGRESSION → still commits + draft PR, regression flagged in PR body.
-- **Blocked:** `make test` hits Docker-down → verifier BLOCKED → pipeline stops with "start Docker Desktop" remediation, no commit/PR.
+- **Scoped draft:** localized change → `cargo check` + `make lint-fast` + `git diff --check` + focused tests PASS → commit + draft PR without a redundant local full suite.
+- **Blocked full gate:** a high-risk change requires `make test`, Docker is down → verifier BLOCKED → pipeline stops with "start Docker Desktop" remediation, no commit/PR.
 - **Exhausted:** still FAIL after 2 repair passes → stop, report unresolved items, no commit/PR.
