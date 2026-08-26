@@ -80,6 +80,8 @@ stax reviews --all --json      # Machine-readable inbox for every tracked PR
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci [--oneline|-1]         # CI status (all GitHub status/check-run pages; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
+stax standup --ci              # Opt in to live CI for selected branches (adds network latency)
+stax standup --ci --json       # Include CI plus signal availability metadata
 stax standup --ai              # AI-generated spoken standup update (colored card)
 stax standup --ai --style slack  # AI-generated Slack-ready Yesterday/Today bullets
 stax standup --ai --jit   # AI standup plus Jira next-up context via jit (github.com/cesarferreira/jit)
@@ -486,12 +488,18 @@ error_alert_sound = "/path/to/ci-error.wav"      # optional, built-in when omitt
 
 stax standup --hours 48            # Summarize recent activity window
 stax standup --all --json          # All stacks in JSON
+stax standup --ci --json           # Check selected branches' CI and report signal states
 stax standup --ai             # AI spoken standup — colored card, word-wrapped
 stax standup --ai --style slack  # AI Slack-ready Yesterday/Today bullets
 stax standup --ai --agent claude  # Override AI agent for one run
 stax standup --ai --plain-text    # Raw text output (pipe-friendly)
 stax standup --ai --json          # {"summary": "..."} JSON
 stax standup --ai --jit           # Add Jira context via jit (github.com/cesarferreira/jit)
+
+# CI is not checked unless --ci is present. In JSON, do not treat an empty
+# reviews_given or needs_attention.ci_failing array as authoritative until its
+# signals entry is "available". GitLab/Gitea authored reviews are unsupported;
+# GitHub uses one time-bounded, maximum-100 GraphQL query.
 
 stax changelog v1.2.0 HEAD         # Changelog from ref to ref
 stax changelog v1.2.0 --path src/  # Filter by path

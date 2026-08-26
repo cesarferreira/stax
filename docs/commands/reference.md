@@ -158,7 +158,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st issue list` | List open issues |
 | `st comments` / `st reviews` | Show current PR comments; `--stack` or `--all` creates a review inbox, GitHub review comments include inline file/line locations, and `--json` emits a versioned machine-readable view |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
-| `st standup` | Recent activity (`--ai` for AI spoken version; `--jit` for Jira context) |
+| `st standup` | Recent activity (`--ci` for opt-in live CI; `--ai` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
 | `st changelog find [query]` | Fuzzy-find commits in the selected changelog range |
 | `st changelog --find [query]` | Flag form of commit fuzzy-find |
@@ -477,10 +477,13 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 
 ### `st standup`
 
-- `--all` / `--hours 48` / `--json`
+- `--all` / `--hours 48` / `--json` / `--ci`
 - `--ai` · `--ai --agent claude` · `--ai --hours 48`
 - `--ai --style slack`
 - `--ai --plain-text` / `--ai --json` / `--ai --jit`
+- `--ci` checks only the selected branches and may add network latency; combine it with `--all` to check all tracked branches.
+- GitHub authored reviews come from one time-bounded, maximum-100 GraphQL query. GitLab and Gitea mark that signal unsupported rather than scanning every MR/PR.
+- JSON preserves `reviews_given` and `needs_attention.ci_failing`; use `signals.<name>.status` (`available`, `unsupported`, `unavailable`, or `not_requested`) to interpret empty arrays.
 
 ### `st pr` / `st issue`
 

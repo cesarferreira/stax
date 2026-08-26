@@ -7,15 +7,21 @@ st standup                 # last 24 hours (default)
 st standup --hours 48      # look back further
 st standup --all           # include all stacks
 st standup --json          # raw activity as JSON
+st standup --ci            # also check CI for selected branches
+st standup --ci --json     # CI results plus machine-readable signal states
 ```
 
 Human-readable standup output shows progress while stax collects Git/forge/Jira context. Use `--json` for machine-readable output without progress lines.
 
 ![Standup summary](../assets/standup.png)
 
-Shows merged PRs, opened PRs, recent pushes, and items needing attention. Works with GitHub, GitLab, and Gitea.
+Shows merged PRs, opened PRs, recent pushes, authored reviews, and items needing attention. Works with GitHub, GitLab, and Gitea.
 
-> **Note:** "Reviews given" is not yet available on any forge. Efficiently querying reviews authored by a user requires GraphQL (GitHub) or iterating every open PR (GitLab/Gitea), which is too slow for large repositories.
+GitHub authored reviews use one time-bounded GraphQL request capped at 100 results, followed by local repository and time filtering. GitLab and Gitea report this signal as `unsupported`; stax does not scan every merge or pull request. API and authentication failures are reported as `unavailable` instead of being presented as a successful empty result.
+
+CI is deliberately off by default, so ordinary standup collection adds no per-branch CI latency. Pass `--ci` to check only the selected current-stack branches with bounded concurrency. `--all --ci` intentionally widens that scope to all tracked branches.
+
+JSON keeps the compatibility arrays `reviews_given` and `needs_attention.ci_failing`. Read the companion `signals.reviews_given` and `signals.ci_failing` entries before interpreting an empty array: statuses are `available`, `unsupported`, `unavailable`, or `not_requested`, with a `reason` when useful.
 
 ## AI standup summary
 

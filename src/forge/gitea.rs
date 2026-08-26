@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
-    AuthStyle, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity, STACK_COMMENT_MARKER,
-    aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
-    make_issue_comment, mergeable_bool, patch_json, post_json, stack_comment_body,
+    AuthStyle, ForgeSignal, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity,
+    STACK_COMMENT_MARKER, aggregate_ci_overall, build_http_client, ci_status_from_string,
+    delete_empty, get_json, make_issue_comment, mergeable_bool, patch_json, post_json,
+    stack_comment_body,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::client::OpenPrInfo;
@@ -642,10 +643,10 @@ impl GiteaClient {
         &self,
         _hours: i64,
         _username: &str,
-    ) -> Result<Vec<ReviewActivity>> {
-        // Not implemented: Gitea has no efficient way to query "reviews given by user".
-        // Would require iterating all open PRs and checking reviews on each.
-        Ok(vec![])
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
+        Ok(ForgeSignal::Unsupported {
+            reason: "Gitea does not provide a bounded authored-review query".to_string(),
+        })
     }
 }
 

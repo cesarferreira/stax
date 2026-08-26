@@ -64,7 +64,11 @@ pub trait Forge {
     async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>>;
     async fn get_reviews_received(&self, hours: i64, username: &str)
     -> Result<Vec<ReviewActivity>>;
-    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>>;
+    async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<ForgeSignal<Vec<ReviewActivity>>>;
 }
 
 #[cfg(test)]
@@ -223,7 +227,7 @@ pub(crate) mod tests {
             &self,
             _hours: i64,
             _username: &str,
-        ) -> Result<Vec<ReviewActivity>> {
+        ) -> Result<ForgeSignal<Vec<ReviewActivity>>> {
             anyhow::bail!("unused in fake")
         }
     }

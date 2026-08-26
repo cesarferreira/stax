@@ -1143,6 +1143,9 @@ pub(crate) enum Commands {
         /// Time window in hours (default: 24)
         #[arg(long, default_value = "24", value_parser = parse_positive_i64)]
         hours: i64,
+        /// Check CI on selected branches (may add network latency)
+        #[arg(long)]
+        ci: bool,
         /// Summarize standup using AI
         #[arg(long)]
         ai: bool,
