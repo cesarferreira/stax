@@ -926,6 +926,12 @@ fn web_command_discovers_repo_from_nested_directory_and_reports_startup_progress
 
 #[test]
 fn web_command_reports_an_error_outside_a_repository() {
+    // Linux `make test` sets TMPDIR to `<repo>/.test-tmp`. A default tempfile
+    // therefore lives inside this checkout, and `git2::Repository::discover`
+    // walks up, starts the real `st web` server, and `.output()` waits forever.
+    #[cfg(unix)]
+    let temp = tempfile::tempdir_in("/tmp").unwrap();
+    #[cfg(not(unix))]
     let temp = tempfile::tempdir().unwrap();
     let output = web_command(temp.path())
         .args(["web", "--no-open"])
