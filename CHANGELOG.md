@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.107.0] - 2026-08-27
+
+### 🚀 Features
+
+- *(ai)* Support PR generation instructions ([#803](https://github.com/cesarferreira/stax/issues/803))
+
+### 🐛 Bug Fixes
+
+- *(ci)* Paginate GitHub status retrieval ([#798](https://github.com/cesarferreira/stax/issues/798))
+- *(web)* Validate origins on session routes ([#799](https://github.com/cesarferreira/stax/issues/799))
+- *(merge)* Enforce queue timeout deadline ([#800](https://github.com/cesarferreira/stax/issues/800))
+- *(skills)* Refresh changed same-version content ([#801](https://github.com/cesarferreira/stax/issues/801))
+- *(github)* Clarify repository authorization errors ([#802](https://github.com/cesarferreira/stax/issues/802))
+- *(standup)* Report available review and CI signals ([#805](https://github.com/cesarferreira/stax/issues/805))
+- *(submit)* Open a PR via a fork when you lack write access ([#808](https://github.com/cesarferreira/stax/issues/808))
+- *(readme)* Match Tests badge style to the other badges
+
+### 💼 Other
+
+- Revise README badges for tests and downloads
+- Fix badge link formatting in README.md
+
+### 📚 Documentation
+
+- *(watch)* Clarify iteration semantics ([#806](https://github.com/cesarferreira/stax/issues/806))
+
+### 🧪 Testing
+
+- *(submit)* Cover ODB replay fallback guards ([#804](https://github.com/cesarferreira/stax/issues/804))
+
+### ⚙️ Miscellaneous Tasks
+
+- Remove .pi/ (moved to dotfiles/pi for stow) ([#807](https://github.com/cesarferreira/stax/issues/807))
 ## [0.106.0] - 2026-08-26
 
 ### 🚀 Features
@@ -27,6 +60,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - *(harness)* Tier draft PR verification ([#797](https://github.com/cesarferreira/stax/issues/797))
+- Release
 ## [0.105.1] - 2026-08-23
 
 ### 🧪 Testing
