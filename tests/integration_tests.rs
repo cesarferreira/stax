@@ -15309,6 +15309,9 @@ exit 1
             "/projects/test%2Frepo/merge_requests/101/merge",
         );
         assert!(retarget_idx > merge_idx);
+        let merge_payload: serde_json::Value =
+            serde_json::from_slice(&requests[merge_idx].body).unwrap();
+        assert_eq!(merge_payload["sha"], "sha-a");
         let retarget = requests
             .iter()
             .find(|request| {
@@ -15512,6 +15515,9 @@ exit 1
             "/projects/test%2Frepo/merge_requests/201/merge",
         );
         assert!(retarget_idx > merge_idx);
+        let merge_payload: serde_json::Value =
+            serde_json::from_slice(&requests[merge_idx].body).unwrap();
+        assert_eq!(merge_payload["sha"], "sha-a");
     }
 
     #[tokio::test]
