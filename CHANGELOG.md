@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.107.1] - 2026-08-27
+
+### 🐛 Bug Fixes
+
+- *(gitlab)* Retry transient MR source race ([#814](https://github.com/cesarferreira/stax/issues/814))
 ## [0.107.0] - 2026-08-27
 
 ### 🚀 Features
@@ -35,6 +40,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Remove .pi/ (moved to dotfiles/pi for stow) ([#807](https://github.com/cesarferreira/stax/issues/807))
+- Release
 ## [0.106.0] - 2026-08-26
 
 ### 🚀 Features
