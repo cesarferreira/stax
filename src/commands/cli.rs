@@ -1,8 +1,31 @@
 use crate::commands::shell_setup;
-use crate::update::{self, InstallMethod};
+use crate::update::{self, InstallMethod, VersionCheck};
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::process::Command;
+
+/// Run the CLI upgrade for `stax update`, skipping it when already on the latest
+/// published version (pass `force` to upgrade unconditionally, as `stax cli upgrade` does).
+pub fn run_update(force: bool) -> Result<()> {
+    if !force && already_up_to_date(&update::check_latest_version()) {
+        println!(
+            "{} {}",
+            "✓".green(),
+            format!(
+                "stax is already up to date (v{}).",
+                update::current_version()
+            )
+            .dimmed()
+        );
+        return Ok(());
+    }
+
+    run_upgrade()
+}
+
+fn already_up_to_date(check: &VersionCheck) -> bool {
+    matches!(check, VersionCheck::UpToDate)
+}
 
 pub fn run_upgrade() -> Result<()> {
     let install_method = update::detect_install_method();
@@ -59,4 +82,16 @@ fn run_upgrade_command(install_method: InstallMethod) -> Result<std::process::Ex
     command
         .status()
         .with_context(|| format!("Failed to run `{}`", install_method.upgrade_command()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn already_up_to_date_only_for_up_to_date_check() {
+        assert!(already_up_to_date(&VersionCheck::UpToDate));
+        assert!(!already_up_to_date(&VersionCheck::Available));
+        assert!(!already_up_to_date(&VersionCheck::Unknown));
+    }
 }

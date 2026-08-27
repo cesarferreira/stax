@@ -205,13 +205,8 @@ fn test_help() {
     assert!(stdout.contains("status"));
     assert!(stdout.contains("submit"));
     assert!(stdout.contains("refresh"));
-    // clap renders one alias as `[alias: x]` and several as `[aliases: x, y]`.
-    // It used the plural unconditionally before 4.6.6, so accept either form:
-    // what matters is that the `update` alias is still advertised in help.
-    assert!(
-        stdout.contains("[alias: update]") || stdout.contains("[aliases: update]"),
-        "expected the `update` alias to appear in help output:\n{stdout}"
-    );
+    // `update` is its own top-level command (CLI + skills upgrade), not an alias of `refresh`.
+    assert!(stdout.contains("update"));
     assert!(stdout.contains("run"));
     assert!(stdout.contains("restack"));
     assert!(stdout.contains("resolve"));
@@ -279,18 +274,15 @@ fn test_refresh_help() {
 }
 
 #[test]
-fn test_update_alias_still_works() {
+fn test_update_help_describes_cli_and_skills_upgrade() {
     let output = stax(&["update", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Sync trunk"));
-    assert!(stdout.contains("no-pr"));
-    assert!(stdout.contains("no-submit"));
-    assert!(stdout.contains("force"));
-    assert!(stdout.contains("safe"));
-    assert!(stdout.contains("verbose"));
-    assert!(stdout.contains("--yes"));
-    assert!(stdout.contains("--no-prompt"));
+    assert!(stdout.contains("Upgrade the stax CLI"));
+    assert!(stdout.contains("skill"));
+    assert!(stdout.contains("--force"));
+    assert!(!stdout.contains("--no-submit"));
+    assert!(!stdout.contains("--all-stacks"));
 }
 
 #[test]
@@ -298,7 +290,7 @@ fn test_update_typo_exits_nonzero() {
     let output = stax(&["updatee"]);
     assert!(
         !output.status.success(),
-        "near-miss subcommand should not match the update alias"
+        "near-miss subcommand should not match the update command"
     );
 }
 

@@ -228,12 +228,12 @@ async fn update_treats_native_stack_base_lock_as_non_fatal() {
         .await;
 
     let output = repo.run_stax_with_env(
-        &["update", "--force", "--yes", "--no-prompt"],
+        &["refresh", "--force", "--yes", "--no-prompt"],
         &[("STAX_GITHUB_TOKEN", "test-token")],
     );
     assert!(
         output.status.success(),
-        "update should not abort on a native-stack base lock: {}",
+        "refresh should not abort on a native-stack base lock: {}",
         TestRepo::stderr(&output)
     );
 
