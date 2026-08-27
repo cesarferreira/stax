@@ -5,7 +5,7 @@ use colored::Colorize;
 use std::process::Command;
 
 /// Run the CLI upgrade for `stax update`, skipping it when already on the latest
-/// published version (pass `force` to upgrade unconditionally, as `stax cli upgrade` does).
+/// published version (pass `force` to upgrade unconditionally).
 pub fn run_update(force: bool) -> Result<()> {
     if !force && already_up_to_date(&update::check_latest_version()) {
         println!(

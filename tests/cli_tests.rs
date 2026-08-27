@@ -182,10 +182,10 @@ fn write_binstall_record(home: &Path) {
     .expect("write binstall metadata");
 }
 
-fn run_upgrade(binary: &Path, home: &Path, extra_path: &Path) -> std::process::Output {
+fn run_update_cli(binary: &Path, home: &Path, extra_path: &Path) -> std::process::Output {
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
     Command::new(binary)
-        .args(["cli", "upgrade"])
+        .args(["update", "--force"])
         .current_dir(home)
         .env("HOME", home)
         .env("PATH", path_with_bin(extra_path))
@@ -193,7 +193,7 @@ fn run_upgrade(binary: &Path, home: &Path, extra_path: &Path) -> std::process::O
         .env("GIT_CONFIG_SYSTEM", null_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
-        .expect("run stax cli upgrade")
+        .expect("run stax update --force")
 }
 
 #[test]
@@ -437,7 +437,7 @@ fn test_bd_shortcut() {
 }
 
 #[test]
-fn cli_upgrade_uses_cargo_for_cargo_installs_and_refreshes_shell_setup() {
+fn update_uses_cargo_for_cargo_installs_and_refreshes_shell_setup() {
     let home = tempdir().expect("temp home");
     let installer_bin_dir = home.path().join("bin");
     let cargo_log = home.path().join("cargo.log");
@@ -451,7 +451,7 @@ fn cli_upgrade_uses_cargo_for_cargo_installs_and_refreshes_shell_setup() {
     .expect("seed stale shell setup");
 
     let binary = install_test_binary(&home.path().join(".cargo/bin/stax"));
-    let output = run_upgrade(&binary, home.path(), &installer_bin_dir);
+    let output = run_update_cli(&binary, home.path(), &installer_bin_dir);
 
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(
@@ -465,7 +465,7 @@ fn cli_upgrade_uses_cargo_for_cargo_installs_and_refreshes_shell_setup() {
 }
 
 #[test]
-fn cli_upgrade_uses_cargo_binstall_for_binstall_installs() {
+fn update_uses_cargo_binstall_for_binstall_installs() {
     let home = tempdir().expect("temp home");
     let installer_bin_dir = home.path().join("bin");
     let cargo_log = home.path().join("cargo-binstall.log");
@@ -473,7 +473,7 @@ fn cli_upgrade_uses_cargo_binstall_for_binstall_installs() {
     write_binstall_record(home.path());
 
     let binary = install_test_binary(&home.path().join(".cargo/bin/stax"));
-    let output = run_upgrade(&binary, home.path(), &installer_bin_dir);
+    let output = run_update_cli(&binary, home.path(), &installer_bin_dir);
 
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(
@@ -483,14 +483,14 @@ fn cli_upgrade_uses_cargo_binstall_for_binstall_installs() {
 }
 
 #[test]
-fn cli_upgrade_uses_homebrew_for_homebrew_installs() {
+fn update_uses_homebrew_for_homebrew_installs() {
     let home = tempdir().expect("temp home");
     let installer_bin_dir = home.path().join("bin");
     let brew_log = home.path().join("brew.log");
     write_fake_installer(&installer_bin_dir, "brew", &brew_log, 0);
 
     let binary = install_test_binary(&home.path().join("opt/homebrew/bin/stax"));
-    let output = run_upgrade(&binary, home.path(), &installer_bin_dir);
+    let output = run_update_cli(&binary, home.path(), &installer_bin_dir);
 
     assert!(output.status.success(), "{:?}", output);
     assert_eq!(
@@ -500,14 +500,14 @@ fn cli_upgrade_uses_homebrew_for_homebrew_installs() {
 }
 
 #[test]
-fn cli_upgrade_explains_unknown_install_method() {
+fn update_explains_unknown_install_method() {
     let home = tempdir().expect("temp home");
     let installer_bin_dir = home.path().join("bin");
     let upgrade_log = home.path().join("upgrade.log");
     write_fake_installer(&installer_bin_dir, "upgrade", &upgrade_log, 0);
 
     let binary = install_test_binary(&home.path().join("custom/bin/stax"));
-    let output = run_upgrade(&binary, home.path(), &installer_bin_dir);
+    let output = run_update_cli(&binary, home.path(), &installer_bin_dir);
 
     assert!(
         !output.status.success(),
@@ -525,14 +525,14 @@ fn cli_upgrade_explains_unknown_install_method() {
 }
 
 #[test]
-fn cli_upgrade_surfaces_installer_failures() {
+fn update_surfaces_installer_failures() {
     let home = tempdir().expect("temp home");
     let installer_bin_dir = home.path().join("bin");
     let cargo_log = home.path().join("cargo-fail.log");
     write_fake_installer(&installer_bin_dir, "cargo", &cargo_log, 23);
 
     let binary = install_test_binary(&home.path().join(".cargo/bin/stax"));
-    let output = run_upgrade(&binary, home.path(), &installer_bin_dir);
+    let output = run_update_cli(&binary, home.path(), &installer_bin_dir);
 
     assert!(!output.status.success(), "upgrade should fail");
     assert_eq!(

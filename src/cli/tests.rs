@@ -1,5 +1,5 @@
 use crate::cli::args::{
-    BranchCommands, Cli, CliSubcommand, CommandPolicy, Commands, RestackSubmitAfter, StackCommands,
+    BranchCommands, Cli, CommandPolicy, Commands, RestackSubmitAfter, StackCommands,
     WorktreeCommands,
 };
 use crate::cli::interactive::{
@@ -373,14 +373,17 @@ fn restack_backward_compat() {
 }
 
 #[test]
-fn cli_upgrade_parses() {
-    let cli = parse_cli(&["stax", "cli", "upgrade"]);
+fn update_force_parses() {
+    let cli = parse_cli(&["stax", "update", "--force"]);
     assert!(matches!(
         cli.command,
-        Some(Commands::Cli {
-            command: CliSubcommand::Upgrade
-        })
+        Some(Commands::Update { force: true })
     ));
+}
+
+#[test]
+fn cli_subcommand_no_longer_parses() {
+    assert!(try_parse_cli(&["stax", "cli", "upgrade"]).is_err());
 }
 
 #[test]
