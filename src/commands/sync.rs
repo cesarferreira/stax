@@ -17,7 +17,7 @@ use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
@@ -334,6 +334,9 @@ struct PlannedMergedDetection {
 impl SyncContext {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        repo: GitRepo,
+        config: Config,
+        auto_confirm: bool,
         sync_started_at: Instant,
         restack: bool,
         full: bool,
@@ -349,11 +352,9 @@ impl SyncContext {
         extra_fetch_refs: &[String],
         skip_interactive_plan: bool,
     ) -> Result<(Self, GitRepo)> {
-        let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
         let workdir = repo.workdir()?.to_path_buf();
-        let config = Config::load()?;
         let remote_name = config.remote_name().to_string();
         let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
         let imported_branches = imported_branches_for_remote(&repo, &stack, &remote_name)?;
@@ -364,7 +365,6 @@ impl SyncContext {
                 sync_extra_fetch_refs.push(branch.clone());
             }
         }
-        let auto_confirm = force;
         let current_after_deletions = current.clone();
         let effective_quiet = quiet || json;
         Ok((
@@ -2598,8 +2598,103 @@ pub fn run(
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
 ) -> Result<()> {
+    run_with_repo(
+        GitRepo::open()?,
+        Config::load()?,
+        force,
+        restack,
+        full,
+        delete_merged,
+        delete_upstream_gone,
+        force,
+        safe,
+        r#continue,
+        quiet,
+        verbose,
+        auto_stash_pop,
+        stash_policy,
+        json,
+        extra_fetch_refs,
+        skip_interactive_plan,
+    )
+}
+
+/// Run sync against an explicit repository instead of the process working
+/// directory. This is the web-server boundary; CLI callers keep using `run`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_at(
+    repository: &Path,
+    auto_confirm: bool,
+    restack: bool,
+    full: bool,
+    delete_merged: bool,
+    delete_upstream_gone: bool,
+    force: bool,
+    safe: bool,
+    r#continue: bool,
+    quiet: bool,
+    verbose: bool,
+    auto_stash_pop: bool,
+    stash_policy: StashPolicy,
+    json: bool,
+    extra_fetch_refs: &[String],
+    skip_interactive_plan: bool,
+) -> Result<()> {
+    let repo = GitRepo::open_from_path(repository)?;
+    for worktree in repo.list_worktrees()? {
+        if repo.is_dirty_at(&worktree.path)? {
+            bail!(
+                "Working tree '{}' has uncommitted changes; Sync made no changes",
+                worktree.path.display()
+            );
+        }
+    }
+    run_with_repo(
+        repo,
+        Config::load_for_trusted_network(repository)?,
+        auto_confirm,
+        restack,
+        full,
+        delete_merged,
+        delete_upstream_gone,
+        force,
+        safe,
+        r#continue,
+        quiet,
+        verbose,
+        auto_stash_pop,
+        stash_policy,
+        json,
+        extra_fetch_refs,
+        skip_interactive_plan,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_with_repo(
+    repo: GitRepo,
+    config: Config,
+    auto_confirm: bool,
+    restack: bool,
+    full: bool,
+    delete_merged: bool,
+    delete_upstream_gone: bool,
+    force: bool,
+    safe: bool,
+    r#continue: bool,
+    quiet: bool,
+    verbose: bool,
+    auto_stash_pop: bool,
+    stash_policy: StashPolicy,
+    json: bool,
+    extra_fetch_refs: &[String],
+    skip_interactive_plan: bool,
+) -> Result<()> {
     let sync_started_at = Instant::now();
     let (mut ctx, repo) = SyncContext::new(
+        repo,
+        config,
+        auto_confirm,
         sync_started_at,
         restack,
         full,

@@ -7,6 +7,9 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use stax::web::server::BoundServer;
+use stax::web::session::{SharedSession, WebSession, make_shared};
+
 fn ensure_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
@@ -38,6 +41,100 @@ fn csrf_from_workspace(html: &str) -> String {
         .and_then(|s| s.split('"').next())
         .expect("csrf token in workspace HTML")
         .to_owned()
+}
+
+async fn bind_web_test_session(
+    repo: &common::TestRepo,
+    selected_branch: Option<String>,
+) -> (BoundServer, SharedSession) {
+    let mut session = WebSession::new(
+        repo.path(),
+        "web-test-token".to_string(),
+        "web-test-csrf".to_string(),
+    );
+    session.selected_branch = selected_branch;
+    let shared = make_shared(session);
+    let server = stax::web::server::bind(0, shared.clone())
+        .await
+        .expect("test web server should bind");
+    (server, shared)
+}
+
+async fn post_sync(server: &BoundServer, csrf: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}op/sync", server.url))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={csrf}"))
+        .send()
+        .await
+        .expect("sync request should receive a response")
+}
+
+fn init_remote_web_repo(repo: &common::TestRepo) {
+    let output = repo.run_stax(&["init", "--trunk", "main"]);
+    assert!(
+        output.status.success(),
+        "stax init failed: {}",
+        common::TestRepo::stderr(&output)
+    );
+    repo.create_file("stax.toml", "[remote]\nname = \"origin\"\n");
+    let add = repo.git(&["add", "-f", "stax.toml"]);
+    assert!(
+        add.status.success(),
+        "test config add failed: {}",
+        common::TestRepo::stderr(&add)
+    );
+    repo.commit("Configure web sync test remote");
+    let push = repo.git(&["push", "origin", "main"]);
+    assert!(
+        push.status.success(),
+        "test config push failed: {}",
+        common::TestRepo::stderr(&push)
+    );
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.status.success());
+    assert!(
+        common::TestRepo::stdout(&status).trim().is_empty(),
+        "web sync fixture must start clean"
+    );
+}
+
+fn create_remote_merged_feature(repo: &common::TestRepo, name: &str) -> String {
+    let create = repo.run_stax(&["bc", name]);
+    assert!(
+        create.status.success(),
+        "feature create failed: {}",
+        common::TestRepo::stderr(&create)
+    );
+    let feature = repo.current_branch();
+    repo.create_file(&format!("{name}.txt"), "feature\n");
+    repo.commit("Feature commit");
+    let push = repo.git(&["push", "-u", "origin", &feature]);
+    assert!(
+        push.status.success(),
+        "feature push failed: {}",
+        common::TestRepo::stderr(&push)
+    );
+    let trunk = repo.run_stax(&["t"]);
+    assert!(
+        trunk.status.success(),
+        "trunk checkout failed: {}",
+        common::TestRepo::stderr(&trunk)
+    );
+    repo.merge_branch_on_remote(&feature);
+    feature
+}
+
+fn refs_snapshot(repo: &common::TestRepo) -> String {
+    let output = repo.git(&["show-ref"]);
+    assert!(output.status.success(), "git show-ref failed");
+    common::TestRepo::stdout(&output)
+}
+
+fn stash_snapshot(repo: &common::TestRepo) -> String {
+    let output = repo.git(&["stash", "list"]);
+    assert!(output.status.success(), "git stash list failed");
+    common::TestRepo::stdout(&output)
 }
 
 // ── CLI shape tests ──────────────────────────────────────────────────────────
@@ -280,6 +377,7 @@ fn web_token_routes_reject_cross_site_origin_before_every_handler() {
             ("POST", "op/rename"),
             ("POST", "op/delete"),
             ("POST", "op/restack"),
+            ("POST", "op/sync"),
             ("POST", "op/submit"),
             ("POST", "op/undo"),
             ("POST", "op/redo"),
@@ -540,9 +638,11 @@ fn web_server_workspace_shows_trunk_branch_after_stax_init() {
         );
         assert!(
             body.contains(r#"data-lane-count="1""#)
-                && body.contains(r#"style="--stack-rail-w:240px""#),
-            "a linear stack should keep the reference 240px width"
+                && body.contains(r#"data-topology-min-width="240""#),
+            "a linear stack should retain its topology sizing minimum"
         );
+        assert!(body.contains("stack-resizer") && body.contains("data-repository-key"));
+        assert!(body.contains("Sync repository") && body.contains("/op/sync"));
         assert!(
             body.contains(r#"class="review-tab active""#),
             "workspace should render Changes as the active initial tab"
@@ -1007,5 +1107,252 @@ fn web_select_branch_emits_pane_refresh_trigger() {
             Some("stax:branch-selected"),
             "/select must tell the changes + inspector panes to refresh"
         );
+    });
+}
+
+#[test]
+fn web_sync_rejects_invalid_csrf_without_starting_an_operation() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        let (server, shared) = bind_web_test_session(&repo, Some("main".to_string())).await;
+
+        let response = post_sync(&server, "wrong-token").await;
+
+        assert_eq!(response.status(), 403);
+        assert!(!shared.lock().unwrap().active_operation);
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_sync_rejects_a_concurrent_active_operation() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        let (server, shared) = bind_web_test_session(&repo, Some("main".to_string())).await;
+        shared.lock().unwrap().active_operation = true;
+
+        let response = post_sync(&server, "web-test-csrf").await;
+        let body = response.text().await.unwrap();
+
+        assert!(
+            body.contains("Another operation is already in progress"),
+            "busy response should explain the active-operation lock: {body}"
+        );
+        assert!(
+            shared.lock().unwrap().active_operation,
+            "a rejected request must not clear the operation it collided with"
+        );
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_sync_dirty_current_worktree_preserves_files_stash_and_refs() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        repo.simulate_remote_commit("remote-update.txt", "remote\n", "Remote update");
+        repo.create_file("dirty.txt", "keep this exact content\n");
+        let refs_before = refs_snapshot(&repo);
+        let stash_before = stash_snapshot(&repo);
+        let (server, shared) = bind_web_test_session(&repo, Some("main".to_string())).await;
+
+        let response = post_sync(&server, "web-test-csrf").await;
+        assert_eq!(
+            response
+                .headers()
+                .get("hx-trigger")
+                .and_then(|value| value.to_str().ok()),
+            Some("stax:branch-selected")
+        );
+        let body = response.text().await.unwrap();
+
+        assert!(
+            body.contains("Sync failed") && body.contains("uncommitted changes"),
+            "dirty sync should render an actionable failure banner: {body}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+            "keep this exact content\n"
+        );
+        assert_eq!(stash_snapshot(&repo), stash_before, "sync must not stash");
+        assert_eq!(
+            refs_snapshot(&repo),
+            refs_before,
+            "dirty preflight must run before fetch or ref mutation"
+        );
+        assert!(!shared.lock().unwrap().active_operation);
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_sync_targets_session_repo_updates_trunk_deletes_merged_selection_and_enables_undo() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        let feature = create_remote_merged_feature(&repo, "web-sync-merged");
+        let survivor_create = repo.run_stax(&["bc", "web-sync-survivor"]);
+        assert!(survivor_create.status.success());
+        let survivor = repo.current_branch();
+        repo.create_file("web-sync-survivor.txt", "survive without restack\n");
+        repo.commit("Survivor commit");
+        let survivor_before = repo.get_commit_sha(&survivor);
+        let trunk = repo.run_stax(&["t"]);
+        assert!(trunk.status.success());
+        let main_before = repo.get_commit_sha("main");
+        let (server, shared) = bind_web_test_session(&repo, Some(feature.clone())).await;
+
+        let response = post_sync(&server, "web-test-csrf").await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get("hx-trigger")
+                .and_then(|value| value.to_str().ok()),
+            Some("stax:branch-selected")
+        );
+        let body = response.text().await.unwrap();
+
+        assert!(
+            body.contains("Sync complete"),
+            "success banner missing: {body}"
+        );
+        assert_ne!(repo.get_commit_sha("main"), main_before);
+        assert_eq!(
+            repo.get_commit_sha("main"),
+            repo.get_commit_sha("origin/main")
+        );
+        assert!(
+            !repo.list_branches().contains(&feature),
+            "browser confirmation must approve merged-local deletion without force mode"
+        );
+        assert_eq!(
+            repo.get_commit_sha(&survivor),
+            survivor_before,
+            "browser Sync must not restack surviving feature branches"
+        );
+        let session = shared.lock().unwrap();
+        assert_eq!(session.selected_branch.as_deref(), Some("main"));
+        let transaction = session
+            .last_receipt
+            .as_ref()
+            .expect("sync should refresh the latest persisted receipt");
+        assert_eq!(transaction.kind, "sync");
+        assert!(transaction.can_undo);
+        assert!(
+            body.contains("qa-undo mutating-btn"),
+            "successful local sync should enable Undo in refreshed markup: {body}"
+        );
+        drop(session);
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_sync_does_not_force_reset_a_diverged_trunk() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        repo.create_file("local-only.txt", "local\n");
+        repo.commit("Local-only trunk commit");
+        let local_main = repo.get_commit_sha("main");
+        repo.simulate_remote_commit("remote-only.txt", "remote\n", "Remote-only trunk commit");
+        let (server, shared) = bind_web_test_session(&repo, Some("main".to_string())).await;
+
+        let response = post_sync(&server, "web-test-csrf").await;
+        let body = response.text().await.unwrap();
+
+        assert!(
+            body.contains("Sync complete"),
+            "the CLI treats a preserved diverged trunk as a completed sync: {body}"
+        );
+        assert_eq!(repo.get_commit_sha("main"), local_main);
+        assert_ne!(
+            repo.get_commit_sha("main"),
+            repo.get_commit_sha("origin/main")
+        );
+        assert!(!shared.lock().unwrap().active_operation);
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_sync_dirty_linked_worktree_fails_before_fetch_or_stash() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new_with_remote();
+        init_remote_web_repo(&repo);
+        let branch = "linked-dirty";
+        let create_branch = repo.git(&["branch", branch, "main"]);
+        assert!(create_branch.status.success());
+        let linked_parent = tempfile::tempdir().unwrap();
+        let linked = linked_parent.path().join("worktree");
+        let add = repo.git(&["worktree", "add", linked.to_str().unwrap(), branch]);
+        assert!(
+            add.status.success(),
+            "linked worktree setup failed: {}",
+            common::TestRepo::stderr(&add)
+        );
+        std::fs::write(linked.join("linked-dirty.txt"), "preserve me\n").unwrap();
+        repo.simulate_remote_commit("remote-linked-check.txt", "remote\n", "Remote update");
+        let refs_before = refs_snapshot(&repo);
+        let stash_before = stash_snapshot(&repo);
+        let (server, shared) = bind_web_test_session(&repo, Some("main".to_string())).await;
+
+        let response = post_sync(&server, "web-test-csrf").await;
+        let body = response.text().await.unwrap();
+
+        assert!(
+            body.contains("Sync failed") && !body.contains("preserve me"),
+            "linked dirty preflight should fail without exposing file contents: {body}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(linked.join("linked-dirty.txt")).unwrap(),
+            "preserve me\n"
+        );
+        assert_eq!(stash_snapshot(&repo), stash_before);
+        assert_eq!(refs_snapshot(&repo), refs_before);
+        assert!(!shared.lock().unwrap().active_operation);
+        server.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_project_switch_rejects_while_a_repository_operation_is_active() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let current = common::TestRepo::new();
+        let target = common::TestRepo::new();
+        let (server, shared) = bind_web_test_session(&current, Some("main".to_string())).await;
+        shared.lock().unwrap().active_operation = true;
+
+        let response = reqwest::Client::new()
+            .post(format!("{}project", server.url))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "path={}&csrf=web-test-csrf",
+                target.path().to_string_lossy()
+            ))
+            .send()
+            .await
+            .expect("project switch should receive a response");
+        let status = response.status();
+        let body = response.text().await.unwrap();
+
+        assert_eq!(status, reqwest::StatusCode::CONFLICT);
+        assert!(
+            body.contains("Another operation is already in progress"),
+            "busy project switch should explain how to retry: {body}"
+        );
+        assert_eq!(shared.lock().unwrap().repository_root, current.path());
+        server.join_handle.abort();
     });
 }
