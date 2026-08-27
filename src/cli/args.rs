@@ -554,6 +554,7 @@ pub(crate) enum Commands {
     },
 
     /// Sync trunk, restack current stack, then submit updates
+    #[command(visible_alias = "r")]
     Refresh {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
