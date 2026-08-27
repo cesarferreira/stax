@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::{
     AuthStyle, ForgeSignal, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity,
@@ -138,6 +139,20 @@ struct CreateNoteRequest<'a> {
     body: &'a str,
 }
 
+// ponytail: fixed ceiling avoids API spam; widen only if measured GitLab propagation exceeds 2.5s.
+const CREATE_PR_RETRY_LIMIT: usize = 5;
+#[cfg(not(test))]
+const CREATE_PR_RETRY_DELAY: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const CREATE_PR_RETRY_DELAY: Duration = Duration::ZERO;
+
+fn is_missing_source_branch_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    ["400 Bad Request", "source_branch", "does not exist"]
+        .iter()
+        .all(|fragment| message.contains(fragment))
+}
+
 impl GitLabClient {
     pub fn new(remote: &RemoteInfo) -> Result<Self> {
         if remote.forge != ForgeType::GitLab {
@@ -238,9 +253,19 @@ impl GitLabClient {
             remove_source_branch: false,
             draft: is_draft,
         };
-        let mr: GitLabMr =
-            post_json(&self.client, &self.project_url("/merge_requests"), &request).await?;
-        Ok(mr_to_pr_info(&mr))
+        let url = self.project_url("/merge_requests");
+        let mut retries_remaining = CREATE_PR_RETRY_LIMIT;
+        loop {
+            let result: Result<GitLabMr> = post_json(&self.client, &url, &request).await;
+            match result {
+                Ok(mr) => return Ok(mr_to_pr_info(&mr)),
+                Err(error) if retries_remaining > 0 && is_missing_source_branch_error(&error) => {
+                    retries_remaining -= 1;
+                    tokio::time::sleep(CREATE_PR_RETRY_DELAY).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub async fn get_pr(&self, number: u64) -> Result<PrInfo> {
@@ -804,8 +829,9 @@ fn mr_to_pr_with_head(mr: GitLabMr) -> PrInfoWithHead {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{header, method, path, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     fn ensure_crypto_provider() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -821,6 +847,101 @@ mod tests {
             base_url: "https://gitlab.example.com".to_string(),
             api_base_url: Some(server.uri()),
         }
+    }
+
+    fn missing_source_branch_response() -> ResponseTemplate {
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "message": { "source_branch": ["does not exist"] }
+        }))
+    }
+
+    #[tokio::test]
+    async fn create_pr_retries_missing_source_branch_error() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+        let attempts = AtomicUsize::new(0);
+
+        Mock::given(method("POST"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(move |_: &Request| {
+                if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                    missing_source_branch_response()
+                } else {
+                    ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                        "iid": 7,
+                        "title": "Feature",
+                        "state": "opened",
+                        "draft": false,
+                        "source_branch": "feature-a",
+                        "target_branch": "main"
+                    }))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let pr = GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .create_pr("feature-a", "main", "Feature", "body", false)
+            .await
+            .unwrap();
+
+        assert_eq!(pr.number, 7);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_pr_does_not_retry_other_errors() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "message": { "target_branch": ["does not exist"] }
+            })))
+            .mount(&server)
+            .await;
+
+        let error = GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .create_pr("feature-a", "missing", "Feature", "body", false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("target_branch"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_pr_stops_after_missing_source_branch_retry_limit() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(missing_source_branch_response())
+            .mount(&server)
+            .await;
+
+        let error = GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .create_pr("missing", "main", "Feature", "body", false)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Forge API request failed: 400 Bad Request {\"message\":{\"source_branch\":[\"does not exist\"]}}"
+        );
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            CREATE_PR_RETRY_LIMIT + 1
+        );
     }
 
     #[tokio::test]
