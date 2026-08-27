@@ -274,6 +274,16 @@ fn test_refresh_help() {
 }
 
 #[test]
+fn test_refresh_alias_r() {
+    let output = stax(&["r", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sync trunk"));
+    assert!(stdout.contains("--no-submit"));
+    assert!(stdout.contains("--all-stacks"));
+}
+
+#[test]
 fn test_update_help_describes_cli_and_skills_upgrade() {
     let output = stax(&["update", "--help"]);
     assert!(output.status.success());

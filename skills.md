@@ -369,7 +369,7 @@ stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
 
-stax refresh                        # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
+stax refresh|r                      # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
