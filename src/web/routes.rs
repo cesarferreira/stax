@@ -4,7 +4,8 @@
 
 use crate::application::{
     NoopOperationReporter, OperationOutcome, OperationRequest, PullRequestMode, RepositorySnapshot,
-    RestackScope, execute_repository_operation, interaction_state,
+    RestackScope, TransactionSummary, execute_repository_operation,
+    interaction_state_from_transaction,
 };
 use crate::web::session::{SharedSession, ThemePreference};
 use crate::web::static_assets::{APP_CSS, APP_JS, HTMX_JS};
@@ -40,6 +41,7 @@ pub fn build_router(session: SharedSession, allowed_origin: String) -> Router {
         .route("/s/{token}/op/rename", post(op_rename))
         .route("/s/{token}/op/delete", post(op_delete))
         .route("/s/{token}/op/restack", post(op_restack))
+        .route("/s/{token}/op/sync", post(op_sync))
         .route("/s/{token}/op/submit", post(op_submit))
         .route("/s/{token}/op/undo", post(op_undo))
         .route("/s/{token}/op/redo", post(op_redo))
@@ -214,8 +216,12 @@ async fn workspace_handler(
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
             let last_receipt = session.last_receipt.clone();
-            let interaction =
-                interaction_state(&snapshot, selected, active_op, last_receipt.as_ref());
+            let interaction = interaction_state_from_transaction(
+                &snapshot,
+                selected,
+                active_op,
+                last_receipt.as_ref(),
+            );
             let html = workspace_page(&session, &snapshot, &interaction, &row_meta);
             Html(html.into_string()).into_response()
         }
@@ -329,7 +335,7 @@ async fn branch_details(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Branch not found: {branch_name}"))?;
         let details = repo_session.branch_details(&branch_summary)?;
-        let interaction = interaction_state(
+        let interaction = interaction_state_from_transaction(
             &snapshot,
             Some(branch_summary.name.as_str()),
             active,
@@ -748,6 +754,152 @@ async fn op_submit(
     run_mutation(state, token, request).await
 }
 
+/// Run the conservative browser Sync preset against the session repository.
+/// This deliberately uses an explicit path, never the server process cwd.
+async fn op_sync(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+    _headers: HeaderMap,
+    Form(form): Form<CsrfForm>,
+) -> impl IntoResponse {
+    if let Some(r) = check_token(&state, &token) {
+        return r;
+    }
+    if let Some(r) = check_csrf(&state, &form.csrf) {
+        return r;
+    }
+    log_action("sync", "");
+
+    let repo_root = {
+        let mut session = state.lock().unwrap();
+        if session.active_operation {
+            return Html(
+                error_fragment("Another operation is already in progress. Please wait.")
+                    .into_string(),
+            )
+            .into_response();
+        }
+        session.active_operation = true;
+        session.repository_root.clone()
+    };
+    let worker_state = state.clone();
+    let result = spawn_off_runtime(move || {
+        run_sync_worker(worker_state, repo_root, |repository| {
+            crate::commands::sync::run_at(
+                repository,
+                true,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                crate::commands::sync::StashPolicy::Never,
+                false,
+                &[],
+                true,
+            )
+        })
+    })
+    .await;
+    let (success, message) = match result {
+        Ok(Ok(())) => (true, "✓ Sync complete".to_string()),
+        Ok(Err(e)) => (false, format!("✗ Sync failed: {e}")),
+        Err(e) => (false, format!("✗ Spawn error: {e}")),
+    };
+    with_pane_refresh(render_stack_pane_with_banner(&state, &token, &message, success).await)
+}
+
+fn reload_after_sync(
+    repo_root: &std::path::Path,
+) -> anyhow::Result<(RepositorySnapshot, Option<TransactionSummary>)> {
+    let repository = crate::application::RepositorySession::open(repo_root)?;
+    let snapshot = repository.snapshot()?;
+    let repo = crate::git::GitRepo::open_from_path(repo_root)?;
+    let latest = crate::ops::receipt::OpReceipt::load_latest(repo.git_dir()?)?
+        .as_ref()
+        .map(TransactionSummary::from);
+    Ok((snapshot, latest))
+}
+
+/// Publish repository state from the same detached worker that owns Sync.
+/// Keeping this after `run_at` in the worker means request cancellation cannot
+/// release `active_operation` while the git process is still mutating refs.
+fn finish_sync_worker(
+    state: &SharedSession,
+    repo_root: &std::path::Path,
+    sync_result: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let refreshed = reload_after_sync(repo_root);
+    let mut session = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    session.active_operation = false;
+
+    if session.repository_root == repo_root
+        && let Ok((snapshot, latest_receipt)) = &refreshed
+    {
+        if session.selected_branch.as_ref().is_some_and(|selected| {
+            !snapshot
+                .branches
+                .iter()
+                .any(|branch| &branch.name == selected)
+        }) {
+            session.selected_branch = Some(snapshot.current_branch.clone());
+        }
+        session.last_receipt = latest_receipt.clone();
+    }
+    drop(session);
+
+    match sync_result {
+        Err(sync_error) => Err(sync_error),
+        Ok(()) => refreshed
+            .map(|_| ())
+            .map_err(|error| error.context("Sync completed but repository refresh failed")),
+    }
+}
+
+/// Own the operation lock for the entire lifetime of the detached Sync worker.
+/// A panic in Sync or post-Sync publication is converted into an error while
+/// the guard guarantees that the browser session is unlocked.
+fn run_sync_worker<F>(
+    state: SharedSession,
+    repo_root: std::path::PathBuf,
+    operation: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&std::path::Path) -> anyhow::Result<()>,
+{
+    let guard = ActiveOpGuard {
+        state: state.clone(),
+        disarmed: false,
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let sync_result = operation(&repo_root);
+        finish_sync_worker(&state, &repo_root, sync_result)
+    }));
+
+    match result {
+        Ok(result) => {
+            // `finish_sync_worker` cleared the flag while publishing state.
+            guard.disarm();
+            result
+        }
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(anyhow::anyhow!("Sync worker panicked: {message}"))
+        }
+    }
+}
+
 // ── Op: undo ─────────────────────────────────────────────────────────────────
 
 async fn op_undo(
@@ -896,6 +1048,22 @@ async fn switch_project(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    let expected_repository = {
+        let session = state.lock().unwrap();
+        if session.active_operation {
+            return (
+                StatusCode::CONFLICT,
+                Html(
+                    error_fragment(
+                        "Another operation is already in progress. Wait for it to finish before switching projects.",
+                    )
+                    .into_string(),
+                ),
+            )
+                .into_response();
+        }
+        session.repository_root.clone()
+    };
     log_action("switch project", form.path.trim());
 
     let path = std::path::PathBuf::from(form.path.trim());
@@ -919,6 +1087,18 @@ async fn switch_project(
                 .map(|snap| snap.current_branch);
             {
                 let mut s = state.lock().unwrap();
+                if s.active_operation || s.repository_root != expected_repository {
+                    return (
+                        StatusCode::CONFLICT,
+                        Html(
+                            error_fragment(
+                                "The active repository changed while this project was opening. Try switching again.",
+                            )
+                            .into_string(),
+                        ),
+                    )
+                        .into_response();
+                }
                 s.switch_repository(root, selected);
             }
             // Full page reload for the new workspace.
@@ -1035,9 +1215,11 @@ impl ActiveOpGuard {
 
 impl Drop for ActiveOpGuard {
     fn drop(&mut self) {
-        if !self.disarmed
-            && let Ok(mut s) = self.state.lock()
-        {
+        if !self.disarmed {
+            let mut s = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             s.active_operation = false;
         }
     }
@@ -1092,7 +1274,7 @@ async fn run_mutation(
         let mut s = state.lock().unwrap();
         s.active_operation = false;
         if let Some(r) = receipt {
-            s.last_receipt = Some(r);
+            s.last_receipt = r.transaction;
         }
     }
     // Disarm: flag already cleared above; guard drop should be a no-op.
@@ -1147,6 +1329,46 @@ mod tests {
             "disarm alone must not reset active_operation (caller owns the clear)"
         );
     }
+
+    #[test]
+    fn sync_worker_preserves_sync_error_when_refresh_also_fails_and_clears_lock() {
+        let missing_repo = tempfile::tempdir().unwrap();
+        let state = make_shared(WebSession::new(
+            missing_repo.path().to_path_buf(),
+            "tok".to_string(),
+            "csrf".to_string(),
+        ));
+        state.lock().unwrap().active_operation = true;
+
+        let error = finish_sync_worker(
+            &state,
+            missing_repo.path(),
+            Err(anyhow::anyhow!("original sync failure")),
+        )
+        .expect_err("the original sync error should be returned");
+
+        assert_eq!(error.to_string(), "original sync failure");
+        assert!(!state.lock().unwrap().active_operation);
+    }
+
+    #[test]
+    fn sync_worker_catches_panics_and_releases_its_owned_lock() {
+        let missing_repo = tempfile::tempdir().unwrap();
+        let state = make_shared(WebSession::new(
+            missing_repo.path().to_path_buf(),
+            "tok".to_string(),
+            "csrf".to_string(),
+        ));
+        state.lock().unwrap().active_operation = true;
+
+        let error = run_sync_worker(state.clone(), missing_repo.path().to_path_buf(), |_| {
+            panic!("deterministic sync panic")
+        })
+        .expect_err("worker panic should become an operation error");
+
+        assert!(error.to_string().contains("deterministic sync panic"));
+        assert!(!state.lock().unwrap().active_operation);
+    }
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -1161,8 +1383,12 @@ async fn render_stack_pane(state: &SharedSession, token: &str) -> axum::response
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
             let last_receipt = session.last_receipt.clone();
-            let interaction =
-                interaction_state(&snapshot, selected, active_op, last_receipt.as_ref());
+            let interaction = interaction_state_from_transaction(
+                &snapshot,
+                selected,
+                active_op,
+                last_receipt.as_ref(),
+            );
             let base = format!("/s/{token}");
             Html(
                 stack_pane_fragment(&session, &snapshot, &interaction, &base, &row_meta)
@@ -1190,8 +1416,12 @@ async fn render_stack_pane_with_banner(
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
             let last_receipt = session.last_receipt.clone();
-            let interaction =
-                interaction_state(&snapshot, selected, active_op, last_receipt.as_ref());
+            let interaction = interaction_state_from_transaction(
+                &snapshot,
+                selected,
+                active_op,
+                last_receipt.as_ref(),
+            );
             let base = format!("/s/{token}");
             let markup = templates::op_result_with_stack(
                 banner_msg,

@@ -348,6 +348,8 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 |---|---|
 | `st` | Launch interactive TUI |
 | `st web [path]` | Start a localhost web workspace in the browser |
+| Web stack pane | Automatically fits branch names and topology; drag or use Arrow keys to resize. Manual width persists per repository in browser localStorage; double-click resets automatic sizing. |
+| Web Sync | Confirmed browser action: fetches, updates trunk, and cleans merged local branches; requires a clean tree and never stashes or restacks. Refresh only reloads the current snapshot. |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |

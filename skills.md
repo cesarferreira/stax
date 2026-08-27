@@ -336,6 +336,10 @@ stax merge-when-ready              # Backward-compatible alias
 # the remaining budget and never poll the forge at or after the deadline.
 
 stax rs                            # Sync trunk + clean merged branches
+# In st web, Sync is confirmed and uses the active repository (not server cwd):
+# fetch + trunk update + merged-local cleanup; clean tree required, no stash/restack.
+# Refresh remains read-only. The stack pane auto-fits long names; drag/Arrow-resize
+# persists per repository in browser localStorage, and double-click resets it.
 stax rs --restack                  # Sync then restack
 stax sync --dry-run                # Preview sync plan (read-only — no fetch, no stash, no ref writes); alias: --plan
 stax sync --dry-run --json         # Same as --dry-run but emits a single JSON doc (kind:"sync_plan", schema_version:1, dry_run:true); always exits 0; no receipt written

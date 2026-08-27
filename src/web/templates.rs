@@ -182,7 +182,7 @@ pub fn workspace_page(
                     (topbar(session, snapshot, interaction, &base))
 
                     // Three-column stage
-                    div .stage {
+                    div class=(if session.show_stack { "stage" } else { "stage stack-hidden" }) data-repository-key=(session.repository_root.to_string_lossy()) {
                         // Stack pane (left)
                         div
                             class={
@@ -195,6 +195,8 @@ pub fn workspace_page(
                                 (stack_pane_inner(session, snapshot, interaction, &base, row_meta))
                             }
                         }
+
+                        button .stack-resizer type="button" role="separator" aria-orientation="vertical" aria-label="Resize stack pane" aria-controls="pane-stack" aria-valuemin="200" aria-valuemax="240" aria-valuenow="240" tabindex="0" hidden[!session.show_stack] {}
 
                         // Review workspace (centre)
                         div
@@ -394,6 +396,10 @@ fn topbar(
 fn topbar_actions_inner(interaction: &InteractionState, base: &str, csrf: &str) -> Markup {
     html! {
         div #topbar-actions .topbar-actions {
+            button .btn.mutating-btn
+                onclick=(format!("document.body.insertAdjacentHTML('beforeend', `{}`)", sync_confirm_overlay_escaped(base, csrf)))
+                title="Fetch updates, update trunk, and delete merged local branches"
+                { "Sync" }
             @if interaction.restack.enabled {
                 button .btn.mutating-btn
                     hx-post=(format!("{base}/op/restack"))
@@ -462,6 +468,10 @@ pub fn stack_pane_fragment(
 fn topbar_actions_oob(interaction: &InteractionState, base: &str, csrf: &str) -> Markup {
     html! {
         div #topbar-actions hx-swap-oob="true" class="topbar-actions" {
+            button .btn.mutating-btn
+                onclick=(format!("document.body.insertAdjacentHTML('beforeend', `{}`)", sync_confirm_overlay_escaped(base, csrf)))
+                title="Fetch updates, update trunk, and delete merged local branches"
+                { "Sync" }
             @if interaction.restack.enabled {
                 button .btn.mutating-btn
                     hx-post=(format!("{base}/op/restack"))
@@ -632,7 +642,7 @@ pub fn stack_pane_inner(
         .unwrap_or(snapshot.trunk.as_str());
 
     html! {
-        div .stack-rail data-lane-count=(max_lanes) style=(format!("--stack-rail-w:{rail_width}px")) {
+        div .stack-rail data-lane-count=(max_lanes) data-topology-min-width=(rail_width) style=(format!("--stack-rail-w:{rail_width}px")) {
             // Header
             div .stack-header {
                 div .stack-header-labels {
@@ -1258,6 +1268,20 @@ fn submit_confirm_overlay_escaped(base: &str, csrf: &str) -> String {
     .replace("${", "\\${")
 }
 
+fn sync_confirm_overlay_escaped(base: &str, csrf: &str) -> String {
+    confirm_overlay(
+        "Sync repository",
+        "Sync fetches updates, fast-forwards trunk, and deletes merged local branches. Your working tree must be clean; Sync never stashes and does not restack.",
+        &format!("{base}/op/sync"),
+        csrf,
+        &[],
+    )
+    .into_string()
+    .replace('\\', "\\\\")
+    .replace('`', "\\`")
+    .replace("${", "\\${")
+}
+
 pub fn operation_banner(message: &str, success: bool) -> Markup {
     let cls = if success {
         "banner banner-success"
@@ -1372,7 +1396,9 @@ pub fn error_fragment(message: &str) -> Markup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::{DiffLine, DiffLineKind};
+    use crate::application::{
+        BranchSummary, DiffLine, DiffLineKind, RepositorySnapshot, interaction_state,
+    };
 
     #[test]
     fn parse_hunk_header_standard() {
@@ -1641,6 +1667,43 @@ mod tests {
     fn stack_pane_width_is_capped_to_protect_review_space() {
         assert_eq!(stack_pane_width_px(9), 400);
         assert_eq!(stack_pane_width_px(usize::MAX), 400);
+    }
+
+    #[test]
+    fn stack_pane_exposes_repository_scoped_sizing_metadata_and_separator() {
+        let mut session = WebSession::new(
+            std::path::PathBuf::from("/tmp/example-repository"),
+            "token".into(),
+            "csrf".into(),
+        );
+        session.selected_branch = Some("main".into());
+        let snapshot = RepositorySnapshot {
+            repository_root: session.repository_root.clone(),
+            current_branch: "main".into(),
+            trunk: "main".into(),
+            branches: vec![BranchSummary {
+                name: "main".into(),
+                parent: None,
+                column: 0,
+                is_current: true,
+                is_trunk: true,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            }],
+        };
+        let interaction = interaction_state(&snapshot, Some("main"), false, None);
+
+        let rendered =
+            workspace_page(&session, &snapshot, &interaction, &StackRowMeta::new()).into_string();
+
+        assert!(rendered.contains("data-repository-key=\"/tmp/example-repository\""));
+        assert!(rendered.contains("class=\"stack-resizer\""));
+        assert!(rendered.contains("role=\"separator\""));
+        assert!(rendered.contains("aria-valuemin=\"200\""));
+        assert!(rendered.contains("aria-valuemax=\"240\""));
+        assert!(rendered.contains("aria-valuenow=\"240\""));
     }
 }
 
