@@ -85,6 +85,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st rename` | | Rename current branch |
 | `st move [target]` | `mv` | Move the current branch and descendants onto a new parent (`st upstack onto` parity alias; picker when omitted) |
 | `st branch track` | | Track an existing branch |
+| `st branch track --all` | | Track every untracked non-trunk local branch under its nearest cycle-safe strict local ancestor |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea); sets upstream on branches it fetches |
 | `st branch untrack` | `ut` | Remove stax metadata |
 | `st branch reparent` | | Change parent |
@@ -95,6 +96,18 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
 | `st absorb` | | Distribute staged changes to the correct stack branches (file-level) |
+
+`st branch track --all` is local and metadata-only: it does not contact a forge,
+fetch or change remotes/upstreams, load remote configuration, or switch branches.
+It snapshots the untracked non-trunk local branches before writing metadata and
+leaves existing tracked metadata and the trunk untouched. For each target, it
+chooses the cycle-safe strict local ancestor with the fewest commits between
+that ancestor and the target, breaking equal-distance ties lexically by branch
+name. Non-trunk branches at the same commit are never selected as one another's
+parent. When no cycle-safe strict local ancestor exists, including for unrelated
+histories, the branch is parented to trunk; trunk remains the fallback root even
+when it points at the same commit. `--all` conflicts with `--parent` and
+`--all-prs`.
 
 ### Up/down scopes
 

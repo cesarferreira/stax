@@ -355,6 +355,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
+| `st branch track --all` | Adopt every untracked non-trunk local branch into stacks using its nearest cycle-safe strict local ancestor |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
 | `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |

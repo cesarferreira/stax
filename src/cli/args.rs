@@ -1572,10 +1572,13 @@ pub(crate) enum BranchCommands {
     /// Track an existing branch (set its parent)
     Track {
         /// Parent branch name
-        #[arg(short, long, conflicts_with = "all_prs")]
+        #[arg(short, long, conflicts_with_all = ["all", "all_prs"])]
         parent: Option<String>,
+        /// Track all untracked local branches under their nearest local ancestors
+        #[arg(long, conflicts_with_all = ["parent", "all_prs"])]
+        all: bool,
         /// Track all open PRs authored by you
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["parent", "all"])]
         all_prs: bool,
     },
 

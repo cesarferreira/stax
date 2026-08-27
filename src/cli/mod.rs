@@ -744,9 +744,11 @@ pub fn run() -> Result<()> {
                 child,
                 shell_output,
             } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
-            BranchCommands::Track { parent, all_prs } => {
-                commands::branch::track::run(parent, all_prs)
-            }
+            BranchCommands::Track {
+                parent,
+                all,
+                all_prs,
+            } => commands::branch::track::run(parent, all, all_prs),
             BranchCommands::Untrack { branch } => commands::branch::untrack::run(branch),
             BranchCommands::Reparent {
                 branch,

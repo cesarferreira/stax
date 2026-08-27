@@ -11,11 +11,14 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
-pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
+pub fn run(parent: Option<String>, all: bool, all_prs: bool) -> Result<()> {
+    if all {
+        return run_track_all_local();
+    }
     if all_prs {
         return run_track_all_prs();
     }
@@ -92,17 +95,7 @@ pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
         }
     };
 
-    // Use the divergence point (merge-base) rather than the parent's current tip.
-    // This matches freephite's `trackBranch` which stores `getMergeBase(branch, parent)`.
-    // Storing the tip would make the stored revision a non-ancestor of `current`,
-    // which causes `git rebase --onto` to scope the replay incorrectly.
-    let parent_rev = repo
-        .merge_base(&parent_branch, &current)
-        .or_else(|_| repo.branch_commit(&parent_branch))?;
-
-    // Create metadata
-    let meta = BranchMetadata::new(&parent_branch, &parent_rev);
-    meta.write(repo.inner(), &current)?;
+    write_tracking_metadata(&repo, &current, &parent_branch)?;
 
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
         && !remote_branches.contains(&parent_branch)
@@ -125,6 +118,259 @@ pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn run_track_all_local() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let trunk = repo.trunk_branch()?;
+    let mut branches = repo.list_branches()?;
+    branches.sort();
+    let workdir = repo.workdir()?;
+
+    let mut tips = HashMap::new();
+    let mut targets = Vec::new();
+    let mut parent_map = HashMap::new();
+    for branch in &branches {
+        tips.insert(branch.clone(), repo.branch_commit(branch)?);
+        match BranchMetadata::read(repo.inner(), branch)? {
+            Some(metadata) => {
+                parent_map.insert(branch.clone(), metadata.parent_branch_name);
+            }
+            None if branch != &trunk => targets.push(branch.clone()),
+            None => {}
+        }
+    }
+
+    if targets.is_empty() {
+        println!("No untracked local branches to track.");
+        return Ok(());
+    }
+
+    let mut reachable_counts = HashMap::new();
+    for branch in &branches {
+        reachable_counts.insert(
+            branch.clone(),
+            reachable_commit_count(workdir, branch)
+                .with_context(|| format!("Failed to count commits reachable from '{}'", branch))?,
+        );
+    }
+
+    let known_branches: HashSet<&str> = branches.iter().map(String::as_str).collect();
+    let mut candidates = HashMap::new();
+    for branch in &targets {
+        let branch_tip = &tips[branch];
+        let target_count = reachable_counts[branch];
+        let mut ranked = Vec::new();
+        for candidate in merged_local_branches(workdir, branch)? {
+            if !known_branches.contains(candidate.as_str())
+                || candidate == branch.as_str()
+                || tips.get(&candidate) == Some(branch_tip)
+            {
+                continue;
+            }
+            let candidate_count = *reachable_counts.get(&candidate).with_context(|| {
+                format!(
+                    "Missing reachable commit count for candidate '{}' of target '{}'",
+                    candidate, branch
+                )
+            })?;
+            let distance = target_count.checked_sub(candidate_count).with_context(|| {
+                format!(
+                    "Reachable commit count underflow for candidate '{}' and target '{}'",
+                    candidate, branch
+                )
+            })?;
+            if distance == 0 {
+                anyhow::bail!(
+                    "Strict ancestor candidate '{}' has zero distance from target '{}'",
+                    candidate,
+                    branch
+                );
+            }
+            ranked.push((distance, candidate));
+        }
+        ranked.sort_by(|(left_ahead, left_name), (right_ahead, right_name)| {
+            left_ahead
+                .cmp(right_ahead)
+                .then_with(|| left_name.cmp(right_name))
+        });
+        candidates.insert(branch.clone(), ranked);
+    }
+
+    let order = topological_target_order(&targets, &candidates)?;
+    let mut plan = Vec::with_capacity(targets.len());
+    for branch in order {
+        let parent = candidates[&branch]
+            .iter()
+            .map(|(_, candidate)| candidate)
+            .find(|candidate| !parent_chain_reaches(&parent_map, candidate, &branch))
+            .cloned()
+            .unwrap_or_else(|| trunk.clone());
+        parent_map.insert(branch.clone(), parent.clone());
+        plan.push((branch, parent));
+    }
+
+    validate_parent_map_acyclic(&parent_map)?;
+
+    for (branch, parent) in &plan {
+        write_tracking_metadata(&repo, branch, parent)?;
+        println!(
+            "{} Tracking '{}' with parent '{}'",
+            "✓".green(),
+            branch.green(),
+            parent.blue()
+        );
+    }
+
+    println!(
+        "Tracked {} local branch(es).",
+        targets.len().to_string().green()
+    );
+    Ok(())
+}
+
+fn reachable_commit_count(workdir: &Path, branch: &str) -> Result<usize> {
+    let branch_ref = format!("refs/heads/{branch}");
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &branch_ref])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to run git rev-list for '{}'", branch))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-list --count '{}' failed: {}",
+            branch,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let count = String::from_utf8(output.stdout)
+        .with_context(|| format!("git rev-list count for '{}' was not UTF-8", branch))?;
+    count.trim().parse().with_context(|| {
+        format!(
+            "Invalid git rev-list count for '{}': {:?}",
+            branch,
+            count.trim()
+        )
+    })
+}
+
+fn merged_local_branches(workdir: &Path, target: &str) -> Result<Vec<String>> {
+    let target_ref = format!("refs/heads/{target}");
+    let output = Command::new("git")
+        .args([
+            "for-each-ref",
+            &format!("--merged={target_ref}"),
+            "--format=%(refname:strip=2)",
+            "refs/heads",
+        ])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to list local ancestors of target '{}'", target))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git for-each-ref --merged='{}' failed: {}",
+            target,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| std::str::from_utf8(line).ok())
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn topological_target_order(
+    targets: &[String],
+    candidates: &HashMap<String, Vec<(usize, String)>>,
+) -> Result<Vec<String>> {
+    let target_set: HashSet<&str> = targets.iter().map(String::as_str).collect();
+    let mut indegree: HashMap<String, usize> =
+        targets.iter().cloned().map(|target| (target, 0)).collect();
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+
+    for target in targets {
+        for (_, candidate) in &candidates[target] {
+            if target_set.contains(candidate.as_str()) {
+                *indegree
+                    .get_mut(target)
+                    .context("Target missing from topological indegree map")? += 1;
+                children
+                    .entry(candidate.clone())
+                    .or_default()
+                    .push(target.clone());
+            }
+        }
+    }
+    for descendants in children.values_mut() {
+        descendants.sort();
+    }
+
+    let mut ready: BTreeSet<String> = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(target, _)| target.clone())
+        .collect();
+    let mut order = Vec::with_capacity(targets.len());
+    while let Some(next) = ready.iter().next().cloned() {
+        ready.remove(&next);
+        order.push(next.clone());
+        for child in children.get(&next).into_iter().flatten() {
+            let degree = indegree
+                .get_mut(child)
+                .context("Target missing from topological indegree map")?;
+            *degree -= 1;
+            if *degree == 0 {
+                ready.insert(child.clone());
+            }
+        }
+    }
+
+    if order.len() != targets.len() {
+        anyhow::bail!("Local branch ancestry contains a cycle");
+    }
+    Ok(order)
+}
+
+fn parent_chain_reaches(parent_map: &HashMap<String, String>, start: &str, target: &str) -> bool {
+    let mut current = start;
+    let mut visited = HashSet::new();
+    loop {
+        if current == target {
+            return true;
+        }
+        if !visited.insert(current.to_string()) {
+            return false;
+        }
+        let Some(parent) = parent_map.get(current) else {
+            return false;
+        };
+        current = parent;
+    }
+}
+
+fn validate_parent_map_acyclic(parent_map: &HashMap<String, String>) -> Result<()> {
+    for branch in parent_map.keys() {
+        let mut current = branch.as_str();
+        let mut path = HashSet::new();
+        while let Some(parent) = parent_map.get(current) {
+            if !path.insert(current.to_string()) {
+                anyhow::bail!("Branch metadata contains a cycle involving '{}'", current);
+            }
+            current = parent;
+        }
+    }
+    Ok(())
+}
+
+fn write_tracking_metadata(repo: &GitRepo, branch: &str, parent: &str) -> Result<()> {
+    let parent_rev = repo
+        .merge_base_refs(parent, branch)
+        .or_else(|_| repo.rev_parse(parent))?;
+    let meta = BranchMetadata::new(parent, &parent_rev);
+    meta.write(repo.inner(), branch)
 }
 
 /// Track all open PRs authored by the current user
