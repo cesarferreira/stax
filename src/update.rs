@@ -130,6 +130,43 @@ pub fn run_background_check() {
     let _ = informer.check_version();
 }
 
+/// The version stax was built from.
+pub(crate) fn current_version() -> &'static str {
+    PKG_VERSION
+}
+
+/// Outcome of checking whether a newer stax release exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum VersionCheck {
+    /// The installed version already matches the latest published release.
+    UpToDate,
+    /// A newer version is available.
+    Available,
+    /// The check could not be completed (network failure, or checks disabled).
+    Unknown,
+}
+
+/// Perform a live (uncached) check against the registry for a newer published version.
+///
+/// Unlike [`show_update_notification`], this always hits the network (subject to
+/// `STAX_DISABLE_UPDATE_CHECK`) rather than relying on the daily-refreshed cache, since
+/// it backs a user-initiated command (`stax update`) that wants an authoritative answer.
+pub(crate) fn check_latest_version() -> VersionCheck {
+    if update_checks_disabled() {
+        return VersionCheck::Unknown;
+    }
+
+    let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
+        .timeout(Duration::from_secs(3))
+        .interval(Duration::ZERO);
+
+    match informer.check_version() {
+        Ok(Some(_)) => VersionCheck::Available,
+        Ok(None) => VersionCheck::UpToDate,
+        Err(_) => VersionCheck::Unknown,
+    }
+}
+
 /// Check for cached update info and display if a new version is available.
 /// This reads from cache only - it won't make network requests or block.
 pub fn show_update_notification() {

@@ -391,7 +391,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
 | `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
-| `st update` | Upgrade the stax CLI with the detected install method, then offer to refresh installed AI agent skill files |
+| `st update` | Upgrade the stax CLI with the detected install method (skipped if already current, unless `--force`), then offer to refresh installed AI agent skill files |
 | `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
 

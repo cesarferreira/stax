@@ -693,7 +693,11 @@ pub(crate) enum Commands {
     },
 
     /// Upgrade the stax CLI and check for skill updates
-    Update,
+    Update {
+        /// Run the upgrade even if already on the latest version
+        #[arg(short, long)]
+        force: bool,
+    },
 
     /// Show config file path and contents
     Config {
@@ -2008,7 +2012,19 @@ mod tests {
     #[test]
     fn update_parses_as_its_own_top_level_command() {
         let cli = parse_cli(&["st", "update"]);
-        assert!(matches!(cli.command, Some(Commands::Update)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update { force: false })
+        ));
+    }
+
+    #[test]
+    fn update_force_flag_parses() {
+        let cli = parse_cli(&["st", "update", "--force"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update { force: true })
+        ));
     }
 
     #[test]

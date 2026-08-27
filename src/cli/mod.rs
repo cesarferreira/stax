@@ -163,8 +163,8 @@ pub fn run() -> Result<()> {
             };
             return result;
         }
-        Commands::Update => {
-            commands::cli::run_upgrade()?;
+        Commands::Update { force } => {
+            commands::cli::run_update(*force)?;
             commands::skills::propose_skills_update()?;
             return Ok(());
         }
@@ -511,7 +511,7 @@ pub fn run() -> Result<()> {
         } => commands::modify::run(message, all, quiet, no_verify, restack),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Cli { .. } => unreachable!(),  // Handled above
-        Commands::Update => unreachable!(),      // Handled above
+        Commands::Update { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
