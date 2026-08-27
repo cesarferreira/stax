@@ -157,12 +157,6 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
-        Commands::Cli { command } => {
-            let result = match command {
-                CliSubcommand::Upgrade => commands::cli::run_upgrade(),
-            };
-            return result;
-        }
         Commands::Update { force } => {
             commands::cli::run_update(*force)?;
             commands::skills::propose_skills_update()?;
@@ -510,7 +504,6 @@ pub fn run() -> Result<()> {
             restack,
         } => commands::modify::run(message, all, quiet, no_verify, restack),
         Commands::Auth { .. } => unreachable!(), // Handled above
-        Commands::Cli { .. } => unreachable!(),  // Handled above
         Commands::Update { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above

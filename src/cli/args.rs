@@ -687,12 +687,6 @@ pub(crate) enum Commands {
         command: Option<AuthSubcommand>,
     },
 
-    /// Manage the installed stax CLI
-    Cli {
-        #[command(subcommand)]
-        command: CliSubcommand,
-    },
-
     /// Upgrade the stax CLI and check for skill updates
     Update {
         /// Run the upgrade even if already on the latest version
@@ -1466,12 +1460,6 @@ pub(crate) enum Commands {
 pub(crate) enum AuthSubcommand {
     /// Show which auth source is currently active
     Status,
-}
-
-#[derive(Subcommand, Clone)]
-pub(crate) enum CliSubcommand {
-    /// Upgrade stax using the current installation method
-    Upgrade,
 }
 
 #[derive(Subcommand)]

@@ -177,8 +177,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st --default-config` | Print annotated config template (all options and allowed values) |
 | `st --skill` | Print bundled AI agent skill document (SKILL.md format with frontmatter) |
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
-| `st cli upgrade` | Detect install method and run the matching upgrade |
-| `st update` | Upgrade the stax CLI (same as `st cli upgrade`), then check installed AI agent skill files and offer to refresh them. Skips the CLI upgrade if already on the latest version — pass `--force` to upgrade anyway |
+| `st update` | Detect install method and run the matching upgrade, then check installed AI agent skill files and offer to refresh them. Skips the CLI upgrade if already on the latest version — pass `--force` to upgrade anyway |
 | `st doctor` | Check repo health |
 | `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config, stale AI skills for selected harnesses, and optional `gh-stack` install) |
 | `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --all`, `update --skills <list>`, `update --dry-run`) |
