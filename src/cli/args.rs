@@ -43,7 +43,7 @@ pub(crate) struct Cli {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct WebArgs {
-    /// Repository to open; defaults to the current directory
+    /// Repository or path inside one to open; defaults to the current directory
     pub(crate) path: Option<PathBuf>,
     /// Port to bind (default 8787). If the requested port is busy, stax warns and uses a free OS-selected port.
     #[arg(long, default_value_t = 8787)]

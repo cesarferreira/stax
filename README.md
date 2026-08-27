@@ -302,6 +302,8 @@ st web --port 0   # ephemeral port
 st web --no-open  # start without opening browser; prints URL
 ```
 
+Run `st web` from anywhere inside a Git worktree, or pass any path inside one; stax discovers and opens the worktree root automatically.
+
 Binds 127.0.0.1 only with an unguessable session token in the URL, CSRF protection on every mutating POST, and one-mutation-at-a-time enforcement. Requests without an `Origin` remain supported; when present, `Origin` must exactly match `http://127.0.0.1:<actual-bound-port>`. No `--host` flag — it cannot be exposed to the network.
 
 → [Web workspace guide](docs/interface/web.md)
