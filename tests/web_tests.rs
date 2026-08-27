@@ -850,10 +850,12 @@ fn web_server_bind_reports_no_fallback_for_ephemeral_port() {
 }
 
 #[test]
-fn web_command_reports_busy_port_fallback_and_startup_progress() {
+fn web_command_discovers_repo_from_nested_directory_and_reports_startup_progress() {
     let repo = common::TestRepo::new();
     let init_out = repo.run_stax(&["init", "--trunk", "main"]);
     assert!(init_out.status.success());
+    let nested_dir = repo.path().join("wayve/frontends/robot-android");
+    std::fs::create_dir_all(&nested_dir).expect("nested directory should be created");
 
     let busy_listener =
         std::net::TcpListener::bind(("127.0.0.1", 0)).expect("busy-port guard should bind");
@@ -862,7 +864,7 @@ fn web_command_reports_busy_port_fallback_and_startup_progress() {
         .expect("busy-port guard should have an address")
         .port();
 
-    let mut child = web_command(&repo.path())
+    let mut child = web_command(&nested_dir)
         .args(["web", "--port", &busy_port.to_string(), "--no-open"])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -920,6 +922,22 @@ fn web_command_reports_busy_port_fallback_and_startup_progress() {
     assert!(output.contains("skipped (--no-open)"));
     assert!(output.contains("Workspace  http://127.0.0.1:"));
     assert!(output.contains("Press Ctrl-C to stop."));
+}
+
+#[test]
+fn web_command_reports_an_error_outside_a_repository() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = web_command(temp.path())
+        .args(["web", "--no-open"])
+        .output()
+        .expect("st web should exit with an error");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to discover git repository"),
+        "expected repository discovery context: {stderr}"
+    );
 }
 
 #[test]
