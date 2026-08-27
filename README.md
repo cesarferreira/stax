@@ -165,7 +165,7 @@ st ls
 st ss
 
 # 4. After the bottom PR merges on GitHub…
-st refresh         # sync trunk, restack this stack, update PRs (`st update` is a back-compat alias)
+st refresh         # sync trunk, restack this stack, update PRs
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -368,7 +368,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
-| `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (`st update` is a back-compat alias) |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
 | `st refresh --verbose` | Include detailed sync/restack/submit timing |
@@ -391,6 +391,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
 | `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
+| `st update` | Upgrade the stax CLI with the detected install method, then offer to refresh installed AI agent skill files |
 | `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
 

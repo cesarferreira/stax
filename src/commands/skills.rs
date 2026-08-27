@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
+use dialoguer::{Confirm, theme::ColorfulTheme};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -568,6 +570,62 @@ pub fn stale_skill_files() -> Vec<(String, Option<String>)> {
     stale
 }
 
+/// Outcome of comparing installed skill files against `PKG_VERSION`.
+pub enum SkillsProposal {
+    UpToDate,
+    Stale(usize),
+}
+
+fn classify_skills_proposal(stale: &[(String, Option<String>)]) -> SkillsProposal {
+    if stale.is_empty() {
+        SkillsProposal::UpToDate
+    } else {
+        SkillsProposal::Stale(stale.len())
+    }
+}
+
+fn skills_proposal_suggestion(count: usize) -> String {
+    format!("{count} skill file(s) are out of date. Run `stax skills update` to refresh them.")
+}
+
+/// Called from `stax update` after the CLI upgrade completes: reports whether
+/// installed agent skill files are stale and, on a TTY, offers to refresh them.
+pub fn propose_skills_update() -> Result<()> {
+    let stale = stale_skill_files();
+
+    match classify_skills_proposal(&stale) {
+        SkillsProposal::UpToDate => {
+            println!("{}", "✓ Agent skill files are up to date.".green());
+            return Ok(());
+        }
+        SkillsProposal::Stale(count) => {
+            println!();
+            println!("{}", "Agent skill files:".bold());
+            for (name, installed) in &stale {
+                let version = installed.as_deref().unwrap_or("unknown");
+                println!("  {}  {} ({})", "⚠".yellow(), name.cyan(), version);
+            }
+            println!();
+            println!("{}", skills_proposal_suggestion(count).yellow());
+
+            if !std::io::stdin().is_terminal() {
+                return Ok(());
+            }
+
+            let update_now = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Update now?")
+                .default(true)
+                .interact()?;
+
+            if update_now {
+                run_update(false)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,5 +824,32 @@ mod tests {
         );
         assert!(line.contains("auto:"));
         assert!(line.contains("codex, cursor"));
+    }
+
+    #[test]
+    fn test_classify_skills_proposal_empty_is_up_to_date() {
+        assert!(matches!(
+            classify_skills_proposal(&[]),
+            SkillsProposal::UpToDate
+        ));
+    }
+
+    #[test]
+    fn test_classify_skills_proposal_stale_counts_entries() {
+        let stale = vec![
+            ("Codex".to_string(), Some("0.1.0".to_string())),
+            ("Cursor".to_string(), None),
+        ];
+        assert!(matches!(
+            classify_skills_proposal(&stale),
+            SkillsProposal::Stale(2)
+        ));
+    }
+
+    #[test]
+    fn test_skills_proposal_suggestion_mentions_count_and_command() {
+        let msg = skills_proposal_suggestion(3);
+        assert!(msg.contains('3'));
+        assert!(msg.contains("stax skills update"));
     }
 }

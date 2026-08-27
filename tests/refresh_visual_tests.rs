@@ -35,7 +35,7 @@ fn update_header_no_submit_uses_skip_wording() {
 fn update_header_default_mentions_push_and_prs() {
     let repo = TestRepo::new_with_remote();
     // No forge token in tests — submit will fail, but the header prints first.
-    let output = repo.run_stax(&["update", "--force"]);
+    let output = repo.run_stax(&["refresh", "--force"]);
     let stdout = TestRepo::stdout(&output);
 
     assert!(

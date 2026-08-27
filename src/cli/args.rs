@@ -554,7 +554,6 @@ pub(crate) enum Commands {
     },
 
     /// Sync trunk, restack current stack, then submit updates
-    #[command(visible_alias = "update")]
     Refresh {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
@@ -692,6 +691,9 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: CliSubcommand,
     },
+
+    /// Upgrade the stax CLI and check for skill updates
+    Update,
 
     /// Show config file path and contents
     Config {
@@ -1954,6 +1956,10 @@ mod tests {
     use std::path::Path;
 
     fn parse_cli(args: &[&str]) -> Cli {
+        try_parse_cli(args).expect("parse CLI")
+    }
+
+    fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
         std::thread::Builder::new()
             .name("cli-parse".into())
@@ -1962,7 +1968,6 @@ mod tests {
             .expect("spawn parse thread")
             .join()
             .expect("join parse thread")
-            .expect("parse CLI")
     }
 
     #[test]
@@ -1998,5 +2003,17 @@ mod tests {
             Some(Commands::Web(WebArgs { path: Some(ref p), .. }))
                 if p == Path::new("/tmp/repo")
         ));
+    }
+
+    #[test]
+    fn update_parses_as_its_own_top_level_command() {
+        let cli = parse_cli(&["st", "update"]);
+        assert!(matches!(cli.command, Some(Commands::Update)));
+    }
+
+    #[test]
+    fn update_no_longer_accepts_refresh_flags() {
+        assert!(try_parse_cli(&["st", "update", "--no-submit"]).is_err());
+        assert!(try_parse_cli(&["st", "update", "--all-stacks"]).is_err());
     }
 }

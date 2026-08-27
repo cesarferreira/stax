@@ -139,7 +139,7 @@ Restack + push + create/update PRs in a single flow, without fetching trunk (off
 
 ## `st refresh`
 
-The "bottom PR merged, catch me up" command. Prints the plan up front, then syncs trunk without merged-branch cleanup, restacks, and submits. `st update` remains a back-compat alias.
+The "bottom PR merged, catch me up" command. Prints the plan up front, then syncs trunk without merged-branch cleanup, restacks, and submits.
 
 | Command | Behavior |
 |---|---|

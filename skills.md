@@ -96,6 +96,7 @@ stax gen --commit-msg          # Non-interactive: amend HEAD commit message from
 stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
 stax cli upgrade               # Detect the install method and run the matching upgrade flow
+stax update                    # Upgrade the CLI, then offer to refresh installed AI agent skill files
 stax doctor                    # Health checks (also reports stale skill files)
 stax doctor --fix              # Show one repair plan, then apply safe local fixes after confirmation
 stax validate                  # Validate stack metadata
@@ -375,8 +376,8 @@ stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while ref
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
 stax refresh --verbose              # Show detailed sync/restack/submit timings
-# `stax update` remains a back-compat alias for `stax refresh`.
 # refresh inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
+# `stax update` is a separate top-level command: it upgrades the CLI (see `stax cli upgrade`), then offers to refresh installed AI agent skill files.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
@@ -582,6 +583,7 @@ stax auth --from-gh                # Import from gh auth token
 stax auth status                   # Show active auth source
 stax config                        # Print config location + values
 stax cli upgrade                   # Upgrade using the detected install method, then refresh shell setup
+stax update                        # Upgrade the CLI, then offer to refresh installed AI agent skill files
 stax doctor                        # Repo/config health checks (also reports stale skill files)
 stax doctor --fix                  # Confirm once to set recommended git config and update stale installed skills
 stax demo                          # Interactive tutorial
@@ -636,7 +638,6 @@ stax merge --stack --when-ready    # GitHub/GitLab stack merge: selected tip CI 
 
 ```bash
 stax refresh
-# `stax update` is a back-compat alias for `stax refresh`.
 ```
 
 ### Resolve Rebase Conflicts
