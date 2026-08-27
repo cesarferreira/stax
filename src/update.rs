@@ -147,11 +147,12 @@ pub fn show_update_notification() {
         let install_method = detect_install_method();
         eprintln!();
         eprintln!(
-            "{} {} → {} {}",
+            "{} {} → {} — run {} to upgrade {}",
             "A new version of stax is available:".yellow(),
             PKG_VERSION.dimmed(),
             new_version.to_string().green().bold(),
-            format!("({})", install_method.upgrade_command()).dimmed()
+            "`st update`".cyan(),
+            format!("(uses: {})", install_method.upgrade_command()).dimmed()
         );
     }
 }
