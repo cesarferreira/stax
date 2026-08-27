@@ -603,6 +603,15 @@ errors.
 
 ## Common Workflows
 
+### Create a PR for the Current Work
+
+1. Inspect `git status`, the current branch diff, `stax ll`, and repository instructions. Confirm the work belongs on the current branch and identify its stacked parent.
+2. Run the repository-prescribed checks for the changed behavior before submitting. Commit outstanding changes appropriately with stax; do not hide unrelated work in the commit.
+3. Submit only the current branch. For a new PR or an existing draft PR, run `stax branch submit --draft --ai --yes`. For an existing ready PR, run `stax branch submit --ai --yes` to preserve its ready-for-review state. Remember: plain `stax submit` submits the full stack.
+4. Validate the resulting PR URL, base branch, and draft/ready state with `stax ll`; inspect the generated description with `stax pr body`; optionally check remote status with `stax ci`.
+
+`--yes` accepts the AI-generated PR details; it does not waive repository verification. Never undraft or merge without explicit approval.
+
 ### Start a New Feature Stack
 
 ```bash
