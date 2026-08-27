@@ -13,6 +13,23 @@ fn resolve_repo_root(path: Option<PathBuf>) -> Result<PathBuf> {
         Some(p) => p,
         None => std::env::current_dir().context("Failed to resolve current directory")?,
     };
-    path.canonicalize()
-        .with_context(|| format!("Failed to canonicalize path '{}'", path.display()))
+    let repo = git2::Repository::discover(&path).with_context(|| {
+        format!(
+            "Failed to discover git repository from '{}'",
+            path.display()
+        )
+    })?;
+    let workdir = repo.workdir().with_context(|| {
+        format!(
+            "Git repository discovered from '{}' has no working directory",
+            path.display()
+        )
+    })?;
+    workdir.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize git repository root '{}' discovered from '{}'",
+            workdir.display(),
+            path.display()
+        )
+    })
 }

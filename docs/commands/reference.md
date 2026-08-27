@@ -426,8 +426,8 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 
 ### `st web`
 
-- `st web` starts the localhost HTMX workspace for the current directory and opens it in the browser.
-- `st web <path>` opens an explicit repository path.
+- `st web` discovers the enclosing Git worktree from the current directory, starts its localhost HTMX workspace, and opens it in the browser.
+- `st web <path>` accepts a repository or any path inside one and opens the enclosing worktree.
 - `st web --port <n>` binds on a specific port (default 8787). `--port 0` picks an ephemeral port. If the requested port is busy, stax warns and uses a free OS-selected port.
 - `st web --no-open` starts the server and prints the URL without opening the browser.
 - Binds **127.0.0.1 only**; no `--host` flag is available.

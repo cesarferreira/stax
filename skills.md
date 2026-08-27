@@ -166,10 +166,11 @@ stax web                          # Start on 127.0.0.1:8787 and open browser
 stax web --port 9000              # Custom port (falls back to a free OS port if busy)
 stax web --port 0                 # Ephemeral port
 stax web --no-open                # Print URL only; don't open browser
-stax web /path/to/repo            # Open a specific repository
+stax web /path/inside/repo        # Discover and open a specific worktree
 ```
 
 Key properties:
+- Discovers the enclosing Git worktree root from the current directory or any explicit path inside it
 - GitKraken-inspired layout: grouped toolbar, stack graph table (topology + ahead/behind + PR chips), file-list + patch Changes panel, Details inspector, status bar
 - Binds **127.0.0.1 only** — never reachable from the network; no `--host` flag
 - Unguessable 48-hex session token in every URL: `/s/<token>/…`

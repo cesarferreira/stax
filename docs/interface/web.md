@@ -10,14 +10,16 @@
 st web            # opens port 8787, or warns and uses a free port if busy
 st web --port 0   # ephemeral port (chosen by OS)
 st web --no-open  # start without opening browser; prints URL
-st web /path/to/repo  # open a specific repository
+st web /path/inside/repo  # discover and open a specific worktree
 ```
+
+The current directory or explicit `[PATH]` may be anywhere inside a Git worktree. Stax discovers the enclosing worktree root before starting the server.
 
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `[PATH]` | current directory | Repository to open |
+| `[PATH]` | current directory | Repository or path inside one to open |
 | `--port <N>` | `8787` | Port to bind. `0` picks an ephemeral port. If the port is busy, stax warns and uses a free OS-selected port. |
 | `--no-open` | false | Skip opening the browser; just print the URL. |
 
