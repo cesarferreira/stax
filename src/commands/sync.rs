@@ -2216,7 +2216,12 @@ impl SyncContext {
                     .tx
                     .take()
                     .context("sync transaction was already finished")?;
-                tx.plan_branches(repo, &restack_scope_order)?;
+                for branch in &restack_scope_order {
+                    tx.plan_branch(repo, branch)?;
+                    if branch != &self.stack.trunk {
+                        tx.plan_metadata_ref(repo, branch)?;
+                    }
+                }
                 let restack_count = branches_to_restack.len();
                 let summary = PlanSummary {
                     branches_to_rebase: restack_count,
@@ -2328,6 +2333,11 @@ impl SyncContext {
 
                             // Record after-OID
                             tx.record_after(repo, branch)?;
+                            let meta_after = resolve_ref_oid(
+                                &self.workdir,
+                                &format!("refs/branch-metadata/{}", branch),
+                            );
+                            tx.record_known_metadata_after(branch, meta_after.as_deref());
                             tx.push_completed_branch(branch);
 
                             if self.verbose {

@@ -17,6 +17,23 @@ fn read_parent_branch(repo: &TestRepo, branch: &str) -> String {
         .to_string()
 }
 
+/// Helper: read the parentBranchRevision from stax metadata for `branch`.
+fn read_parent_revision(repo: &TestRepo, branch: &str) -> String {
+    let metadata_ref = format!("refs/branch-metadata/{}", branch);
+    let out = repo.git(&["show", &metadata_ref]);
+    assert!(
+        out.status.success(),
+        "failed to read metadata for {branch}: {}",
+        TestRepo::stderr(&out)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&out)).expect("invalid metadata JSON");
+    json["parentBranchRevision"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Helper: resolve a local ref to its SHA via git rev-parse (returns None if the ref doesn't
 /// exist).
 fn resolve_ref(repo: &TestRepo, refname: &str) -> Option<String> {
@@ -464,5 +481,181 @@ fn sync_restack_undo_rolls_back_trunk_fast_forward() {
     assert!(
         branch_exists(&repo, &feature),
         "feature branch should still exist after undo"
+    );
+}
+
+// ─── Test 7 ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn sync_restack_conflict_undo_restores_branch_metadata() {
+    // Regression test: sync's restack phase only snapshotted branch heads, not
+    // branch-metadata refs. When a later branch in the restack scope hit a
+    // conflict and sync stopped, undo restored earlier branches' commits but
+    // left their rewritten parentBranchRevision in place.
+    let repo = TestRepo::new_with_remote();
+
+    // Build stack: main → branch-a → branch-b.
+    repo.run_stax(&["bc", "branch-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a");
+    repo.commit("Branch A commit");
+
+    repo.run_stax(&["bc", "branch-b"]);
+    repo.create_file("shared.txt", "from branch b");
+    repo.commit("Branch B commit");
+
+    let main_sha_before = repo.get_commit_sha("main");
+    let a_sha_before = repo.get_commit_sha(&branch_a);
+    let a_parent_rev_before = read_parent_revision(&repo, &branch_a);
+    assert_eq!(
+        a_parent_rev_before, main_sha_before,
+        "branch-a's recorded parent revision should be main's sha before sync"
+    );
+
+    // Advance remote main with a conflicting change to shared.txt, so branch-b's
+    // rebase conflicts while branch-a's does not.
+    repo.simulate_remote_commit(
+        "shared.txt",
+        "from remote main",
+        "Remote conflicting commit",
+    );
+
+    let sync_out = repo.run_stax(&["sync", "--force", "--restack"]);
+    assert!(
+        !sync_out.status.success(),
+        "sync should stop on the branch-b conflict"
+    );
+
+    assert_ne!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_before,
+        "sync should have rewritten branch-a's metadata before hitting the conflict"
+    );
+
+    repo.abort_rebase();
+
+    let undo_out = repo.run_stax(&["undo", "--yes", "--no-push"]);
+    assert!(
+        undo_out.status.success(),
+        "undo failed: {}",
+        TestRepo::stderr(&undo_out)
+    );
+
+    assert_eq!(
+        repo.get_commit_sha(&branch_a),
+        a_sha_before,
+        "undo should restore branch-a to its pre-sync commit"
+    );
+    assert_eq!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_before,
+        "undo should restore branch-a's metadata to its pre-sync parent revision"
+    );
+    assert_eq!(
+        repo.get_commit_sha("main"),
+        main_sha_before,
+        "undo should restore main to its pre-sync sha"
+    );
+
+    // A *failed* sync's receipt cannot be redone (can_redo() requires
+    // OpStatus::Success) — there is no coherent "completed" state to replay
+    // back to. Confirm that's still rejected cleanly rather than silently
+    // reapplying a half-finished restack.
+    let redo_out = repo.run_stax(&["redo", "--yes", "--no-push"]);
+    assert!(
+        !redo_out.status.success(),
+        "redo of a failed sync's receipt should be rejected, not silently reapplied"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&branch_a),
+        a_sha_before,
+        "rejected redo must leave branch-a exactly where undo left it"
+    );
+}
+
+// ─── Test 8 ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn sync_restack_success_undo_then_redo_round_trips_branch_metadata() {
+    // Companion to sync_restack_conflict_undo_restores_branch_metadata: that test
+    // covers the undo direction after a *failed* restack. This test covers a
+    // *successful* restack, where the receipt's after-OIDs for the metadata ref
+    // must also be recorded so redo can replay the branch head and its rewritten
+    // parentBranchRevision back together.
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "branch-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a");
+    repo.commit("Branch A commit");
+
+    let main_sha_before = repo.get_commit_sha("main");
+    let a_sha_before = repo.get_commit_sha(&branch_a);
+    let a_parent_rev_before = read_parent_revision(&repo, &branch_a);
+    assert_eq!(
+        a_parent_rev_before, main_sha_before,
+        "branch-a's recorded parent revision should be main's sha before sync"
+    );
+
+    // Advance remote main with an unrelated file so branch-a's rebase succeeds
+    // cleanly (no conflict).
+    repo.simulate_remote_commit("remote.txt", "remote", "Remote commit for restack");
+
+    let sync_out = repo.run_stax(&["sync", "--force", "--restack"]);
+    assert!(
+        sync_out.status.success(),
+        "sync --force --restack failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+
+    let main_sha_after_sync = repo.get_commit_sha("main");
+    let a_sha_after_sync = repo.get_commit_sha(&branch_a);
+    let a_parent_rev_after_sync = read_parent_revision(&repo, &branch_a);
+    assert_ne!(
+        a_sha_after_sync, a_sha_before,
+        "sync should have rebased branch-a onto the new main"
+    );
+    assert_eq!(
+        a_parent_rev_after_sync, main_sha_after_sync,
+        "sync should have rewritten branch-a's parent revision to the new main sha"
+    );
+
+    let undo_out = repo.run_stax(&["undo", "--yes", "--no-push"]);
+    assert!(
+        undo_out.status.success(),
+        "undo failed: {}",
+        TestRepo::stderr(&undo_out)
+    );
+    assert_eq!(
+        repo.get_commit_sha(&branch_a),
+        a_sha_before,
+        "undo should restore branch-a to its pre-sync commit"
+    );
+    assert_eq!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_before,
+        "undo should restore branch-a's metadata to its pre-sync parent revision"
+    );
+
+    let redo_out = repo.run_stax(&["redo", "--yes", "--no-push"]);
+    assert!(
+        redo_out.status.success(),
+        "redo failed: {}",
+        TestRepo::stderr(&redo_out)
+    );
+    assert_eq!(
+        repo.get_commit_sha(&branch_a),
+        a_sha_after_sync,
+        "redo should re-apply branch-a's restacked commit"
+    );
+    assert_eq!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_after_sync,
+        "redo should re-apply branch-a's rewritten parent revision alongside its commit"
+    );
+    assert_eq!(
+        repo.get_commit_sha("main"),
+        main_sha_after_sync,
+        "redo should re-advance trunk to the post-sync sha"
     );
 }

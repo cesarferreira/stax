@@ -93,15 +93,56 @@ impl BranchMetadata {
         Ok(Self::read(repo, branch)?.is_some_and(|metadata| metadata.frozen))
     }
 
-    /// Check if the branch needs restacking (parent has moved)
-    pub fn needs_restack(&self, repo: &Repository) -> Result<bool> {
+    /// Check if the branch needs restacking (parent has moved).
+    ///
+    /// The recorded `parent_branch_revision` can be a lie: an interrupted restack may have
+    /// written the new base before being rolled back, leaving a SHA that no longer sits under
+    /// the branch's tip. A bare SHA comparison would then report the branch clean forever, so
+    /// when the SHAs match we additionally verify the recorded base is still reachable from the
+    /// branch head.
+    pub fn needs_restack(&self, repo: &Repository, branch: &str) -> Result<bool> {
         if self.source_remote.is_some() {
             return Ok(false);
         }
 
         let parent_ref = repo.find_branch(&self.parent_branch_name, git2::BranchType::Local)?;
         let current_parent_rev = parent_ref.get().peel_to_commit()?.id().to_string();
-        Ok(current_parent_rev != self.parent_branch_revision)
+        if current_parent_rev != self.parent_branch_revision {
+            return Ok(true);
+        }
+
+        Ok(!Self::recorded_base_is_reachable(
+            repo,
+            branch,
+            &self.parent_branch_revision,
+        ))
+    }
+
+    /// Whether `revision` is reachable from `branch`'s tip.
+    ///
+    /// Conservative: any lookup failure (unknown branch, unparsable or missing revision)
+    /// returns `true` so unrelated repo problems never surface as a spurious "needs restack".
+    fn recorded_base_is_reachable(repo: &Repository, branch: &str, revision: &str) -> bool {
+        let Ok(base_oid) = git2::Oid::from_str(revision) else {
+            return true;
+        };
+        let Ok(branch_ref) = repo.find_branch(branch, git2::BranchType::Local) else {
+            return true;
+        };
+        let Ok(branch_oid) = branch_ref.get().peel_to_commit().map(|commit| commit.id()) else {
+            return true;
+        };
+        if branch_oid == base_oid {
+            return true;
+        }
+        if repo
+            .graph_descendant_of(base_oid, branch_oid)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        repo.graph_descendant_of(branch_oid, base_oid)
+            .unwrap_or(true)
     }
 }
 
@@ -181,5 +222,98 @@ mod tests {
         let meta: BranchMetadata = serde_json::from_str(freephite_json).unwrap();
         assert_eq!(meta.parent_branch_name, "main");
         assert_eq!(meta.parent_branch_revision, "deadbeef1234567890");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod git_tests {
+    use super::*;
+    use std::process::Command;
+
+    /// Sets up a repo with `main` at c1, `feature` branched off c1 with its own
+    /// commit, then advances `main` to c2. Returns `(tempdir, repo, c2)`; the
+    /// tempdir must be kept alive for the duration of the test.
+    fn repo_with_feature_branch_and_advanced_main() -> (tempfile::TempDir, git2::Repository, String)
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "c1").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "c1"]);
+        run(&["branch", "feature"]);
+
+        run(&["checkout", "feature"]);
+        std::fs::write(path.join("feature.txt"), "on feature").unwrap();
+        run(&["add", "feature.txt"]);
+        run(&["commit", "-m", "feature commit"]);
+
+        run(&["checkout", "main"]);
+        std::fs::write(path.join("f.txt"), "c2").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "c2"]);
+
+        let output = Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(path)
+            .output()
+            .expect("git");
+        let c2 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        let repo = git2::Repository::open(path).unwrap();
+        (dir, repo, c2)
+    }
+
+    #[test]
+    fn needs_restack_detects_a_recorded_parent_revision_that_is_not_an_ancestor() {
+        let (_dir, repo, c2) = repo_with_feature_branch_and_advanced_main();
+
+        // The lie: SHAs match the parent tip, but c2 is not reachable from feature.
+        let meta = BranchMetadata::new("main", &c2);
+
+        assert!(meta.needs_restack(&repo, "feature").unwrap());
+    }
+
+    #[test]
+    fn needs_restack_is_false_when_the_branch_sits_on_the_recorded_parent_tip() {
+        let (_dir, repo, c2) = repo_with_feature_branch_and_advanced_main();
+        let path = repo.workdir().unwrap().to_path_buf();
+
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run(&["checkout", "feature"]);
+        run(&["rebase", "main"]);
+
+        let meta = BranchMetadata::new("main", &c2);
+
+        assert!(!meta.needs_restack(&repo, "feature").unwrap());
     }
 }
