@@ -46,7 +46,9 @@ impl Stack {
             }
 
             if let Some(meta) = BranchMetadata::read(repo.inner(), branch_name)? {
-                let needs_restack = meta.needs_restack(repo.inner()).unwrap_or(false);
+                let needs_restack = meta
+                    .needs_restack(repo.inner(), branch_name)
+                    .unwrap_or(false);
                 branches.insert(
                     branch_name.clone(),
                     StackBranch {
