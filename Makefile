@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
+.PHONY: build build-release release ensure-git-cliff ensure-cargo-release install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -26,7 +26,7 @@ build-release:
 	cargo build --release
 
 # Publish a new release (usage: make release or make release LEVEL=patch)
-release: ensure-git-cliff
+release: ensure-git-cliff ensure-cargo-release
 	cargo release $(LEVEL) --execute --no-confirm
 
 # Ensure git-cliff (changelog generator, used by cargo-release's pre-release hook)
@@ -35,6 +35,14 @@ ensure-git-cliff:
 	@command -v git-cliff >/dev/null 2>&1 || { \
 		echo "git-cliff not found; installing v$(GIT_CLIFF_VERSION) via cargo..."; \
 		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked; \
+	}
+
+# Ensure cargo-release (the `cargo release` subcommand that drives version bump,
+# tag, and push) is available, so releasing does not require a manual install.
+ensure-cargo-release:
+	@command -v cargo-release >/dev/null 2>&1 || { \
+		echo "cargo-release not found; installing via cargo..."; \
+		cargo install cargo-release --locked; \
 	}
 
 # Install to ~/.cargo/bin
