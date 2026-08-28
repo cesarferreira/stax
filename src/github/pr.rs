@@ -842,6 +842,16 @@ impl GitHubClient {
         Ok(())
     }
 
+    pub async fn remove_label(&self, number: u64, label: &str) -> Result<()> {
+        self.record_api_call("issues.remove_label");
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .remove_label(number, label)
+            .await
+            .context("Failed to remove label")?;
+        Ok(())
+    }
+
     pub async fn add_assignees(&self, pr_number: u64, assignees: &[String]) -> Result<()> {
         if assignees.is_empty() {
             return Ok(());

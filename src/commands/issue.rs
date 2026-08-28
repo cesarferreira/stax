@@ -33,7 +33,7 @@ pub fn run_list(limit: u8, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn print_issue_table(repo_label: &str, issues: &[RepoIssueListItem]) {
+pub(crate) fn print_issue_table(repo_label: &str, issues: &[RepoIssueListItem]) {
     let updated_strings: Vec<String> = issues
         .iter()
         .map(|issue| format_relative_time(issue.updated_at))

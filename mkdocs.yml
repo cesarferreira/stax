@@ -60,6 +60,7 @@ nav:
       - Multiple Stacks: concepts/multiple-stacks.md
   - Interface:
       - Interactive TUI: interface/tui.md
+      - Repository board dashboard: interface/board.md
       - Localhost web workspace: interface/web.md
   - Commands:
       - Core Commands: commands/core.md

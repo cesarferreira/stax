@@ -200,6 +200,21 @@ impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BoardTabArg {
+    Prs,
+    Issues,
+}
+
+impl From<BoardTabArg> for commands::board::BoardTabSelection {
+    fn from(value: BoardTabArg) -> Self {
+        match value {
+            BoardTabArg::Prs => commands::board::BoardTabSelection::PullRequests,
+            BoardTabArg::Issues => commands::board::BoardTabSelection::Issues,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum StandupSummaryStyle {
     Spoken,
@@ -454,7 +469,7 @@ pub(crate) enum Commands {
         /// Deprecated no-op, accepted for compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
-        /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
+        /// Fetch all remote branches and tags with `--prune` (slower; default is trunk-only fetch + ls-remote)
         #[arg(long)]
         full: bool,
         /// Don't delete merged branches
@@ -861,6 +876,23 @@ pub(crate) enum Commands {
         /// Auto-refresh interval in seconds for the interactive TUI (default: 15)
         #[arg(long, default_value = "15")]
         interval: u64,
+    },
+
+    /// Interactive dashboard of open pull requests and issues for this repository
+    #[command(visible_alias = "home")]
+    Board {
+        /// Maximum number of pull requests / issues to list (max: 100)
+        #[arg(long, default_value_t = DEFAULT_GITHUB_LIST_LIMIT, value_parser = clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        /// Tab to open on launch
+        #[arg(long, value_enum, default_value_t = BoardTabArg::Prs)]
+        tab: BoardTabArg,
+        /// Auto-refresh interval in seconds for the interactive TUI (default: 60)
+        #[arg(long, default_value = "60")]
+        interval: u64,
+        /// Render static tables instead of the interactive dashboard
+        #[arg(long)]
+        plain: bool,
     },
 
     /// Browse open issues in the current repository
@@ -1902,6 +1934,7 @@ impl Commands {
             | Commands::Ll { .. }
             | Commands::Log { .. }
             | Commands::Ready { .. }
+            | Commands::Board { .. }
             | Commands::Ci { .. }
             | Commands::Watch { .. }
             | Commands::Diff { .. }

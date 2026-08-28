@@ -564,6 +564,24 @@ pub fn run() -> Result<()> {
             plain,
             interval,
         ),
+        Commands::Board {
+            limit,
+            tab,
+            interval,
+            plain,
+        } => {
+            let interactive = check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
+            if plain || !interactive.available {
+                print_interactive_fallback(
+                    interactive.reason.as_deref(),
+                    "board dashboard",
+                    "printing static PR and issue tables",
+                );
+                commands::board::run_plain(limit)
+            } else {
+                commands::board::run_tui(limit, tab.into(), interval)
+            }
+        }
         Commands::Issue { command } => match command {
             Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
             None => print_subcommand_help("issue"),

@@ -164,6 +164,7 @@ when it points at the same commit. `--all` conflicts with `--parent` and
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
 | `st pr list --ready` | Interactive PR readiness TUI for unmerged tracked PRs; remotely merged PRs disappear on live refresh (`--current`/`--stack` limits to the current stack, `--plain` for a static table) |
 | `st ready` | Same as `st pr list --ready` — interactive TUI with CI, review approval, and merge state; filtering merged PRs does not clean up local branches (`--current`, `--stack`, `--all`, `--plain`, `--json`, `--interval`) |
+| `st board` / `st home` | Interactive repository dashboard — PULL REQUESTS / ISSUES tabs, a detail pane (branch, files/+/−, CI checks, labels, body, comment count), inline diff and comment viewers, label add/remove, draft toggle, and confirm-then-merge (squash, API-only). GitHub only — errors on other forges. `--limit`, `--tab prs\|issues`, `--interval` (default 60s), `--plain` for static PR/issue tables |
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
 | `st draft --stack` | Mark every PR in the current stack as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |

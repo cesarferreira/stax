@@ -7,7 +7,7 @@ use std::process::Command;
 use crate::remote::ForgeType;
 
 /// Main config (safe to commit to dotfiles)
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub branch: BranchConfig,
@@ -33,10 +33,33 @@ pub struct Config {
     pub restack: RestackConfig,
     #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub board: BoardConfig,
+}
+
+/// Preferences for the `stax board` dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardConfig {
+    /// Show only PRs/issues authored by the current user by default.
+    /// Toggled at runtime with `a`; the choice is persisted here.
+    #[serde(default = "default_board_mine_only")]
+    pub mine_only: bool,
+}
+
+impl Default for BoardConfig {
+    fn default() -> Self {
+        Self {
+            mine_only: default_board_mine_only(),
+        }
+    }
+}
+
+fn default_board_mine_only() -> bool {
+    true
 }
 
 /// Which agent harnesses receive stax skill files.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillsConfig {
     /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`).
     /// Unset = auto (detected harnesses plus any that already have a skill file).
@@ -57,7 +80,7 @@ struct TrustedNetworkRepoRemoteConfig {
 }
 
 /// User-configurable restack behaviour.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestackConfig {
     /// Automatically use `merge-base(parent, branch)` as the rebase boundary
     /// when the stored `parentBranchRevision` would replay a much larger range
@@ -80,7 +103,7 @@ impl Default for RestackConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchConfig {
     /// Prefix for new branches (e.g., "cesar/")
     /// DEPRECATED: Use `format` instead. Kept for backward compatibility.
@@ -113,7 +136,7 @@ pub struct BranchConfig {
     pub stale_days: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
     /// Git remote name (default: "origin")
     #[serde(default = "default_remote_name")]
@@ -159,7 +182,7 @@ pub struct SubmitConfig {
     pub single_stack: SingleStackMode,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CiConfig {
     /// Play a sound when `stax ci --watch` exits after CI completion.
     #[serde(default)]
@@ -207,14 +230,14 @@ pub enum SingleStackMode {
     Off,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
     /// Whether to show contextual tips/suggestions (default: true)
     #[serde(default = "default_tips")]
     pub tips: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     /// Linked-worktree marker in stack views: "auto", "tree" (Nerd Font), or "wt" (ASCII).
     #[serde(default = "default_worktree_glyph")]
@@ -245,7 +268,7 @@ pub struct AiFeatureConfig {
     pub body: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     /// AI agent to use: "claude", "codex", "gemini", "opencode", or "pi" (default: auto-detect)
     #[serde(default)]
@@ -319,7 +342,7 @@ impl AiConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Whether to use `gh auth token` as a fallback auth source (default: true)
     #[serde(default = "default_use_gh_cli")]
@@ -332,7 +355,7 @@ pub struct AuthConfig {
     pub gh_hostname: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeConfig {
     /// Directory for stax-managed worktrees. Relative paths resolve from the main
     /// checkout. Empty means the default external root: ~/.stax/worktrees/<repo>.
@@ -354,7 +377,7 @@ pub struct WorktreeConfig {
     pub hooks: WorktreeHooksConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorktreeHooksConfig {
     /// Blocking hook run after creating a worktree and before launch
     #[serde(default)]
@@ -385,7 +408,7 @@ impl Default for WorktreeConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitConfig {
     /// Auto-enable git rerere on init (default: true)
     #[serde(default = "default_true")]
@@ -709,6 +732,14 @@ impl Config {
         let path = Self::path()?;
         let mut config = Self::load_path_or_default(&path)?;
         config.skills.harnesses = Some(harnesses.to_vec());
+        config.save()
+    }
+
+    /// Persist the `stax board` "mine only" preference (global config only).
+    pub fn set_board_mine_only(mine_only: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.board.mine_only = mine_only;
         config.save()
     }
 
