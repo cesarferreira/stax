@@ -454,7 +454,7 @@ pub(crate) enum Commands {
         /// Deprecated no-op, accepted for compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
-        /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
+        /// Fetch all remote branches and tags with `--prune` (slower; default is trunk-only fetch + ls-remote)
         #[arg(long)]
         full: bool,
         /// Don't delete merged branches
