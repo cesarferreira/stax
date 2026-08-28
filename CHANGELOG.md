@@ -2,11 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.108.0] - 2026-08-28
+
+### 🚀 Features
+
+- *(cli)* Repurpose `st update` as CLI upgrade + skills-update proposal ([#812](https://github.com/cesarferreira/stax/issues/812))
+- *(cli)* Add r alias for refresh ([#816](https://github.com/cesarferreira/stax/issues/816))
+- *(branch)* Track all local branches ([#821](https://github.com/cesarferreira/stax/issues/821))
+
+### 🐛 Bug Fixes
+
+- *(gitlab)* Include head SHA when merging ([#820](https://github.com/cesarferreira/stax/issues/820))
+- Fix st web linux tests
+- *(sync)* Snapshot branch metadata in restack transaction, harden needs_restack ([#826](https://github.com/cesarferreira/stax/issues/826))
+- *(release)* Auto-install cargo-release like git-cliff ([#829](https://github.com/cesarferreira/stax/issues/829))
+
+### 💼 Other
+
+- Let `st web` open any path inside a Git worktree ([#817](https://github.com/cesarferreira/stax/issues/817))
+- Add resizable stack pane and safe web sync ([#823](https://github.com/cesarferreira/stax/issues/823))
+
+### 🚜 Refactor
+
+- *(cli)* Remove the now-redundant `st cli upgrade` subcommand ([#815](https://github.com/cesarferreira/stax/issues/815))
+
+### 🧪 Testing
+
+- Cover multi-branch undo and cross-phase metadata idempotency ([#827](https://github.com/cesarferreira/stax/issues/827))
 ## [0.107.1] - 2026-08-27
 
 ### 🐛 Bug Fixes
 
 - *(gitlab)* Retry transient MR source race ([#814](https://github.com/cesarferreira/stax/issues/814))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.107.0] - 2026-08-27
 
 ### 🚀 Features
