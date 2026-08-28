@@ -717,6 +717,70 @@ mod tests {
     }
 
     #[test]
+    fn plan_metadata_ref_across_two_phases_keeps_the_earliest_before_oid() {
+        // sync runs multiple phases against the same transaction (e.g. a
+        // deletion/reparent phase followed by a restack phase). If both
+        // phases touch the same branch's metadata ref, plan_metadata_ref's
+        // second call must be a no-op that preserves the FIRST phase's
+        // before-OID -- otherwise undo would only roll back to the
+        // intermediate state written by the first phase, not the true
+        // pre-operation state.
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"original\"}").unwrap();
+        let original_oid =
+            refs::metadata_ref_oid(repo.inner(), "branch-a").expect("original metadata oid");
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        // Phase 1 (e.g. deletion/reparent) plans and then mutates the ref.
+        tx.plan_metadata_ref(&repo, "branch-a").unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"after_phase_one\"}").unwrap();
+
+        // Phase 2 (restack) plans the SAME branch again before its own mutation.
+        tx.plan_metadata_ref(&repo, "branch-a").unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"after_phase_two\"}").unwrap();
+
+        let entries: Vec<_> = tx
+            .receipt
+            .local_refs
+            .iter()
+            .filter(|e| e.branch == "branch-a@meta")
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the two plan_metadata_ref calls must fold into a single receipt entry"
+        );
+
+        // The receipt's before-OID must be the ref's state prior to EITHER
+        // phase, not the intermediate state phase 1 left behind.
+        assert_eq!(
+            entries[0].oid_before.as_deref(),
+            Some(original_oid.as_str())
+        );
+    }
+
+    #[test]
     fn record_known_after_records_deletion_as_none() {
         let temp = tempfile::tempdir().unwrap();
         let mut receipt = OpReceipt::new(

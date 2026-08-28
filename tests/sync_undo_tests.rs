@@ -659,3 +659,104 @@ fn sync_restack_success_undo_then_redo_round_trips_branch_metadata() {
         "redo should re-advance trunk to the post-sync sha"
     );
 }
+
+// ─── Test 9 ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn sync_restack_conflict_undo_restores_metadata_for_every_successful_branch_in_a_three_branch_stack()
+ {
+    // Extends sync_restack_conflict_undo_restores_branch_metadata to a 3-branch
+    // stack (main -> branch-a -> branch-b -> branch-c), where the two bottom
+    // branches restack successfully before the top one conflicts. Undo must
+    // restore BOTH branch-a's and branch-b's commit + metadata, not just the
+    // bottommost one.
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "branch-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a");
+    repo.commit("Branch A commit");
+
+    repo.run_stax(&["bc", "branch-b"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("b.txt", "b");
+    repo.commit("Branch B commit");
+
+    repo.run_stax(&["bc", "branch-c"]);
+    repo.create_file("shared.txt", "from branch c");
+    repo.commit("Branch C commit");
+
+    let main_sha_before = repo.get_commit_sha("main");
+    let a_sha_before = repo.get_commit_sha(&branch_a);
+    let a_parent_rev_before = read_parent_revision(&repo, &branch_a);
+    let b_sha_before = repo.get_commit_sha(&branch_b);
+    let b_parent_rev_before = read_parent_revision(&repo, &branch_b);
+    assert_eq!(
+        a_parent_rev_before, main_sha_before,
+        "branch-a's recorded parent revision should be main's sha before sync"
+    );
+    assert_eq!(
+        b_parent_rev_before, a_sha_before,
+        "branch-b's recorded parent revision should be branch-a's sha before sync"
+    );
+
+    // Advance remote main with a conflicting change to shared.txt, so
+    // branch-c's rebase conflicts while branch-a's and branch-b's do not.
+    repo.simulate_remote_commit(
+        "shared.txt",
+        "from remote main",
+        "Remote conflicting commit",
+    );
+
+    let sync_out = repo.run_stax(&["sync", "--force", "--restack"]);
+    assert!(
+        !sync_out.status.success(),
+        "sync should stop on the branch-c conflict"
+    );
+
+    assert_ne!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_before,
+        "sync should have rewritten branch-a's metadata before hitting the conflict"
+    );
+    assert_ne!(
+        read_parent_revision(&repo, &branch_b),
+        b_parent_rev_before,
+        "sync should have rewritten branch-b's metadata before hitting the conflict"
+    );
+
+    repo.abort_rebase();
+
+    let undo_out = repo.run_stax(&["undo", "--yes", "--no-push"]);
+    assert!(
+        undo_out.status.success(),
+        "undo failed: {}",
+        TestRepo::stderr(&undo_out)
+    );
+
+    assert_eq!(
+        repo.get_commit_sha(&branch_a),
+        a_sha_before,
+        "undo should restore branch-a to its pre-sync commit"
+    );
+    assert_eq!(
+        read_parent_revision(&repo, &branch_a),
+        a_parent_rev_before,
+        "undo should restore branch-a's metadata to its pre-sync parent revision"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&branch_b),
+        b_sha_before,
+        "undo should restore branch-b to its pre-sync commit"
+    );
+    assert_eq!(
+        read_parent_revision(&repo, &branch_b),
+        b_parent_rev_before,
+        "undo should restore branch-b's metadata to its pre-sync parent revision"
+    );
+    assert_eq!(
+        repo.get_commit_sha("main"),
+        main_sha_before,
+        "undo should restore main to its pre-sync sha"
+    );
+}
