@@ -500,7 +500,7 @@ impl SyncContext {
     fn fetch_remote(&mut self, repo: &GitRepo) -> Result<()> {
         // 1. Fetch from remote
         // Default: trunk-only fetch + `ls-remote --heads` in parallel (fast on large repos).
-        // `--full`: classic `fetch --prune --no-tags` for all remote-tracking refs.
+        // `--full`: classic `fetch --prune` for all remote-tracking refs, tags included.
         let fetch_timer = LiveTimer::maybe_new(!self.quiet, &format!("Fetch {}", self.remote_name));
 
         let fetch_started_at = Instant::now();
@@ -522,8 +522,7 @@ impl SyncContext {
         );
 
         if self.full {
-            let fetch_args: Vec<&str> =
-                vec!["fetch", "--prune", "--no-tags", self.remote_name.as_str()];
+            let fetch_args: Vec<&str> = vec!["fetch", "--prune", self.remote_name.as_str()];
             output = Command::new("git")
                 .args(&fetch_args)
                 .current_dir(&self.workdir)

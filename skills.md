@@ -350,7 +350,7 @@ stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
 # Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
-stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
+stax sync --full                   # Fetch all remote branches and tags with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
