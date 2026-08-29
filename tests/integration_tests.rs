@@ -17414,6 +17414,111 @@ exit 1
         );
     }
 
+    /// Issue #830 (second write site): when a live PR base is reconciled to a
+    /// new parent whose *current* tip is not actually an ancestor of the
+    /// child (trunk has advanced independently, e.g. after a GitHub-side base
+    /// auto-retarget with no local rebase), `apply_live_pr_state` must not
+    /// stamp that tip as `parentBranchRevision` — it must keep the previously
+    /// recorded (still-valid) boundary and let restack compute the real one.
+    #[tokio::test]
+    async fn test_sync_pr_base_reconcile_does_not_poison_boundary_when_trunk_has_advanced() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        // main -> retarget-a -> retarget-b
+        let repo = setup_branch_with_remote(home.path(), "retarget-a");
+        let branch_a = repo.current_branch();
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "retarget-b"]);
+        assert!(output.status.success());
+        let branch_b = "retarget-b".to_string();
+        repo.create_file("child.txt", "child content");
+        repo.commit("Child commit");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push.status.success());
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 611, Some(false));
+
+        let recorded_boundary = repo.get_commit_sha(&branch_a);
+
+        // Advance trunk independently of the stack (B has not been rebased onto this).
+        let checkout_main = git_with_env(&repo, home.path(), &["checkout", "main"]);
+        assert!(checkout_main.status.success());
+        repo.create_file("trunk-advance.txt", "trunk moved on\n");
+        repo.commit("Advance trunk");
+        let push_main = git_with_env(&repo, home.path(), &["push", "origin", "main"]);
+        assert!(push_main.status.success());
+
+        // Simulate GitHub having retargeted B's PR base straight to main (e.g. after
+        // an intermediate branch was deleted) with no local rebase having happened.
+        let retargeted_pr = github_pull_fixture(611, &branch_b, "main", "aaaa");
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/611"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(retargeted_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Restack scope follows the checked-out branch's own stack.
+        let checkout_b = git_with_env(&repo, home.path(), &["checkout", &branch_b]);
+        assert!(checkout_b.status.success());
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--restack", "--force"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch_b);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(metadata_output.status.success());
+        let metadata: serde_json::Value =
+            serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+        assert_eq!(
+            metadata["parentBranchName"], "main",
+            "Expected parentBranchName reconciled to 'main', got: {}",
+            metadata["parentBranchName"]
+        );
+
+        let boundary = metadata["parentBranchRevision"]
+            .as_str()
+            .expect("parentBranchRevision missing")
+            .to_string();
+
+        // Core invariant (issue #830): whatever boundary is recorded must
+        // actually be in B's ancestry -- never the trunk tip B was never
+        // rebased onto.
+        let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_b]);
+        assert!(
+            ancestry_check.status.success(),
+            "Recorded boundary {} is not an ancestor of {} (issue #830)",
+            boundary,
+            branch_b
+        );
+
+        // Restack (which runs later in the same sync) should have picked up
+        // the mismatch between the recorded boundary and main's real tip and
+        // replayed only B's own commit onto the new trunk tip.
+        let trunk_sha = repo.get_commit_sha("main");
+        assert_eq!(
+            boundary, trunk_sha,
+            "Expected restack to advance the boundary to the real trunk tip"
+        );
+        let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
+        assert!(count_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&count_output.stdout).trim(),
+            "1",
+            "Expected B to carry only its own commit after restack"
+        );
+
+        // Sanity: the pre-reconciliation recorded boundary really was stale
+        // (main advanced past it), proving this scenario exercises the guard.
+        assert_ne!(recorded_boundary, trunk_sha);
+    }
+
     /// Verify that get_pr returns "MERGED" state (not "Closed") when GitHub
     /// reports a PR with merged_at set.
     #[tokio::test]

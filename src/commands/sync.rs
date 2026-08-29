@@ -3005,14 +3005,24 @@ fn apply_live_pr_state(
             let base_is_known =
                 live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
             if base_is_known {
-                // Update parent revision to the current tip of the new parent
-                if let Ok(parent_ref) = repo
+                // The new parent's tip is only a valid boundary if `branch_name` has
+                // actually moved onto it; a GitHub-side base retarget (e.g. after an
+                // intermediate branch is deleted) can flip `live_pr.base` with no local
+                // rebase having happened. Verify ancestry before trusting it, else keep
+                // the previously recorded (still-valid) boundary (see #830).
+                let new_parent_tip = repo
                     .inner()
                     .find_branch(&live_pr.base, git2::BranchType::Local)
-                    && let Ok(commit) = parent_ref.get().peel_to_commit()
-                {
-                    meta.parent_branch_revision = commit.id().to_string();
-                }
+                    .ok()
+                    .and_then(|r| r.get().peel_to_commit().ok())
+                    .map(|c| c.id().to_string());
+                meta.parent_branch_revision = resolve_child_parent_boundary(
+                    repo,
+                    branch_name,
+                    new_parent_tip.as_deref(),
+                    None,
+                    &meta.parent_branch_revision,
+                );
                 meta.parent_branch_name = live_pr.base.clone();
             }
         }
