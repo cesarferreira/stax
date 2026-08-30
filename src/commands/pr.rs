@@ -209,7 +209,7 @@ fn edit_body(body: &str) -> Result<String> {
     std::fs::read_to_string(&path).context("Failed to read edited PR body")
 }
 
-fn print_pr_table(repo_label: &str, prs: &[RepoPrListItem]) {
+pub(crate) fn print_pr_table(repo_label: &str, prs: &[RepoPrListItem]) {
     let branch_strings: Vec<String> = prs.iter().map(|pr| pr.head_branch.clone()).collect();
     let created_strings: Vec<String> = prs
         .iter()

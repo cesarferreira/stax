@@ -1,6 +1,7 @@
 pub mod abort;
 pub mod absorb;
 pub mod auth;
+pub mod board;
 pub mod branch;
 pub mod cascade;
 pub mod changelog;

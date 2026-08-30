@@ -24,6 +24,8 @@ mod application_operation_tests;
 mod application_session_tests;
 #[path = "auth_tests.rs"]
 mod auth_tests;
+#[path = "board_tests.rs"]
+mod board_tests;
 #[path = "changelog_tests.rs"]
 mod changelog_tests;
 #[path = "ci_tests.rs"]

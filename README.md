@@ -368,6 +368,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
+| `st board` / `st home` | Interactive repository dashboard (GitHub only) — PULL REQUESTS / ISSUES tabs with a detail pane, inline diff/comments, label editing, draft toggle, and API-only merge (`--limit`, `--tab`, `--interval`, `--plain` for static tables) |
 | `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack; GitHub statuses and check runs are fetched across all pages before roll-up |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
