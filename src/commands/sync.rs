@@ -1527,12 +1527,13 @@ impl SyncContext {
                                             BranchMetadata::read(repo.inner(), child)?
                                         {
                                             metadata.parent_branch_name = self.stack.trunk.clone();
-                                            metadata.parent_branch_revision =
-                                                resolve_child_parent_boundary(
-                                                    &repo,
+                                            metadata.parent_branch_revision = repo
+                                                .resolve_child_parent_boundary(
                                                     child,
-                                                    Some(trunk_tip.as_str()),
-                                                    merged_parent_tip.as_deref(),
+                                                    &[
+                                                        Some(trunk_tip.as_str()),
+                                                        merged_parent_tip.as_deref(),
+                                                    ],
                                                     &metadata.parent_branch_revision,
                                                 );
                                             metadata.write(repo.inner(), child)?;
@@ -3016,11 +3017,9 @@ fn apply_live_pr_state(
                     .ok()
                     .and_then(|r| r.get().peel_to_commit().ok())
                     .map(|c| c.id().to_string());
-                meta.parent_branch_revision = resolve_child_parent_boundary(
-                    repo,
+                meta.parent_branch_revision = repo.resolve_child_parent_boundary(
                     branch_name,
-                    new_parent_tip.as_deref(),
-                    None,
+                    &[new_parent_tip.as_deref()],
                     &meta.parent_branch_revision,
                 );
                 meta.parent_branch_name = live_pr.base.clone();
@@ -4210,32 +4209,6 @@ fn children_to_reparent(
         .collect()
 }
 
-/// Resolve the `parentBranchRevision` boundary to persist for `child` when it is
-/// moved off its old parent.
-///
-/// The stored boundary is what the next restack feeds to
-/// `git rebase --onto <parent> <boundary>`, so it MUST be a commit that is really
-/// in `child`'s ancestry. Stamping a commit the child is not based on (e.g. the
-/// trunk tip after a rebase that conflicted and never landed) makes the next
-/// restack replay the already-merged parent commits and conflict (see #830).
-///
-/// Candidates are tried in order; the first one genuinely in `child`'s ancestry
-/// wins, otherwise the recorded revision is preserved (see #120).
-fn resolve_child_parent_boundary(
-    repo: &GitRepo,
-    child: &str,
-    new_base: Option<&str>,
-    old_parent_tip: Option<&str>,
-    recorded_revision: &str,
-) -> String {
-    for candidate in [new_base, old_parent_tip].into_iter().flatten() {
-        if repo.is_ancestor(candidate, child).unwrap_or(false) {
-            return candidate.to_string();
-        }
-    }
-    recorded_revision.to_string()
-}
-
 fn reparent_children_for_deletion(
     repo: &GitRepo,
     stack_snapshot: &Stack,
@@ -4257,11 +4230,9 @@ fn reparent_children_for_deletion(
         // --onto <new> <old>` precisely. Only use the deleted branch's tip
         // when it is still in the child's ancestry; otherwise keep the
         // recorded revision (see #120).
-        let old_parent_boundary = resolve_child_parent_boundary(
-            repo,
+        let old_parent_boundary = repo.resolve_child_parent_boundary(
             child,
-            None,
-            doomed_tip.as_deref(),
+            &[doomed_tip.as_deref()],
             &child_meta.parent_branch_revision,
         );
 

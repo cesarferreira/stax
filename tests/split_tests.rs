@@ -255,6 +255,54 @@ fn test_split_file_extracts_matching_paths_into_new_parent_branch() {
     );
 }
 
+/// Issue #830: after `split --file`, the original branch's tip is amended
+/// in place (files removed) rather than rebased onto the newly created split
+/// branch -- its underlying commit chain never actually moves onto the new
+/// branch. The recorded `parentBranchRevision` must reflect that: either a
+/// real ancestor of the (amended) branch, or the previously recorded value.
+#[test]
+fn test_split_file_records_ancestry_valid_boundary_for_original_branch() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+    repo.run_stax(&["create", "boundary-feature"])
+        .assert_success();
+
+    repo.create_file("keep.txt", "keep");
+    repo.create_file("move.txt", "move");
+    repo.commit("add keep and move");
+
+    let feature_branch = repo.current_branch();
+    let metadata_ref = format!("refs/branch-metadata/{}", feature_branch);
+    let read_boundary = |repo: &TestRepo| -> String {
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(output.status.success());
+        let metadata: serde_json::Value = serde_json::from_str(&TestRepo::stdout(&output)).unwrap();
+        metadata["parentBranchRevision"]
+            .as_str()
+            .expect("parentBranchRevision missing")
+            .to_string()
+    };
+    let recorded_boundary = read_boundary(&repo);
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_success();
+
+    let boundary = read_boundary(&repo);
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &feature_branch]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {} (issue #830)",
+        boundary,
+        feature_branch
+    );
+    assert_eq!(
+        boundary, recorded_boundary,
+        "Expected the pre-existing boundary to be preserved -- the split branch's tip \
+         is never actually in the amended original branch's ancestry"
+    );
+}
+
 #[test]
 fn test_split_file_on_multi_commit_branch_fails() {
     let repo = TestRepo::new();
