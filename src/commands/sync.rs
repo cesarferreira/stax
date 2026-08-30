@@ -918,7 +918,16 @@ impl SyncContext {
         // Refresh live PR state before merged-branch detection so squash-merged PRs
         // (missed by `git branch --merged` when the remote branch still exists) are
         // visible via Method 2 on the first sync after merge.
-        if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(repo, &self.config, self.quiet) {
+        //
+        // The sync-wide transaction is threaded in so the metadata blobs this
+        // rewrites land in the op receipt (issue #835).
+        let refreshed = {
+            let Self {
+                config, quiet, tx, ..
+            } = self;
+            refresh_pr_draft_states(repo, config, *quiet, tx.as_mut())?
+        };
+        if let Some(pr_refresh_elapsed) = refreshed {
             self.step_timings
                 .push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
             self.stack = Stack::load(repo)?;
@@ -2858,7 +2867,13 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
             println!("Aborted.");
         }
         ctx.restore_stash(&repo)?;
-        ctx.tx = None;
+        // The PR-metadata refresh above may already have snapshotted metadata refs,
+        // so close the transaction rather than dropping it -- a dropped snapshotted
+        // transaction is persisted as Failed by `Transaction::drop`. `finish_transaction`
+        // is a no-op when nothing was snapshotted, preserving "cancelling leaves no
+        // receipt" (see the doc comment on `confirm_sync_plan`).
+        let current_after = ctx.current_after_deletions.clone();
+        ctx.finish_transaction(&current_after)?;
         return Ok(());
     }
 
@@ -2898,7 +2913,12 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 /// both branch metadata and CiCache. Called before merged-branch detection
 /// during sync so that operations like `gh pr ready`, `gh pr merge`, or
 /// `gh pr edit --base` are reflected in time for cleanup.
-fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Option<Duration> {
+fn refresh_pr_draft_states(
+    repo: &GitRepo,
+    config: &Config,
+    quiet: bool,
+    mut tx: Option<&mut Transaction>,
+) -> Result<Option<Duration>> {
     let started_at = Instant::now();
     let stack = match Stack::load(repo) {
         Ok(s) => s,
@@ -2906,7 +2926,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             if !quiet {
                 eprintln!("{}", stale_stack_warning("skipping PR metadata refresh", e));
             }
-            return None;
+            return Ok(None);
         }
     };
     let tracked_pr_branches: Vec<(String, u64)> = stack
@@ -2922,7 +2942,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         })
         .collect();
     if tracked_pr_branches.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let timer = LiveTimer::maybe_new(!quiet, "Refresh PR metadata");
@@ -2931,14 +2951,14 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         Ok(info) => info,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let _enter = rt.enter();
@@ -2946,14 +2966,14 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         Ok(c) => c,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let cache_dir = match repo.common_git_dir() {
         Ok(p) => p,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
 
@@ -2976,11 +2996,18 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             continue;
         };
 
-        apply_live_pr_state(repo, &stack, &cache_dir, &branch_name, &live_pr);
+        apply_live_pr_state(
+            repo,
+            &stack,
+            &cache_dir,
+            &branch_name,
+            &live_pr,
+            tx.as_deref_mut(),
+        )?;
     }
 
     LiveTimer::maybe_finish_timed(timer);
-    Some(started_at.elapsed())
+    Ok(Some(started_at.elapsed()))
 }
 
 fn apply_live_pr_state(
@@ -2989,11 +3016,13 @@ fn apply_live_pr_state(
     cache_dir: &Path,
     branch_name: &str,
     live_pr: &ForgePrInfo,
-) {
+    mut tx: Option<&mut Transaction>,
+) -> Result<()> {
     let pr_state = live_pr.state.to_uppercase();
 
     // Update branch metadata with fresh state, is_draft, and base
     if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
+        let before = meta.clone();
         if let Some(ref mut pr_info) = meta.pr_info {
             pr_info.is_draft = Some(live_pr.is_draft);
             pr_info.state = pr_state.clone();
@@ -3025,10 +3054,34 @@ fn apply_live_pr_state(
             }
         }
 
+        // Only snapshot when the refresh actually rewrites the blob. Metadata is
+        // content-addressed, so an unchanged rewrite leaves the ref OID untouched --
+        // snapshotting it would turn a no-op sync into an undoable receipt and break
+        // the lazy-snapshot guard in `finish_transaction` (see
+        // sync_undo_tests::sync_that_changes_nothing_leaves_the_previous_receipt_undoable).
+        let metadata_changed = meta != before;
+
+        if metadata_changed && let Some(tx) = tx.as_deref_mut() {
+            tx.plan_metadata_ref(repo, branch_name)?;
+            tx.snapshot()?;
+        }
+
         let _ = meta.write(repo.inner(), branch_name);
+
+        if metadata_changed && let Some(tx) = tx {
+            // Metadata refs are written by `git update-ref` (subprocess); libgit2's
+            // cached refdb may not see them, so resolve the after-OID the same way
+            // `cleanup_merged_branches` does (see `record_known_after`'s doc comment).
+            let meta_after = repo.workdir().ok().and_then(|workdir| {
+                resolve_ref_oid(workdir, &format!("refs/branch-metadata/{}", branch_name))
+            });
+            tx.record_known_metadata_after(branch_name, meta_after.as_deref());
+        }
     }
 
     let _ = CiCache::update_branch_pr(cache_dir, branch_name, Some(pr_state));
+
+    Ok(())
 }
 
 fn sync_fetch_refs(
@@ -5050,5 +5103,133 @@ mod tests {
         let msg = prune_deprecation_warning();
         assert!(msg.contains("--prune"), "must name --prune: {msg}");
         assert!(msg.contains("--full"), "must name --full: {msg}");
+    }
+
+    fn init_repo_with_two_branches(path: &std::path::Path) -> String {
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+        run(&["branch", "branch-b"]);
+
+        let output = Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(path)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn apply_live_pr_state_records_the_metadata_ref_in_the_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let main_oid = init_repo_with_two_branches(path);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        repo.set_trunk("main").unwrap();
+        BranchMetadata::new("branch-a", &main_oid)
+            .write(repo.inner(), "branch-b")
+            .unwrap();
+
+        let stack = Stack::load(&repo).unwrap();
+        let cache_dir = repo.common_git_dir().unwrap();
+        let ops_dir = path.join(".git/stax/ops");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+
+        let meta_oid_before = Command::new("git")
+            .args(["rev-parse", "--verify", "refs/branch-metadata/branch-b"])
+            .current_dir(path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        let live_pr = ForgePrInfo {
+            number: 1,
+            state: "OPEN".to_string(),
+            is_draft: false,
+            base: "main".to_string(),
+        };
+        apply_live_pr_state(
+            &repo,
+            &stack,
+            &cache_dir,
+            "branch-b",
+            &live_pr,
+            Some(&mut tx),
+        )
+        .unwrap();
+
+        let finalized = tx.finish_ok_preserving_receipt();
+        let entry = finalized
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-b@meta")
+            .expect("branch-b@meta should be tracked in the receipt");
+
+        assert!(entry.after_recorded);
+        assert_eq!(entry.oid_before, meta_oid_before);
+        assert_ne!(entry.oid_after, meta_oid_before);
+        assert!(entry.oid_after.is_some());
+    }
+
+    #[test]
+    fn apply_live_pr_state_does_not_snapshot_when_metadata_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let main_oid = init_repo_with_two_branches(path);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        repo.set_trunk("main").unwrap();
+        BranchMetadata::new("branch-a", &main_oid)
+            .write(repo.inner(), "branch-b")
+            .unwrap();
+
+        let stack = Stack::load(&repo).unwrap();
+        let cache_dir = repo.common_git_dir().unwrap();
+        let ops_dir = path.join(".git/stax/ops");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        let live_pr = ForgePrInfo {
+            number: 1,
+            state: "OPEN".to_string(),
+            is_draft: false,
+            base: "branch-a".to_string(),
+        };
+        apply_live_pr_state(
+            &repo,
+            &stack,
+            &cache_dir,
+            "branch-b",
+            &live_pr,
+            Some(&mut tx),
+        )
+        .unwrap();
+
+        assert!(!tx.is_snapshotted());
+        let finalized = tx.finish_ok_preserving_receipt();
+        assert!(
+            !finalized
+                .receipt
+                .local_refs
+                .iter()
+                .any(|e| e.branch == "branch-b@meta")
+        );
     }
 }

@@ -89,6 +89,21 @@ fn git_ok(workdir: &Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve `refname` to its OID via a git subprocess; `None` when absent.
+/// `finalize` writes refs with `git branch` / `git update-ref`, which libgit2's
+/// cached refdb may not observe, so after-OIDs must not come from `GitRepo`.
+fn resolve_ref_oid(workdir: &Path, refname: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", refname])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 impl HunkSplitApp {
     /// Initialize the hunk split: validate state, flatten branch, parse diff.
     pub fn new(no_verify: bool) -> Result<Self> {
@@ -490,6 +505,11 @@ impl HunkSplitApp {
 
         let mut tx = Transaction::begin(OpKind::Split, &repo, false)?;
         tx.plan_branches(&repo, &affected)?;
+        // Pre-existing children keep their heads but get reparented onto the split
+        // chain's tip below -- their metadata refs must be in the receipt too (#835).
+        for branch in affected.iter().chain(self.children.iter()) {
+            tx.plan_metadata_ref(&repo, branch)?;
+        }
 
         let summary = PlanSummary {
             branches_to_rebase: 0,
@@ -501,6 +521,7 @@ impl HunkSplitApp {
         };
         tx::print_plan(tx.kind(), &summary, false);
         tx.set_plan_summary(summary);
+        tx.snapshot()?;
 
         let num_branches = self.created_branches.len();
         for (i, name) in self.created_branches.iter().enumerate() {
@@ -556,7 +577,16 @@ impl HunkSplitApp {
             .clone();
         git(&self.workdir, &["checkout", &checkout_target])?;
 
-        tx.snapshot()?;
+        for branch in &affected {
+            let head_after = resolve_ref_oid(&self.workdir, &format!("refs/heads/{}", branch));
+            tx.record_known_after(branch, head_after.as_deref());
+        }
+        for branch in affected.iter().chain(self.children.iter()) {
+            let meta_after =
+                resolve_ref_oid(&self.workdir, &format!("refs/branch-metadata/{}", branch));
+            tx.record_known_metadata_after(branch, meta_after.as_deref());
+        }
+        tx.set_head_branch_after(&checkout_target);
         tx.finish_ok()?;
 
         Ok(())
@@ -607,6 +637,7 @@ fn build_flat_items(files: &[DiffFile]) -> Vec<FlatItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::receipt::OpReceipt;
     use crate::tui::split_hunk::diff_parser::DiffHunk;
 
     fn make_hunk(start: u32, count: u32) -> DiffHunk {
@@ -780,5 +811,96 @@ mod tests {
             "boundary {} is not an ancestor of child-branch (issue #830)",
             meta.parent_branch_revision
         );
+    }
+
+    /// Issue #835: `finalize()` reparents pre-existing children's metadata onto
+    /// the split chain's tip -- that rewrite must be tracked in the op receipt
+    /// so `stax undo` can reverse it.
+    #[test]
+    fn finalize_records_child_metadata_refs_in_the_op_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        git_hermetic(dir, &["init", "-b", "main"]);
+        git_hermetic(dir, &["config", "user.name", "Test"]);
+        git_hermetic(dir, &["config", "user.email", "test@example.com"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "base"]);
+        GitRepo::open_from_path(dir)
+            .unwrap()
+            .set_trunk("main")
+            .unwrap();
+
+        git_hermetic(dir, &["checkout", "-b", "parent-branch"]);
+        std::fs::write(dir.join("p.txt"), "p\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "P1"]);
+
+        git_hermetic(dir, &["checkout", "-b", "original-branch"]);
+        std::fs::write(dir.join("o.txt"), "o\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "O1"]);
+        let o1 = git_hermetic(dir, &["rev-parse", "HEAD"]);
+
+        git_hermetic(dir, &["checkout", "-b", "child-branch"]);
+        std::fs::write(dir.join("c.txt"), "c\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C1"]);
+
+        {
+            let repo = GitRepo::open_from_path(dir).unwrap();
+            let meta = BranchMetadata::new("original-branch", &o1);
+            meta.write(repo.inner(), "child-branch").unwrap();
+        }
+
+        git_hermetic(dir, &["checkout", "original-branch"]);
+
+        let oid_before = git_hermetic(dir, &["rev-parse", "refs/branch-metadata/child-branch"]);
+
+        let mut app = HunkSplitApp {
+            workdir: dir.to_path_buf(),
+            original_branch: "original-branch".to_string(),
+            parent_branch: "parent-branch".to_string(),
+            children: vec!["child-branch".to_string()],
+            stashed: false,
+            files: vec![],
+            selected: vec![],
+            flat_items: vec![],
+            cursor: 0,
+            list_state: ListState::default(),
+            diff_scroll: 0,
+            diff_line_count: 0,
+            diff_viewport_height: 0,
+            mode: HunkSplitMode::List,
+            round: 1,
+            created_branches: vec!["original-branch".to_string()],
+            undo_stack: vec![],
+            input_buffer: String::new(),
+            input_cursor: 0,
+            status_message: None,
+            should_quit: false,
+            round_complete: false,
+            all_done: false,
+            existing_branches: vec![],
+            no_verify: true,
+        };
+
+        app.finalize().unwrap();
+
+        let oid_after = git_hermetic(dir, &["rev-parse", "refs/branch-metadata/child-branch"]);
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let receipt = OpReceipt::load_latest(repo.git_dir().unwrap())
+            .unwrap()
+            .expect("finalize should have written a receipt");
+        let entry = receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "child-branch@meta")
+            .expect("child-branch@meta should be tracked in the receipt");
+
+        assert_eq!(entry.oid_before, Some(oid_before));
+        assert_eq!(entry.oid_after, Some(oid_after));
+        assert!(entry.after_recorded);
     }
 }

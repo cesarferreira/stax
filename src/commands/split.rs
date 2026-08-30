@@ -1,5 +1,7 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
+use crate::ops::receipt::OpKind;
+use crate::ops::tx::Transaction;
 use crate::tui;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -154,6 +156,16 @@ fn split_by_file(
         );
     };
 
+    // Track both branches' heads and metadata refs so the op receipt records the
+    // metadata blobs this rewrites (issue #835) and `stax undo` can reverse the
+    // split. `quiet: true` keeps the command's existing output unchanged.
+    let mut tx = Transaction::begin(OpKind::Split, repo, true)?;
+    tx.plan_branch(repo, current)?;
+    tx.plan_metadata_ref(repo, current)?;
+    tx.plan_branch(repo, &new_branch)?;
+    tx.plan_metadata_ref(repo, &new_branch)?;
+    tx.snapshot()?;
+
     // Helper: run a fallible operation; rollback and return on error.
     macro_rules! try_or_rollback {
         ($expr:expr) => {
@@ -161,6 +173,7 @@ fn split_by_file(
                 Ok(val) => val,
                 Err(err) => {
                     rollback();
+                    let _ = tx.finish_err(&err.to_string(), Some("split --file"), Some(current));
                     return Err(err);
                 }
             }
@@ -219,6 +232,18 @@ fn split_by_file(
         );
         try_or_rollback!(meta.write(repo.inner(), current));
     }
+
+    for branch in [current, new_branch.as_str()] {
+        tx.record_known_after(
+            branch,
+            ref_oid(workdir, &format!("refs/heads/{}", branch)).as_deref(),
+        );
+        tx.record_known_metadata_after(
+            branch,
+            ref_oid(workdir, &format!("refs/branch-metadata/{}", branch)).as_deref(),
+        );
+    }
+    tx.finish_ok()?;
 
     println!();
     println!(
@@ -458,6 +483,21 @@ fn path_exists_in_ref(workdir: &Path, refspec: &str, path: &str) -> Result<bool>
     }
 
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+/// Resolve a ref to its OID via a git subprocess; `None` when absent.
+/// Metadata refs are written with `git update-ref`, which libgit2's cached
+/// refdb may not observe within the same process.
+fn ref_oid(workdir: &Path, refname: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", refname])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn rollback_split_by_file(
