@@ -1541,9 +1541,19 @@ fn apply_insert_reparenting(repo: &GitRepo, parent_branch: &str, new_branch: &st
     let new_parent_rev = repo.branch_commit(new_branch)?;
     for child in &children {
         if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+            // `new_branch` is created at `parent_branch`'s tip at the time of insert,
+            // not `child`'s -- if `child` was already stale relative to `parent_branch`,
+            // `new_parent_rev` isn't actually in `child`'s ancestry. Verify before
+            // trusting it, else keep the previously recorded (still-valid) boundary
+            // (see #830); `stax restack --all` (prompted below) then rebases for real.
+            let parent_branch_revision = repo.resolve_child_parent_boundary(
+                child,
+                &[Some(new_parent_rev.as_str())],
+                &child_meta.parent_branch_revision,
+            );
             let updated = BranchMetadata {
                 parent_branch_name: new_branch.to_string(),
-                parent_branch_revision: new_parent_rev.clone(),
+                parent_branch_revision,
                 ..child_meta
             };
             updated.write(repo.inner(), child)?;

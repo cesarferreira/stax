@@ -529,9 +529,18 @@ impl HunkSplitApp {
                 .last()
                 .expect("at least one branch created");
             if let Some(mut meta) = BranchMetadata::read(repo.inner(), child)? {
+                // `last_branch`'s tip is only a valid boundary if `child` was
+                // never stale relative to `original_branch` before the split
+                // ran; the split itself never rebases pre-existing children.
+                // Verify ancestry before trusting it, else keep the previously
+                // recorded (still-valid) boundary (see #830).
                 let parent_rev = repo.branch_commit(last_branch)?;
                 meta.parent_branch_name = last_branch.clone();
-                meta.parent_branch_revision = parent_rev;
+                meta.parent_branch_revision = repo.resolve_child_parent_boundary(
+                    child,
+                    &[Some(parent_rev.as_str())],
+                    &meta.parent_branch_revision,
+                );
                 meta.write(repo.inner(), child)?;
             }
         }
@@ -656,5 +665,120 @@ mod tests {
     fn test_build_flat_items_empty() {
         let items = build_flat_items(&[]);
         assert!(items.is_empty());
+    }
+
+    fn git_hermetic(cwd: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env(
+                "GIT_CONFIG_SYSTEM",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Issue #830: `finalize()` reparents pre-existing children of the branch
+    /// being split onto the split chain's tip with no rebase and no ancestry
+    /// check. If a child was already stale relative to `original_branch`
+    /// *before* the split ran, the written boundary isn't actually in the
+    /// child's ancestry.
+    #[test]
+    fn finalize_does_not_poison_stale_childs_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        git_hermetic(dir, &["init", "-b", "main"]);
+        git_hermetic(dir, &["config", "user.name", "Test"]);
+        git_hermetic(dir, &["config", "user.email", "test@example.com"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "base"]);
+        GitRepo::open_from_path(dir)
+            .unwrap()
+            .set_trunk("main")
+            .unwrap();
+
+        git_hermetic(dir, &["checkout", "-b", "parent-branch"]);
+        std::fs::write(dir.join("p.txt"), "p\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "P1"]);
+
+        git_hermetic(dir, &["checkout", "-b", "original-branch"]);
+        std::fs::write(dir.join("o.txt"), "o\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "O1"]);
+        let o1 = git_hermetic(dir, &["rev-parse", "HEAD"]);
+
+        git_hermetic(dir, &["checkout", "-b", "child-branch"]);
+        std::fs::write(dir.join("c.txt"), "c\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C1"]);
+
+        {
+            let repo = GitRepo::open_from_path(dir).unwrap();
+            let meta = BranchMetadata::new("original-branch", &o1);
+            meta.write(repo.inner(), "child-branch").unwrap();
+        }
+
+        // Advance original-branch WITHOUT rebasing child-branch onto it --
+        // child is now stale relative to original-branch, matching the
+        // precondition where the #830 bug class actually bites.
+        git_hermetic(dir, &["checkout", "original-branch"]);
+        std::fs::write(dir.join("o2.txt"), "o2\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "O2"]);
+
+        let mut app = HunkSplitApp {
+            workdir: dir.to_path_buf(),
+            original_branch: "original-branch".to_string(),
+            parent_branch: "parent-branch".to_string(),
+            children: vec!["child-branch".to_string()],
+            stashed: false,
+            files: vec![],
+            selected: vec![],
+            flat_items: vec![],
+            cursor: 0,
+            list_state: ListState::default(),
+            diff_scroll: 0,
+            diff_line_count: 0,
+            diff_viewport_height: 0,
+            mode: HunkSplitMode::List,
+            round: 1,
+            created_branches: vec!["original-branch".to_string()],
+            undo_stack: vec![],
+            input_buffer: String::new(),
+            input_cursor: 0,
+            status_message: None,
+            should_quit: false,
+            round_complete: false,
+            all_done: false,
+            existing_branches: vec![],
+            no_verify: true,
+        };
+
+        app.finalize().unwrap();
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let meta = BranchMetadata::read(repo.inner(), "child-branch")
+            .unwrap()
+            .unwrap();
+        assert!(
+            repo.is_ancestor(&meta.parent_branch_revision, "child-branch")
+                .unwrap(),
+            "boundary {} is not an ancestor of child-branch (issue #830)",
+            meta.parent_branch_revision
+        );
     }
 }

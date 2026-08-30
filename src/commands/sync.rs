@@ -1489,6 +1489,7 @@ impl SyncContext {
                                 );
                             }
 
+                            let mut rebased_children: Vec<String> = Vec::new();
                             for child in &children {
                                 if BranchMetadata::is_frozen(repo.inner(), child)? {
                                     if !self.quiet {
@@ -1507,6 +1508,10 @@ impl SyncContext {
                                     tx.snapshot_branch_with_metadata(&repo, child)?;
                                 }
 
+                                // Tip of the merged parent BEFORE deletion — the boundary
+                                // fallback when the child did not actually move onto trunk.
+                                let merged_parent_tip = repo.branch_commit(branch).ok();
+
                                 // Use existing provenance-aware rebase
                                 match repo.rebase_branch_onto_with_provenance(
                                     child,
@@ -1514,14 +1519,22 @@ impl SyncContext {
                                     branch, // fallback upstream
                                     false,  // auto_stash_pop
                                 ) {
-                                    Ok(_) => {
+                                    Ok(RebaseResult::Success) => {
                                         // Update child's parent metadata to trunk
+                                        let trunk_tip = repo.rev_parse(&self.stack.trunk)?;
                                         if let Some(mut metadata) =
                                             BranchMetadata::read(repo.inner(), child)?
                                         {
                                             metadata.parent_branch_name = self.stack.trunk.clone();
-                                            metadata.parent_branch_revision =
-                                                repo.rev_parse(&self.stack.trunk)?;
+                                            metadata.parent_branch_revision = repo
+                                                .resolve_child_parent_boundary(
+                                                    child,
+                                                    &[
+                                                        Some(trunk_tip.as_str()),
+                                                        merged_parent_tip.as_deref(),
+                                                    ],
+                                                    &metadata.parent_branch_revision,
+                                                );
                                             metadata.write(repo.inner(), child)?;
                                         }
 
@@ -1553,6 +1566,45 @@ impl SyncContext {
                                                 self.stack.trunk.cyan()
                                             );
                                         }
+
+                                        rebased_children.push(child.clone());
+                                    }
+                                    Ok(RebaseResult::Conflict) => {
+                                        let trunk_name = self.stack.trunk.clone();
+                                        let conflict_stack = self.stack.current_stack(child);
+                                        if !self.json {
+                                            print_restack_conflict(
+                                                &repo,
+                                                &RestackConflictContext {
+                                                    branch: child,
+                                                    parent_branch: &trunk_name,
+                                                    completed_branches: &rebased_children,
+                                                    remaining_branches: 0,
+                                                    continue_commands: &[
+                                                        "stax resolve",
+                                                        "stax continue",
+                                                        "stax sync --continue",
+                                                    ],
+                                                    stack_branches: &conflict_stack,
+                                                },
+                                            );
+                                        }
+                                        if self.stashed && !self.json {
+                                            println!(
+                                                "{}",
+                                                "Stash kept to avoid conflicts. Run `git stash pop` after resolving."
+                                                    .yellow()
+                                            );
+                                            self.stash_guard.disarm();
+                                        }
+                                        if let Some(tx) = self.tx.take() {
+                                            tx.finish_err(
+                                                "Rebase conflict",
+                                                Some("cleanup-merged"),
+                                                Some(child),
+                                            )?;
+                                        }
+                                        return Err(ConflictStopped.into());
                                     }
                                     Err(e) => {
                                         eprintln!(
@@ -2953,14 +3005,22 @@ fn apply_live_pr_state(
             let base_is_known =
                 live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
             if base_is_known {
-                // Update parent revision to the current tip of the new parent
-                if let Ok(parent_ref) = repo
+                // The new parent's tip is only a valid boundary if `branch_name` has
+                // actually moved onto it; a GitHub-side base retarget (e.g. after an
+                // intermediate branch is deleted) can flip `live_pr.base` with no local
+                // rebase having happened. Verify ancestry before trusting it, else keep
+                // the previously recorded (still-valid) boundary (see #830).
+                let new_parent_tip = repo
                     .inner()
                     .find_branch(&live_pr.base, git2::BranchType::Local)
-                    && let Ok(commit) = parent_ref.get().peel_to_commit()
-                {
-                    meta.parent_branch_revision = commit.id().to_string();
-                }
+                    .ok()
+                    .and_then(|r| r.get().peel_to_commit().ok())
+                    .map(|c| c.id().to_string());
+                meta.parent_branch_revision = repo.resolve_child_parent_boundary(
+                    branch_name,
+                    &[new_parent_tip.as_deref()],
+                    &meta.parent_branch_revision,
+                );
                 meta.parent_branch_name = live_pr.base.clone();
             }
         }
@@ -4169,10 +4229,11 @@ fn reparent_children_for_deletion(
         // --onto <new> <old>` precisely. Only use the deleted branch's tip
         // when it is still in the child's ancestry; otherwise keep the
         // recorded revision (see #120).
-        let old_parent_boundary = doomed_tip
-            .clone()
-            .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
-            .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+        let old_parent_boundary = repo.resolve_child_parent_boundary(
+            child,
+            &[doomed_tip.as_deref()],
+            &child_meta.parent_branch_revision,
+        );
 
         let updated_meta = BranchMetadata {
             parent_branch_name: new_parent.to_string(),

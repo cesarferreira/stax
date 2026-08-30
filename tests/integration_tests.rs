@@ -6935,6 +6935,282 @@ fn test_sync_restack_no_ghost_commits_after_two_step_squash_merge() {
     );
 }
 
+/// Regression test for issue #830: when a squash-merged parent's child rebase
+/// *conflicts* (child stale w.r.t. the merged parent), sync must stop with an
+/// error instead of silently claiming success and stamping the trunk tip as
+/// the child's `parentBranchRevision` — a boundary the child was never
+/// actually rebased onto.
+#[test]
+fn test_sync_child_boundary_stays_in_ancestry_when_squash_parent_rebase_conflicts() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build stack: main -> A -> B
+    repo.run_stax(&["bc", "conflict-parent"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("shared.txt", "a-original\n");
+    repo.commit("A commit");
+    repo.git(&["push", "-u", "origin", &branch_a]);
+
+    repo.run_stax(&["bc", "conflict-child"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("shared.txt", "a-original + b\n");
+    repo.commit("B commit 1");
+    repo.create_file("b.txt", "b\n");
+    repo.commit("B commit 2");
+    repo.git(&["push", "-u", "origin", &branch_b]);
+
+    // Capture B's recorded parentBranchRevision before anything moves.
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_b);
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    assert!(metadata_output.status.success());
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    let recorded_boundary = metadata["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+
+    // Amend A so B becomes stale w.r.t. A's new tip; this makes the eventual
+    // child rebase replay a change that conflicts with shared.txt.
+    repo.git(&["checkout", &branch_a]);
+    repo.create_file("shared.txt", "a-amended\n");
+    repo.git(&["add", "shared.txt"]);
+    repo.git(&["commit", "--amend", "-m", "A commit (amended)"]);
+    repo.git(&["push", "-f", "origin", &branch_a]);
+
+    // Squash-merge A on remote plus one unrelated trunk commit, so merge
+    // detection classifies A as `MergeType::SquashMerge` (not `Ancestor`).
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &branch_a]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", branch_a)]);
+    run_remote_git(&["commit", "-m", "Squash merge A"]);
+    // Advance trunk with unrelated work so merge detection sees SquashMerge,
+    // not a trivial Ancestor relationship.
+    std::fs::write(clone_dir.path().join("later.txt"), "later trunk work\n").unwrap();
+    run_remote_git(&["add", "later.txt"]);
+    run_remote_git(&["commit", "-m", "Later trunk commit"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &branch_a]);
+
+    repo.run_stax(&["checkout", &branch_b]);
+    let output = repo.run_stax(&["sync", "--force"]);
+
+    assert!(
+        !output.status.success(),
+        "Expected sync to stop on conflict, but it succeeded\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "Expected ConflictStopped exit code 2\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !TestRepo::stdout(&output).contains("✓ Rebased"),
+        "Expected no success marker for the conflicting rebase\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+
+    // A must still exist locally — sync must not have deleted it mid-conflict.
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &branch_a),
+        "Expected merged parent A to remain (rebase conflicted), branches: {:?}",
+        branches
+    );
+
+    // Core invariant: whatever boundary is now recorded for B must actually be
+    // in B's ancestry, and must not have been stamped to the trunk tip.
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    assert!(metadata_output.status.success());
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    let boundary = metadata["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_b]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {} (issue #830)",
+        boundary,
+        branch_b
+    );
+    let trunk_sha = repo.get_commit_sha("main");
+    assert_ne!(
+        boundary, trunk_sha,
+        "Boundary must not have been stamped to trunk tip after a conflicting rebase"
+    );
+    assert_eq!(
+        boundary, recorded_boundary,
+        "Expected the pre-existing boundary to be preserved when the rebase conflicts"
+    );
+}
+
+/// Companion test to the #830 regression above: on the clean (non-conflicting)
+/// path, the child's new boundary must match the new base it actually landed
+/// on (the trunk tip), and subsequent restacks must not re-replay commits.
+#[test]
+fn test_sync_squash_merged_child_boundary_matches_new_base() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build stack: main -> A -> B
+    repo.run_stax(&["bc", "clean-squash-parent"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a content\n");
+    repo.commit("A commit");
+    repo.git(&["push", "-u", "origin", &branch_a]);
+
+    repo.run_stax(&["bc", "clean-squash-child"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("b.txt", "b content\n");
+    repo.commit("B commit");
+    repo.git(&["push", "-u", "origin", &branch_b]);
+
+    // Squash-merge A on remote plus one unrelated trunk commit.
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &branch_a]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", branch_a)]);
+    run_remote_git(&["commit", "-m", "Squash merge A"]);
+    std::fs::write(clone_dir.path().join("later.txt"), "later trunk work\n").unwrap();
+    run_remote_git(&["add", "later.txt"]);
+    run_remote_git(&["commit", "-m", "Later trunk commit"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &branch_a]);
+
+    repo.run_stax(&["checkout", &branch_b]);
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync --force failed on clean squash-merge path\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_b);
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    assert!(metadata_output.status.success());
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
+        "Expected child reparented to trunk, metadata was: {}",
+        metadata
+    );
+    let boundary = metadata["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+    let trunk_sha = repo.get_commit_sha("main");
+    assert_eq!(
+        boundary, trunk_sha,
+        "Expected boundary to match the new base the child actually landed on"
+    );
+
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_b]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {}",
+        boundary,
+        branch_b
+    );
+
+    let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
+    assert!(count_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_output.stdout).trim(),
+        "1",
+        "Expected child to keep only its own commit after clean squash-merge sync"
+    );
+
+    // Push another unrelated trunk commit remotely and restack again; the
+    // boundary should hold steady and no conflict should occur.
+    run_remote_git(&["fetch", "origin", "main"]);
+    run_remote_git(&["checkout", "main"]);
+    std::fs::write(clone_dir.path().join("later2.txt"), "even later\n").unwrap();
+    run_remote_git(&["add", "later2.txt"]);
+    run_remote_git(&["commit", "-m", "Yet another trunk commit"]);
+    run_remote_git(&["push", "origin", "main"]);
+
+    let output2 = repo.run_stax(&["sync", "--restack", "--force"]);
+    assert!(
+        output2.status.success(),
+        "sync --restack failed on follow-up trunk advance\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output2),
+        TestRepo::stderr(&output2)
+    );
+    assert!(
+        !TestRepo::stdout(&output2).contains("conflict"),
+        "Expected no conflict on follow-up restack\nstdout: {}",
+        TestRepo::stdout(&output2)
+    );
+
+    let count_output2 = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
+    assert!(count_output2.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_output2.stdout).trim(),
+        "1",
+        "Expected child to still have only its own commit after follow-up restack"
+    );
+
+    let metadata_output2 = repo.git(&["show", &metadata_ref]);
+    assert!(metadata_output2.status.success());
+    let metadata2: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output2)).expect("Invalid JSON metadata");
+    let boundary2 = metadata2["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+    let ancestry_check2 = repo.git(&["merge-base", "--is-ancestor", &boundary2, &branch_b]);
+    assert!(
+        ancestry_check2.status.success(),
+        "Recorded boundary {} is not an ancestor of {} after follow-up restack",
+        boundary2,
+        branch_b
+    );
+}
+
 // =============================================================================
 // Merge Command Tests
 // =============================================================================
@@ -17136,6 +17412,111 @@ exit 1
             "Expected parentBranchName to be reconciled to 'main' (live PR base), got: {}",
             metadata["parentBranchName"]
         );
+    }
+
+    /// Issue #830 (second write site): when a live PR base is reconciled to a
+    /// new parent whose *current* tip is not actually an ancestor of the
+    /// child (trunk has advanced independently, e.g. after a GitHub-side base
+    /// auto-retarget with no local rebase), `apply_live_pr_state` must not
+    /// stamp that tip as `parentBranchRevision` — it must keep the previously
+    /// recorded (still-valid) boundary and let restack compute the real one.
+    #[tokio::test]
+    async fn test_sync_pr_base_reconcile_does_not_poison_boundary_when_trunk_has_advanced() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        // main -> retarget-a -> retarget-b
+        let repo = setup_branch_with_remote(home.path(), "retarget-a");
+        let branch_a = repo.current_branch();
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "retarget-b"]);
+        assert!(output.status.success());
+        let branch_b = "retarget-b".to_string();
+        repo.create_file("child.txt", "child content");
+        repo.commit("Child commit");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push.status.success());
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 611, Some(false));
+
+        let recorded_boundary = repo.get_commit_sha(&branch_a);
+
+        // Advance trunk independently of the stack (B has not been rebased onto this).
+        let checkout_main = git_with_env(&repo, home.path(), &["checkout", "main"]);
+        assert!(checkout_main.status.success());
+        repo.create_file("trunk-advance.txt", "trunk moved on\n");
+        repo.commit("Advance trunk");
+        let push_main = git_with_env(&repo, home.path(), &["push", "origin", "main"]);
+        assert!(push_main.status.success());
+
+        // Simulate GitHub having retargeted B's PR base straight to main (e.g. after
+        // an intermediate branch was deleted) with no local rebase having happened.
+        let retargeted_pr = github_pull_fixture(611, &branch_b, "main", "aaaa");
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/611"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(retargeted_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Restack scope follows the checked-out branch's own stack.
+        let checkout_b = git_with_env(&repo, home.path(), &["checkout", &branch_b]);
+        assert!(checkout_b.status.success());
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--restack", "--force"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch_b);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(metadata_output.status.success());
+        let metadata: serde_json::Value =
+            serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+        assert_eq!(
+            metadata["parentBranchName"], "main",
+            "Expected parentBranchName reconciled to 'main', got: {}",
+            metadata["parentBranchName"]
+        );
+
+        let boundary = metadata["parentBranchRevision"]
+            .as_str()
+            .expect("parentBranchRevision missing")
+            .to_string();
+
+        // Core invariant (issue #830): whatever boundary is recorded must
+        // actually be in B's ancestry -- never the trunk tip B was never
+        // rebased onto.
+        let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_b]);
+        assert!(
+            ancestry_check.status.success(),
+            "Recorded boundary {} is not an ancestor of {} (issue #830)",
+            boundary,
+            branch_b
+        );
+
+        // Restack (which runs later in the same sync) should have picked up
+        // the mismatch between the recorded boundary and main's real tip and
+        // replayed only B's own commit onto the new trunk tip.
+        let trunk_sha = repo.get_commit_sha("main");
+        assert_eq!(
+            boundary, trunk_sha,
+            "Expected restack to advance the boundary to the real trunk tip"
+        );
+        let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
+        assert!(count_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&count_output.stdout).trim(),
+            "1",
+            "Expected B to carry only its own commit after restack"
+        );
+
+        // Sanity: the pre-reconciliation recorded boundary really was stale
+        // (main advanced past it), proving this scenario exercises the guard.
+        assert_ne!(recorded_boundary, trunk_sha);
     }
 
     /// Verify that get_pr returns "MERGED" state (not "Closed") when GitHub

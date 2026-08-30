@@ -205,8 +205,18 @@ fn split_by_file(
     // 10. Update current branch metadata: parent is now the new branch
     let new_branch_rev = repo.branch_commit(&new_branch)?;
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), current)? {
+        // `current`'s tip was amended in place, not rebased onto `new_branch` --
+        // its underlying commit chain below the tip is unchanged, so
+        // `new_branch`'s commit generally isn't in `current`'s real ancestry.
+        // Verify before trusting it, else keep the previously recorded (still-
+        // valid) boundary (see #830); `stax restack` (prompted below) then
+        // rebases for real.
         meta.parent_branch_name = new_branch.clone();
-        meta.parent_branch_revision = new_branch_rev;
+        meta.parent_branch_revision = repo.resolve_child_parent_boundary(
+            current,
+            &[Some(new_branch_rev.as_str())],
+            &meta.parent_branch_revision,
+        );
         try_or_rollback!(meta.write(repo.inner(), current));
     }
 

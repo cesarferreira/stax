@@ -1736,6 +1736,31 @@ Use --auto-stash-pop or stash/commit changes first.",
             .graph_descendant_of(descendant_oid, ancestor_oid)?)
     }
 
+    /// Resolve the `parentBranchRevision` boundary to persist for `child` when it is
+    /// reparented onto a new parent.
+    ///
+    /// The stored boundary is what the next restack feeds to
+    /// `git rebase --onto <parent> <boundary>`, so it MUST be a commit that is really
+    /// in `child`'s ancestry. Stamping a commit `child` was never actually rebased
+    /// onto (e.g. a sibling branch's tip after a metadata-only reparent) makes the
+    /// next restack replay stale or already-upstream commits back in (see #830).
+    ///
+    /// Candidates are tried in order; the first one genuinely in `child`'s ancestry
+    /// wins, otherwise the previously recorded revision is preserved (see #120).
+    pub fn resolve_child_parent_boundary(
+        &self,
+        child: &str,
+        candidates: &[Option<&str>],
+        recorded_revision: &str,
+    ) -> String {
+        for candidate in candidates.iter().flatten() {
+            if self.is_ancestor(candidate, child).unwrap_or(false) {
+                return candidate.to_string();
+            }
+        }
+        recorded_revision.to_string()
+    }
+
     /// Delete a branch
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         let name = normalize_local_branch_name(name);
