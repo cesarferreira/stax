@@ -4,7 +4,7 @@ use git2::Repository;
 use serde::{Deserialize, Serialize};
 
 /// Metadata stored for each tracked branch
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchMetadata {
     /// Name of the parent branch
@@ -27,7 +27,7 @@ pub struct BranchMetadata {
     pub pr_info: Option<PrInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrInfo {
     #[serde(default)]

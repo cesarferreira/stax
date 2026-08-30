@@ -17564,4 +17564,99 @@ exit 1
             );
         }
     }
+
+    /// Issue #835: `apply_live_pr_state`'s metadata rewrite (the PR-base
+    /// reconcile) must be tracked in the sync op receipt's `local_refs` so
+    /// `stax undo` can reverse it.
+    #[tokio::test]
+    async fn test_sync_pr_base_reconcile_records_metadata_ref_in_the_op_receipt() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        // main -> receipt-a -> receipt-b
+        let repo = setup_branch_with_remote(home.path(), "receipt-a");
+        let branch_a = repo.current_branch();
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "receipt-b"]);
+        assert!(output.status.success());
+        let branch_b = "receipt-b".to_string();
+        repo.create_file("child.txt", "child content");
+        repo.commit("Child commit");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push.status.success());
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 711, Some(false));
+
+        // Simulate GitHub having retargeted B's PR base straight to main (e.g.
+        // after an intermediate branch was deleted) with no local rebase.
+        let retargeted_pr = github_pull_fixture(711, &branch_b, "main", "aaaa");
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/711"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(retargeted_pr))
+            .mount(&mock_server)
+            .await;
+
+        let checkout_b = git_with_env(&repo, home.path(), &["checkout", &branch_b]);
+        assert!(checkout_b.status.success());
+
+        let meta_ref = format!("refs/branch-metadata/{}", branch_b);
+        let meta_oid_before = repo.get_commit_sha(&meta_ref);
+
+        // No `--restack`, so the receipt's only metadata entry comes from the
+        // PR refresh performed by `apply_live_pr_state`.
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--no-delete", "--force"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let meta_oid_after = repo.get_commit_sha(&meta_ref);
+        assert_ne!(
+            meta_oid_before, meta_oid_after,
+            "Expected the PR-base reconcile to rewrite the metadata blob"
+        );
+
+        let stax_ops_dir = repo.path().join(".git/stax/ops");
+        assert!(
+            stax_ops_dir.exists(),
+            "Expected .git/stax/ops directory to exist after sync"
+        );
+        let mut ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
+            .expect("Failed to read stax ops dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        ops.sort_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        let newest = ops.last().expect("Expected at least one operation receipt");
+        let receipt_content =
+            std::fs::read_to_string(newest.path()).expect("Failed to read receipt");
+        let receipt: serde_json::Value =
+            serde_json::from_str(&receipt_content).expect("Invalid JSON receipt");
+
+        let local_refs = receipt["local_refs"]
+            .as_array()
+            .expect("local_refs should be an array");
+        let meta_entry = local_refs
+            .iter()
+            .find(|r| r["branch"].as_str() == Some(&format!("{}@meta", branch_b)))
+            .expect("Expected branch's metadata ref in local_refs");
+
+        assert_eq!(meta_entry["refname"], meta_ref);
+        assert_eq!(
+            meta_entry["oid_before"].as_str(),
+            Some(meta_oid_before.as_str())
+        );
+        assert_eq!(
+            meta_entry["oid_after"].as_str(),
+            Some(meta_oid_after.as_str())
+        );
+        assert_ne!(meta_entry["oid_before"], meta_entry["oid_after"]);
+    }
 }
