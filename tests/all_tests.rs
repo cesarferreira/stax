@@ -148,6 +148,8 @@ mod sweep_tests;
 mod sync_confirm_tests;
 #[path = "sync_dry_run_tests.rs"]
 mod sync_dry_run_tests;
+#[path = "sync_fetch_tests.rs"]
+mod sync_fetch_tests;
 #[path = "sync_json_tests.rs"]
 mod sync_json_tests;
 #[path = "sync_stash_tests.rs"]
