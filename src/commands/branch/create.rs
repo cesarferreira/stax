@@ -28,6 +28,8 @@ use crate::commands::staging::{self, ContinueLabel, StagingAction};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
+use crate::ops::receipt::OpKind;
+use crate::ops::tx::Transaction;
 use crate::progress::LiveTimer;
 use crate::remote;
 use anyhow::{Context, Result, anyhow, bail};
@@ -666,7 +668,9 @@ pub fn run(
         return Ok(());
     }
 
-    create_branch_with_banner(
+    let mut tx = Transaction::begin(OpKind::Create, &repo, true)?;
+    let below_current = below_current_meta.as_ref().map(|_| current.as_str());
+    if let Err(e) = create_branch_with_banner(
         &repo,
         &config,
         &current,
@@ -675,7 +679,12 @@ pub fn run(
         insert,
         below_current_meta.as_ref(),
         !staging::is_staging_area_empty(workdir)?,
-    )?;
+        &mut tx,
+    ) {
+        record_create_after(&mut tx, workdir, &branch_name, below_current);
+        let _ = tx.finish_err(&e.to_string(), Some("create"), Some(&branch_name));
+        return Err(e);
+    }
     print_branch_name_warnings(&branch_name_result.warnings);
 
     // Stage/commit behavior:
@@ -683,12 +692,12 @@ pub fn run(
     // - StageMode::ExistingOnly (files already staged) => keep current index
     // - StageMode::None => no staging/committing
     if stage_mode != StageMode::None {
-        let workdir = repo.workdir()?;
-
         if (stage_mode == StageMode::All || needs_stage_all)
             && let Err(e) = staging::stage_all(workdir)
         {
             rollback_create_and_restore(&repo, &current, &branch_name, below_current_meta.as_ref());
+            record_create_after(&mut tx, workdir, &branch_name, below_current);
+            let _ = tx.finish_err(&e.to_string(), Some("stage"), Some(&branch_name));
             return Err(e);
         }
 
@@ -696,6 +705,10 @@ pub fn run(
             println!("{}", "Changes staged".dimmed());
         }
     }
+
+    record_create_after(&mut tx, workdir, &branch_name, below_current);
+    tx.set_head_branch_after(&branch_name);
+    tx.finish_ok()?;
 
     if config.ui.tips {
         println!(
@@ -738,6 +751,49 @@ fn rollback_create_and_restore(
         let _ = meta.write(repo.inner(), original_branch);
     }
     rollback_create(repo, original_branch, new_branch);
+}
+
+/// Resolve a ref to its OID via a git subprocess; `None` when absent.
+/// Branch metadata refs are written with `git update-ref` (see
+/// `git::refs::write_metadata`), which libgit2's cached refdb may not observe
+/// within the same process — mirrors `split.rs`'s `ref_oid`.
+fn ref_oid(workdir: &Path, refname: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", refname])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Record the create's after-state for the new branch's head + metadata ref,
+/// and (for `--below`) the reparented original branch's metadata ref.
+///
+/// Safe to call on failure paths too: after a rollback the refs read back as
+/// absent/unchanged, which is exactly what the receipt should record.
+fn record_create_after(
+    tx: &mut Transaction,
+    workdir: &Path,
+    branch_name: &str,
+    below_current: Option<&str>,
+) {
+    tx.record_known_after(
+        branch_name,
+        ref_oid(workdir, &format!("refs/heads/{}", branch_name)).as_deref(),
+    );
+    tx.record_known_metadata_after(
+        branch_name,
+        ref_oid(workdir, &format!("refs/branch-metadata/{}", branch_name)).as_deref(),
+    );
+    if let Some(current) = below_current {
+        tx.record_known_metadata_after(
+            current,
+            ref_oid(workdir, &format!("refs/branch-metadata/{}", current)).as_deref(),
+        );
+    }
 }
 
 const CREATE_BELOW_AUTO_STASH_MESSAGE: &str = "stax create --below auto-stash";
@@ -937,6 +993,8 @@ fn run_commit_first(
     no_verify: bool,
 ) -> Result<()> {
     let workdir = repo.workdir()?;
+    let mut tx = Transaction::begin(OpKind::Create, repo, true)?;
+    let below_current = below_current_meta.map(|_| current);
     let committing_on_current = parent_branch == current;
     let parent_sha = repo.branch_commit(parent_branch)?;
     let mut auto_stash = if !committing_on_current && below_current_meta.is_some() {
@@ -1012,7 +1070,7 @@ fn run_commit_first(
     };
 
     if staging_area_empty {
-        create_branch_with_banner(
+        if let Err(e) = create_branch_with_banner(
             repo,
             config,
             current,
@@ -1021,11 +1079,24 @@ fn run_commit_first(
             insert,
             below_current_meta,
             false,
-        )?;
+            &mut tx,
+        ) {
+            record_create_after(&mut tx, workdir, branch_name, below_current);
+            let _ = tx.finish_err(&e.to_string(), Some("create"), Some(branch_name));
+            return Err(e);
+        }
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
-        auto_stash.drop_stash(workdir)?;
-        return Ok(());
+        let stash_result = auto_stash.drop_stash(workdir);
+        record_create_after(&mut tx, workdir, branch_name, below_current);
+        tx.set_head_branch_after(branch_name);
+        return match stash_result {
+            Ok(()) => tx.finish_ok().map(|_| ()),
+            Err(e) => {
+                let _ = tx.finish_err(&e.to_string(), Some("drop auto-stash"), Some(branch_name));
+                Err(e)
+            }
+        };
     }
 
     // Run the commit before the destination branch exists. `--quiet`
@@ -1104,7 +1175,15 @@ fn run_commit_first(
         }
     };
 
-    if let Err(e) = repo.create_branch_at_commit(branch_name, &new_sha) {
+    let snapshot_result = (|| -> Result<()> {
+        tx.plan_branch(repo, branch_name)?;
+        tx.plan_metadata_ref(repo, branch_name)?;
+        if below_current_meta.is_some() {
+            tx.plan_metadata_ref(repo, current)?;
+        }
+        tx.snapshot()
+    })();
+    if let Err(e) = snapshot_result {
         rollback_after_commit(
             workdir,
             current,
@@ -1118,49 +1197,47 @@ fn run_commit_first(
         return Err(e);
     }
 
-    let meta = BranchMetadata::new(parent_branch, &parent_sha);
-    if let Err(e) = meta.write(repo.inner(), branch_name) {
-        rollback_after_commit(
-            workdir,
-            current,
-            &parent_sha,
-            Some(branch_name),
-            repo,
-            committing_on_current,
-            below_current_meta,
-            &mut auto_stash,
-        );
-        return Err(e);
+    macro_rules! rollback_and_finish {
+        ($err:expr, $step:expr, $new_branch:expr) => {{
+            let err = $err;
+            rollback_after_commit(
+                workdir,
+                current,
+                &parent_sha,
+                $new_branch,
+                repo,
+                committing_on_current,
+                below_current_meta,
+                &mut auto_stash,
+            );
+            record_create_after(&mut tx, workdir, branch_name, below_current);
+            let _ = tx.finish_err(&err.to_string(), Some($step), Some(branch_name));
+            return Err(err);
+        }};
     }
 
-    if insert && let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
-        rollback_after_commit(
-            workdir,
-            current,
-            &parent_sha,
-            Some(branch_name),
-            repo,
-            committing_on_current,
-            below_current_meta,
-            &mut auto_stash,
-        );
-        return Err(e);
+    if let Err(e) = repo.create_branch_at_commit(branch_name, &new_sha) {
+        rollback_and_finish!(e, "create branch", None);
+    }
+
+    let meta = BranchMetadata::new(parent_branch, &parent_sha);
+    if let Err(e) = meta.write(repo.inner(), branch_name) {
+        rollback_and_finish!(e, "write metadata", Some(branch_name));
+    }
+
+    if insert {
+        match apply_insert_reparenting(repo, parent_branch, branch_name, &mut tx) {
+            Ok(()) => {}
+            Err(e) => {
+                rollback_and_finish!(e, "insert reparent", Some(branch_name));
+            }
+        }
     }
 
     if let Some(current_meta) = below_current_meta
         && let Err(e) = apply_below_reparenting(repo, current, branch_name, current_meta)
     {
-        rollback_after_commit(
-            workdir,
-            current,
-            &parent_sha,
-            Some(branch_name),
-            repo,
-            committing_on_current,
-            below_current_meta,
-            &mut auto_stash,
-        );
-        return Err(e);
+        rollback_and_finish!(e, "below reparent", Some(branch_name));
     }
 
     if committing_on_current {
@@ -1168,17 +1245,7 @@ fn run_commit_first(
         // now lives only on `branch_name`.
         let current_ref = format!("refs/heads/{}", current);
         if let Err(e) = repo.update_ref(&current_ref, &parent_sha) {
-            rollback_after_commit(
-                workdir,
-                current,
-                &parent_sha,
-                Some(branch_name),
-                repo,
-                committing_on_current,
-                below_current_meta,
-                &mut auto_stash,
-            );
-            return Err(e);
+            rollback_and_finish!(e, "rewind current branch", Some(branch_name));
         }
     }
 
@@ -1187,19 +1254,19 @@ fn run_commit_first(
     // commit; in the detached-parent case HEAD already points at the new commit.
     // `git checkout` only moves HEAD in both cases.
     if let Err(e) = repo.checkout(branch_name) {
-        rollback_after_commit(
-            workdir,
-            current,
-            &parent_sha,
-            Some(branch_name),
-            repo,
-            committing_on_current,
-            below_current_meta,
-            &mut auto_stash,
-        );
-        return Err(e);
+        rollback_and_finish!(e, "checkout", Some(branch_name));
     }
-    auto_stash.drop_stash(workdir)?;
+
+    let stash_result = auto_stash.drop_stash(workdir);
+    record_create_after(&mut tx, workdir, branch_name, below_current);
+    tx.set_head_branch_after(branch_name);
+    match stash_result {
+        Ok(()) => tx.finish_ok()?,
+        Err(e) => {
+            let _ = tx.finish_err(&e.to_string(), Some("drop auto-stash"), Some(branch_name));
+            return Err(e);
+        }
+    }
 
     print_remote_parent_warning(repo, config, parent_branch);
     println!(
@@ -1396,8 +1463,15 @@ fn create_branch_with_banner(
     insert: bool,
     below_current_meta: Option<&BranchMetadata>,
     restore_stash_index: bool,
+    tx: &mut Transaction,
 ) -> Result<()> {
     let workdir = repo.workdir()?;
+    tx.plan_branch(repo, branch_name)?;
+    tx.plan_metadata_ref(repo, branch_name)?;
+    if below_current_meta.is_some() {
+        tx.plan_metadata_ref(repo, original)?;
+    }
+    tx.snapshot()?;
     let mut auto_stash = if below_current_meta.is_some() {
         CreateBelowAutoStash::push_if_dirty(workdir, restore_stash_index)?
     } else {
@@ -1421,7 +1495,7 @@ fn create_branch_with_banner(
         return Err(e);
     }
 
-    if insert && let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
+    if insert && let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name, tx) {
         rollback_create(repo, original, branch_name);
         auto_stash.restore_on_original_branch(repo, workdir, original)?;
         return Err(e);
@@ -1522,7 +1596,12 @@ fn resolve_below_current_metadata(repo: &GitRepo, current: &str) -> Result<Branc
 /// Reparent children of `parent_branch` onto `new_branch` and print the usual
 /// `--insert` summary. Extracted from the branch-first path so both flows
 /// share the same behaviour.
-fn apply_insert_reparenting(repo: &GitRepo, parent_branch: &str, new_branch: &str) -> Result<()> {
+fn apply_insert_reparenting(
+    repo: &GitRepo,
+    parent_branch: &str,
+    new_branch: &str,
+    tx: &mut Transaction,
+) -> Result<()> {
     let stack = Stack::load(repo)?;
     let Some(parent_info) = stack.branches.get(parent_branch) else {
         return Ok(());
@@ -1539,8 +1618,11 @@ fn apply_insert_reparenting(repo: &GitRepo, parent_branch: &str, new_branch: &st
     }
 
     let new_parent_rev = repo.branch_commit(new_branch)?;
+    let workdir = repo.workdir()?;
     for child in &children {
         if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+            tx.plan_metadata_ref(repo, child)?;
+            tx.snapshot()?;
             // `new_branch` is created at `parent_branch`'s tip at the time of insert,
             // not `child`'s -- if `child` was already stale relative to `parent_branch`,
             // `new_parent_rev` isn't actually in `child`'s ancestry. Verify before
@@ -1557,6 +1639,10 @@ fn apply_insert_reparenting(repo: &GitRepo, parent_branch: &str, new_branch: &st
                 ..child_meta
             };
             updated.write(repo.inner(), child)?;
+            tx.record_known_metadata_after(
+                child,
+                ref_oid(workdir, &format!("refs/branch-metadata/{}", child)).as_deref(),
+            );
         }
     }
 
