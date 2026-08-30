@@ -287,7 +287,11 @@ fn restack_continue_after_manual_rebase_continue_and_parent_advance_keeps_ancest
     // `stax continue` -- this is the exact scenario the bug requires: stax's own
     // metadata write for `race-b` never runs.
     repo.resolve_conflicts_ours();
-    let manual_continue = repo.git(&["rebase", "--continue"]);
+    // `rebase --continue` after a conflict opens an editor to confirm the
+    // commit message; force a no-op editor so this doesn't depend on the
+    // ambient environment having one configured (it isn't in CI's dumb
+    // terminal, which otherwise fails with "Terminal is dumb, but EDITOR unset").
+    let manual_continue = repo.git_with_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
     assert!(
         manual_continue.status.success(),
         "manual git rebase --continue should complete: {}",
