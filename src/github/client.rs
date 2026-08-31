@@ -1,21 +1,14 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
-use octocrab::service::middleware::retry::RetryConfig;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::config::{Config, GitHubAuthSource};
 use crate::forge::{ForgeSignal, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
 use crate::github::transport;
-
-const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
-const GITHUB_API_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-const GITHUB_API_RETRY_COUNT: usize = 1;
 
 pub struct GitHubClient {
     pub octocrab: Octocrab,
@@ -263,32 +256,8 @@ impl GitHubClient {
         auth_source: GitHubAuthSource,
         token: String,
     ) -> Result<Self> {
-        // octocrab's own client cannot reach GitHub through an HTTP proxy, so
-        // when one is configured we swap in a reqwest-backed transport.
-        let octocrab = if transport::proxy_is_configured() {
-            transport::build_proxy_aware_client(
-                &token,
-                api_base_url.as_deref(),
-                GITHUB_API_CONNECT_TIMEOUT,
-                GITHUB_API_READ_TIMEOUT,
-                GITHUB_API_RETRY_COUNT,
-            )
-            .context("Failed to create proxied GitHub client")?
-        } else {
-            let mut builder = Octocrab::builder()
-                .personal_token(token)
-                .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
-                .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
-                .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))
-                .set_write_timeout(Some(GITHUB_API_WRITE_TIMEOUT));
-            if let Some(api_base) = api_base_url {
-                builder = builder
-                    .base_uri(api_base)
-                    .context("Failed to set GitHub API base URL")?;
-            }
-
-            builder.build().context("Failed to create GitHub client")?
-        };
+        let octocrab = transport::build_client(&token, api_base_url.as_deref())
+            .context("Failed to create GitHub client")?;
 
         Ok(Self {
             octocrab,

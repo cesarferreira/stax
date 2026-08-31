@@ -20,6 +20,12 @@
 //! mandatory for GitHub), base URI resolution, and the auth header. Retry is
 //! reimplemented as a loop because octocrab's `RetryConfig` policy is tied to
 //! `hyper_util::client::legacy::Error`, an error type we cannot produce.
+//!
+//! This is the only GitHub transport: it runs whether or not a proxy is
+//! configured, so the proxied and unproxied paths cannot drift apart, and
+//! GitHub now reaches the network exactly the way GitLab and Gitea already do
+//! (`forge::build_http_client`) — same client, same timeout shape, same
+//! `stax` user-agent.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +42,14 @@ use octocrab::{AuthState, OctoBody, Octocrab, OctocrabBuilder};
 const GITHUB_API_BASE_URI: &str = "https://api.github.com";
 const GITHUB_UPLOAD_BASE_URI: &str = "https://uploads.github.com";
 
+/// Timeouts and retry budget for GitHub API requests. The shape matches
+/// `forge::build_http_client`, so every forge behaves the same way on a slow
+/// or half-open connection.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
+const RETRY_COUNT: usize = 1;
+
 /// Proxy environment variables, most specific first — the same set and order
 /// reqwest, curl and git resolve.
 const PROXY_ENV_VARS: [&str; 6] = [
@@ -48,11 +62,6 @@ const PROXY_ENV_VARS: [&str; 6] = [
 ];
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
-/// Whether this process has an HTTP proxy configured for outbound requests.
-pub(crate) fn proxy_is_configured() -> bool {
-    proxy_env_override().is_some()
-}
 
 /// The proxy variable in effect for this process, as `(name, value)`.
 fn proxy_env_override() -> Option<(&'static str, String)> {
@@ -127,12 +136,30 @@ fn connect_failure_hint(proxy: Option<(&str, String)>) -> String {
     }
 }
 
-/// Build an `Octocrab` that routes through the configured HTTP proxy.
-pub(crate) fn build_proxy_aware_client(
+/// Build the `Octocrab` stax talks to GitHub through.
+pub(crate) fn build_client(token: &str, api_base_url: Option<&str>) -> Result<Octocrab> {
+    build_client_with(
+        token,
+        api_base_url,
+        Timeouts {
+            connect: CONNECT_TIMEOUT,
+            read: READ_TIMEOUT,
+            total: TOTAL_TIMEOUT,
+        },
+        RETRY_COUNT,
+    )
+}
+
+struct Timeouts {
+    connect: Duration,
+    read: Duration,
+    total: Duration,
+}
+
+fn build_client_with(
     token: &str,
     api_base_url: Option<&str>,
-    connect_timeout: Duration,
-    read_timeout: Duration,
+    timeouts: Timeouts,
     retries: usize,
 ) -> Result<Octocrab> {
     let base_uri: http::Uri = api_base_url
@@ -150,8 +177,9 @@ pub(crate) fn build_proxy_aware_client(
     ensure_rustls_provider();
 
     let http = reqwest::Client::builder()
-        .connect_timeout(connect_timeout)
-        .read_timeout(read_timeout)
+        .connect_timeout(timeouts.connect)
+        .read_timeout(timeouts.read)
+        .timeout(timeouts.total)
         // Match octocrab's redirect behaviour: cross-origin redirects are
         // followed (GitHub sends them for artifact and log downloads) but
         // reqwest strips `Authorization` when the origin changes, so the token
@@ -254,14 +282,17 @@ mod tests {
 
     fn test_client(server: &MockServer, retries: usize) -> Octocrab {
         ensure_crypto_provider();
-        build_proxy_aware_client(
+        build_client_with(
             "test-token",
             Some(&server.uri()),
-            Duration::from_secs(5),
-            Duration::from_secs(5),
+            Timeouts {
+                connect: Duration::from_secs(5),
+                read: Duration::from_secs(5),
+                total: Duration::from_secs(5),
+            },
             retries,
         )
-        .expect("proxy-aware client builds")
+        .expect("GitHub client builds")
     }
 
     #[test]
@@ -335,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_aware_client_sends_octocrab_headers_and_resolves_base_uri() {
+    async fn client_sends_octocrab_headers_and_resolves_base_uri() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/user"))
@@ -375,7 +406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_aware_client_retries_server_errors() {
+    async fn client_retries_server_errors() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/probe"))
@@ -409,7 +440,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_aware_client_surfaces_errors_without_retries() {
+    async fn client_surfaces_errors_without_retries() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/probe"))
