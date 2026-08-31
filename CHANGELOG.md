@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.109.0] - 2026-08-31
+
+### 🚀 Features
+
+- *(board)* Add stax board dashboard for PRs and issues ([#831](https://github.com/cesarferreira/stax/issues/831))
+- *(user)* Add `stax user` command for personal preferences ([#849](https://github.com/cesarferreira/stax/issues/849))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Include tags when fetching with --full ([#832](https://github.com/cesarferreira/stax/issues/832))
+- *(sync)* Persist ancestry-verified parentBranchRevision after squash-merge cleanup ([#834](https://github.com/cesarferreira/stax/issues/834))
+- *(ops)* Track metadata-ref before/after OIDs at 3 more parentBranchRevision write sites ([#838](https://github.com/cesarferreira/stax/issues/838))
+- *(create)* Wrap stax create in a Transaction, closing the last of #830's write sites ([#840](https://github.com/cesarferreira/stax/issues/840))
+- *(detach)* Track metadata refs so undo actually reverses detach ([#842](https://github.com/cesarferreira/stax/issues/842))
+- *(edit)* Track metadata ref for undo, and fix a real cp bug in the rebase editor ([#844](https://github.com/cesarferreira/stax/issues/844))
+- *(restack)* Verify ancestry when recovering metadata after a manual rebase --continue ([#845](https://github.com/cesarferreira/stax/issues/845))
+- *(split)* Verify ancestry and track metadata refs in the interactive split TUI ([#846](https://github.com/cesarferreira/stax/issues/846))
+
+### 🧪 Testing
+
+- *(sync)* Cover full fetch of remote-only tags ([#836](https://github.com/cesarferreira/stax/issues/836))
+- *(reorder)* Pin the metadata-ref after-OID invariant, confirmed safe not buggy ([#847](https://github.com/cesarferreira/stax/issues/847))
 ## [0.108.0] - 2026-08-28
 
 ### 🚀 Features
@@ -29,6 +51,10 @@ All notable changes to this project will be documented in this file.
 ### 🧪 Testing
 
 - Cover multi-branch undo and cross-phase metadata idempotency ([#827](https://github.com/cesarferreira/stax/issues/827))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.107.1] - 2026-08-27
 
 ### 🐛 Bug Fixes
