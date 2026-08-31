@@ -14,6 +14,29 @@ Config is loaded as follows:
 2. Otherwise, `~/.config/stax/config.toml` is loaded.
 3. If present, `stax.toml` at the current git repository root overlays only the values it sets.
 
+## User preferences
+
+`stax user` is a shortcut for setting common personal preferences in the global config, without hand-editing `config.toml`:
+
+```bash
+st user                                      # print current values
+st user branch-prefix --set "cesar/"         # config.branch.prefix
+st user branch-prefix --unset
+st user branch-date --enable                 # config.branch.date
+st user branch-date --disable
+st user branch-replacement --set "_"         # config.branch.replacement
+st user branch-replacement --set-dash        # shorthand for --set "-"
+st user branch-replacement --set-underscore  # shorthand for --set "_"
+st user editor --set vim                     # config.editor (falls back to $EDITOR when unset)
+st user editor --unset
+st user tips --enable                        # config.ui.tips
+st user tips --disable
+st user submit-body --enable                 # config.submit.commit_messages_in_body
+st user submit-body --disable
+```
+
+If `branch.format` is already set, `branch-date --enable`/`--disable` prints a warning: `format` takes precedence and the date toggle has no effect until `format` is unset.
+
 ## Example config
 
 Run `st --default-config` for the full annotated template (every section, with allowed values in comments). Copy the output to `~/.config/stax/config.toml` and uncomment only the keys you want to override.
@@ -30,6 +53,8 @@ single_stack = "on"    # "on" | "off"
 <summary>Full template (same as <code>st --default-config</code>)</summary>
 
 ```toml
+# editor = "vim" # preferred editor for interactive edits (e.g. `stax pr --edit`); falls back to $EDITOR
+
 [branch]
 # format = "{user}/{date}/{message}"
 # user = "cesar"
@@ -53,6 +78,7 @@ single_stack = "on"    # "on" | "off"
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
 # native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
 # stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
+# commit_messages_in_body = true # include a `## Summary` commit-message list in the default PR body
 
 [ci]
 # alert = false

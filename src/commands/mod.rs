@@ -63,6 +63,7 @@ pub mod sync_plan;
 pub mod tmux;
 pub mod undo;
 pub mod upstack;
+pub mod user;
 pub mod watch;
 pub mod web;
 pub mod worktree;

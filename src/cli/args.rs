@@ -765,6 +765,12 @@ pub(crate) enum Commands {
         command: Option<SkillsCommands>,
     },
 
+    /// View or set personal preferences (branch naming, editor, tips, submit body)
+    User {
+        #[command(subcommand)]
+        command: Option<UserSubcommand>,
+    },
+
     /// Switch to the trunk branch, or set it with `stax trunk <branch>`
     #[command(visible_alias = "t")]
     Trunk {
@@ -1492,6 +1498,67 @@ pub(crate) enum Commands {
 pub(crate) enum AuthSubcommand {
     /// Show which auth source is currently active
     Status,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum UserSubcommand {
+    /// Prefix applied to new branch names (e.g. "cesar/")
+    BranchPrefix {
+        /// Set the branch prefix
+        #[arg(long)]
+        set: Option<String>,
+        /// Clear the branch prefix
+        #[arg(long, conflicts_with = "set")]
+        unset: bool,
+    },
+    /// Whether new branch names include a date
+    BranchDate {
+        /// Include a date in new branch names
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Do not include a date in new branch names
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Character used to replace spaces and special chars in branch names
+    BranchReplacement {
+        /// Set the replacement character
+        #[arg(long, conflicts_with_all = ["set_dash", "set_underscore"])]
+        set: Option<String>,
+        /// Shorthand for --set "-"
+        #[arg(long, conflicts_with = "set_underscore")]
+        set_dash: bool,
+        /// Shorthand for --set "_"
+        #[arg(long)]
+        set_underscore: bool,
+    },
+    /// Preferred editor for interactive text edits (e.g. `stax pr --edit`)
+    Editor {
+        /// Set the preferred editor
+        #[arg(long)]
+        set: Option<String>,
+        /// Clear the preferred editor (fall back to $EDITOR)
+        #[arg(long, conflicts_with = "set")]
+        unset: bool,
+    },
+    /// Contextual tips/suggestions shown by stax commands
+    Tips {
+        /// Show contextual tips/suggestions
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Hide contextual tips/suggestions
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Whether the default PR body includes a commit-message summary
+    SubmitBody {
+        /// Include a commit-message summary in the default PR body
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Omit the commit-message summary from the default PR body
+        #[arg(long)]
+        disable: bool,
+    },
 }
 
 #[derive(Subcommand)]

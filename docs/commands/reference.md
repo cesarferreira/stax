@@ -186,6 +186,7 @@ when it points at the same commit. `--all` conflicts with `--parent` and
 |---|---|
 | `st auth` | Configure GitHub token (`--from-gh`, `--token <token>`, `status`) |
 | `st config` | Show current configuration |
+| `st user` | View or set personal preferences (`branch-prefix`, `branch-date`, `branch-replacement`, `editor`, `tips`, `submit-body`) |
 | `st config --set-ai` | Interactively set AI agent/model (global or per-feature) |
 | `st config --reset-ai` | Clear saved AI defaults and re-prompt (`--no-prompt` to clear only) |
 | `st --default-config` | Print annotated config template (all options and allowed values) |

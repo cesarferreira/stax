@@ -3,12 +3,18 @@
 # Omitted keys use the built-in defaults shown in each comment.
 # Docs: https://github.com/cesarferreira/stax/blob/main/docs/configuration/index.md
 
+# editor = "vim" # preferred editor for interactive edits (e.g. `stax pr --edit`); falls back to $EDITOR
+#   Set with: stax user editor --set <editor> | stax user editor --unset
+
 [branch]
 # format = "{user}/{date}/{message}"
 # user = "cesar"
 # date_format = "%m-%d"
-# replacement = "-"
+# replacement = "-" # stax user branch-replacement --set "_" | --set-dash | --set-underscore
 # stale_days = 30 # days without commits before `stax sweep` calls a branch stale
+#   prefix and date are legacy; prefer `format`. Set with:
+#   stax user branch-prefix --set "cesar/" | --unset
+#   stax user branch-date --enable | --disable
 
 [git]
 # rerere = true # auto-enable git rerere on `stax init`
@@ -24,6 +30,8 @@
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
 # native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
 # stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
+# commit_messages_in_body = true # include a `## Summary` commit-message list in the default PR body
+#   Set with: stax user submit-body --enable | --disable
 
 [ci]
 # alert = false
@@ -36,7 +44,7 @@
 # gh_hostname = "github.company.com"
 
 [ui]
-# tips = true
+# tips = true # stax user tips --enable | --disable
 
 [display]
 # worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)

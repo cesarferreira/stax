@@ -2248,3 +2248,98 @@ replacement = "-"
     // Legacy behavior should still work
     assert_eq!(config.format_branch_name("feature"), "cesar/feature");
 }
+
+// ---------------------------------------------------------------------------
+// `stax user` setters
+// ---------------------------------------------------------------------------
+
+fn with_isolated_config_dir<F: FnOnce()>(f: F) {
+    let _guard = env_lock();
+
+    let orig_stax = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.path()) };
+
+    f();
+
+    restore_env_var("STAX_CONFIG_DIR", orig_stax);
+}
+
+#[test]
+fn test_set_branch_prefix() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_prefix(Some("cesar/".to_string())).unwrap();
+        assert_eq!(
+            Config::load_global().unwrap().branch.prefix,
+            Some("cesar/".to_string())
+        );
+
+        Config::set_branch_prefix(None).unwrap();
+        assert!(Config::load_global().unwrap().branch.prefix.is_none());
+    });
+}
+
+#[test]
+fn test_set_branch_date() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_date(true).unwrap();
+        assert!(Config::load_global().unwrap().branch.date);
+
+        Config::set_branch_date(false).unwrap();
+        assert!(!Config::load_global().unwrap().branch.date);
+    });
+}
+
+#[test]
+fn test_set_branch_replacement() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_replacement("_".to_string()).unwrap();
+        assert_eq!(Config::load_global().unwrap().branch.replacement, "_");
+    });
+}
+
+#[test]
+fn test_set_editor() {
+    with_isolated_config_dir(|| {
+        Config::set_editor(Some("vim".to_string())).unwrap();
+        assert_eq!(
+            Config::load_global().unwrap().editor,
+            Some("vim".to_string())
+        );
+
+        Config::set_editor(None).unwrap();
+        assert!(Config::load_global().unwrap().editor.is_none());
+    });
+}
+
+#[test]
+fn test_set_tips() {
+    with_isolated_config_dir(|| {
+        Config::set_tips(false).unwrap();
+        assert!(!Config::load_global().unwrap().ui.tips);
+
+        Config::set_tips(true).unwrap();
+        assert!(Config::load_global().unwrap().ui.tips);
+    });
+}
+
+#[test]
+fn test_set_submit_commit_messages_in_body() {
+    with_isolated_config_dir(|| {
+        Config::set_submit_commit_messages_in_body(false).unwrap();
+        assert!(
+            !Config::load_global()
+                .unwrap()
+                .submit
+                .commit_messages_in_body
+        );
+
+        Config::set_submit_commit_messages_in_body(true).unwrap();
+        assert!(
+            Config::load_global()
+                .unwrap()
+                .submit
+                .commit_messages_in_body
+        );
+    });
+}

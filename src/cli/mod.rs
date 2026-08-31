@@ -216,6 +216,33 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
+        Commands::User { command } => {
+            let result = match command {
+                None => commands::user::run_default(),
+                Some(UserSubcommand::BranchPrefix { set, unset }) => {
+                    commands::user::branch_prefix(set.clone(), *unset)
+                }
+                Some(UserSubcommand::BranchDate { enable, disable }) => {
+                    commands::user::branch_date(*enable, *disable)
+                }
+                Some(UserSubcommand::BranchReplacement {
+                    set,
+                    set_dash,
+                    set_underscore,
+                }) => commands::user::branch_replacement(set.clone(), *set_dash, *set_underscore),
+                Some(UserSubcommand::Editor { set, unset }) => {
+                    commands::user::editor(set.clone(), *unset)
+                }
+                Some(UserSubcommand::Tips { enable, disable }) => {
+                    commands::user::tips(*enable, *disable)
+                }
+                Some(UserSubcommand::SubmitBody { enable, disable }) => {
+                    commands::user::submit_body(*enable, *disable)
+                }
+            };
+            update::show_update_notification();
+            return result;
+        }
         _ => {}
     }
 
@@ -511,6 +538,7 @@ pub fn run() -> Result<()> {
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor { .. } => unreachable!(), // Handled above
         Commands::Skills { .. } => unreachable!(), // Handled above
+        Commands::User { .. } => unreachable!(),   // Handled above
         Commands::Trunk { branch } => {
             if let Some(name) = branch {
                 commands::set_trunk::run(&name)

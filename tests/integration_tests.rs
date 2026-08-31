@@ -7933,6 +7933,21 @@ mod forge_mock_tests {
         fs::write(&config_path, config).expect("Failed to write config");
     }
 
+    fn write_test_config_with_submit_body(
+        home: &Path,
+        api_base_url: &str,
+        commit_messages_in_body: bool,
+    ) {
+        let config_dir = home.join(".config").join("stax");
+        std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
+        let config_path = config_dir.join("config.toml");
+        let config = format!(
+            "[remote]\napi_base_url = \"{}\"\n\n[submit]\nstack_links = \"off\"\ncommit_messages_in_body = {}\n",
+            api_base_url, commit_messages_in_body
+        );
+        fs::write(&config_path, config).expect("Failed to write config");
+    }
+
     fn write_test_config_with_ai(home: &Path, api_base_url: &str, stack_links: Option<&str>) {
         let config_dir = home.join(".config").join("stax");
         std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
@@ -10104,6 +10119,38 @@ mod forge_mock_tests {
         let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
         assert_eq!(payload["title"], "Add AI fallback");
         assert_eq!(payload["body"], default_body);
+    }
+
+    #[tokio::test]
+    async fn test_submit_body_disabled_omits_commit_summary_for_new_pr() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit_body(home.path(), &mock_server.uri(), false);
+        let repo = setup_branch_with_remote(home.path(), "feature-body-disabled");
+
+        mount_github_new_pr_flow(
+            &mock_server,
+            45,
+            "feature-body-disabled",
+            "Add feature-body-disabled",
+            "",
+        )
+        .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["title"], "Add feature-body-disabled");
+        assert_eq!(payload["body"], "");
     }
 
     #[tokio::test]
