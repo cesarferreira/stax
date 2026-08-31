@@ -68,6 +68,11 @@ git2 = { version = "0.21", default-features = false, features = ["https"] }
 
 # GitHub API
 octocrab = "0.54.1"
+# Proxy-aware GitHub transport (octocrab's own hyper client ignores HTTPS_PROXY;
+# see src/github/transport.rs). Versions match what octocrab/reqwest already pull in.
+http = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 

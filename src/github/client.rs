@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::config::{Config, GitHubAuthSource};
 use crate::forge::{ForgeSignal, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
+use crate::github::transport;
 
 const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -229,6 +230,39 @@ struct RepoListIssue {
     pull_request: Option<serde_json::Value>,
 }
 
+/// Connect-level failures never reach GitHub, so the auth hints below do not
+/// apply — what matters is whether traffic is supposed to go through a proxy.
+fn is_connect_error(msg: &str) -> bool {
+    const CONNECT_MARKERS: [&str; 6] = [
+        "(Connect)",
+        "deadline has elapsed",
+        "error trying to connect",
+        "dns error",
+        "operation timed out",
+        "Connection refused",
+    ];
+    CONNECT_MARKERS.iter().any(|marker| msg.contains(marker))
+}
+
+fn connect_failure_hint() -> String {
+    connect_failure_hint_for(transport::proxy_env_override())
+}
+
+fn connect_failure_hint_for(proxy: Option<(&str, String)>) -> String {
+    match proxy {
+        Some((name, value)) => format!(
+            "Could not reach the GitHub API. Requests use the proxy from {}={}; check that the \
+             proxy is up and permits CONNECT to the API host, or exclude the host via NO_PROXY.",
+            name,
+            transport::redact_proxy_url(&value),
+        ),
+        None => "Could not reach the GitHub API, and no HTTP proxy is configured. If this network \
+                 requires one, set HTTPS_PROXY (stax honours ALL_PROXY/HTTPS_PROXY/HTTP_PROXY and \
+                 NO_PROXY); otherwise check your VPN, DNS, or firewall."
+            .to_string(),
+    }
+}
+
 impl GitHubClient {
     /// Create a new GitHub client from config
     pub fn new(owner: &str, repo: &str, api_base_url: Option<String>) -> Result<Self> {
@@ -262,19 +296,32 @@ impl GitHubClient {
         auth_source: GitHubAuthSource,
         token: String,
     ) -> Result<Self> {
-        let mut builder = Octocrab::builder()
-            .personal_token(token)
-            .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
-            .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
-            .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))
-            .set_write_timeout(Some(GITHUB_API_WRITE_TIMEOUT));
-        if let Some(api_base) = api_base_url {
-            builder = builder
-                .base_uri(api_base)
-                .context("Failed to set GitHub API base URL")?;
-        }
+        // octocrab's own client cannot reach GitHub through an HTTP proxy, so
+        // when one is configured we swap in a reqwest-backed transport.
+        let octocrab = if transport::proxy_env_override().is_some() {
+            transport::build_proxy_aware_client(
+                &token,
+                api_base_url.as_deref(),
+                GITHUB_API_CONNECT_TIMEOUT,
+                GITHUB_API_READ_TIMEOUT,
+                GITHUB_API_RETRY_COUNT,
+            )
+            .context("Failed to create proxied GitHub client")?
+        } else {
+            let mut builder = Octocrab::builder()
+                .personal_token(token)
+                .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
+                .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
+                .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))
+                .set_write_timeout(Some(GITHUB_API_WRITE_TIMEOUT));
+            if let Some(api_base) = api_base_url {
+                builder = builder
+                    .base_uri(api_base)
+                    .context("Failed to set GitHub API base URL")?;
+            }
 
-        let octocrab = builder.build().context("Failed to create GitHub client")?;
+            builder.build().context("Failed to create GitHub client")?
+        };
 
         Ok(Self {
             octocrab,
@@ -310,6 +357,9 @@ impl GitHubClient {
     /// when the token lacks access, not 403).
     pub(crate) fn enrich_api_error(&self, err: anyhow::Error) -> anyhow::Error {
         let msg = format!("{:#}", err);
+        if is_connect_error(&msg) {
+            return err.context(connect_failure_hint());
+        }
         if msg.contains("Not Found")
             || msg.contains("404")
             || msg.contains("Unauthorized")
@@ -1487,6 +1537,60 @@ mod tests {
             "Non-auth errors should not get auth hint, got: {}",
             msg
         );
+    }
+
+    #[tokio::test]
+    async fn test_enrich_api_error_adds_connect_hint() {
+        ensure_crypto_provider();
+        let octocrab = Octocrab::builder()
+            .personal_token("token".to_string())
+            .build()
+            .unwrap();
+
+        let client = GitHubClient::with_octocrab(octocrab, "myorg", "myrepo");
+
+        let original = anyhow::anyhow!(
+            "Service Error: client error (Connect): client error (Connect): deadline has elapsed"
+        );
+        let msg = format!("{:#}", client.enrich_api_error(original));
+
+        assert!(
+            msg.contains("Could not reach the GitHub API"),
+            "Expected connect hint, got: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("token is expired"),
+            "Connect errors should not get the auth hint, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_connect_hint_names_proxy_variable_without_credentials() {
+        let hint = connect_failure_hint_for(Some((
+            "HTTPS_PROXY",
+            "http://alice:s3cret@proxy.example:8080".to_string(),
+        )));
+
+        assert!(
+            hint.contains("HTTPS_PROXY=http://***@proxy.example:8080"),
+            "Expected redacted proxy in hint, got: {}",
+            hint
+        );
+        assert!(
+            !hint.contains("s3cret") && !hint.contains("alice"),
+            "Proxy credentials leaked into hint: {}",
+            hint
+        );
+    }
+
+    #[test]
+    fn test_connect_hint_without_proxy_points_at_env_vars() {
+        let hint = connect_failure_hint_for(None);
+
+        assert!(hint.contains("HTTPS_PROXY"), "got: {}", hint);
+        assert!(hint.contains("NO_PROXY"), "got: {}", hint);
     }
 
     #[tokio::test]

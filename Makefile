@@ -81,7 +81,7 @@ test-local-fast:
 		./scripts/native-tests.sh; \
 	else \
 		threads="$${NEXTEST_TEST_THREADS:-num-cpus}"; \
-		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
+		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u all_proxy -u https_proxy -u http_proxy -u no_proxy STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
 	fi
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
@@ -124,7 +124,7 @@ test-local-ramdisk: ramdisk-up
 	if [ -z "$$threads" ]; then \
 		threads="num-cpus"; \
 	fi; \
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(RAMDISK_MOUNT)/tmp" TMPDIR="$(RAMDISK_MOUNT)/tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
+	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u all_proxy -u https_proxy -u http_proxy -u no_proxy STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(RAMDISK_MOUNT)/tmp" TMPDIR="$(RAMDISK_MOUNT)/tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
 
 # Build the pre-baked Linux test image (nextest + mold linker).
 test-image:
