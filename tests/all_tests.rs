@@ -54,6 +54,8 @@ mod create_insert_tests;
 mod create_message_tests;
 #[path = "create_rollback_tests.rs"]
 mod create_rollback_tests;
+#[path = "create_undo_tests.rs"]
+mod create_undo_tests;
 #[path = "demo_tests.rs"]
 mod demo_tests;
 #[path = "detach_tests.rs"]
