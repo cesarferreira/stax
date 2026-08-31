@@ -68,6 +68,12 @@ pub enum BoardUpdate {
         message: String,
         refresh: bool,
     },
+    LabelMutation {
+        target: BoardTarget,
+        label: String,
+        added: bool,
+        message: String,
+    },
     DetailError {
         target: BoardTarget,
         message: String,
@@ -443,6 +449,37 @@ impl BoardApp {
             BoardUpdate::ActionDone { message, .. } => {
                 self.status_message = Some(message);
             }
+            BoardUpdate::LabelMutation {
+                target,
+                label,
+                added,
+                message,
+            } => {
+                match target {
+                    BoardTarget::Pr(number) => {
+                        if let Some(pr) = self.prs.iter_mut().find(|pr| pr.number == number) {
+                            update_labels(&mut pr.labels, &label, added);
+                        }
+                        if let Some(detail) = self.pr_details.get_mut(&number) {
+                            update_labels(&mut detail.labels, &label, added);
+                        }
+                    }
+                    BoardTarget::Issue(number) => {
+                        if let Some(issue) =
+                            self.issues.iter_mut().find(|issue| issue.number == number)
+                        {
+                            update_labels(&mut issue.labels, &label, added);
+                        }
+                        if let Some(detail) = self.issue_details.get_mut(&number) {
+                            update_labels(&mut detail.labels, &label, added);
+                        }
+                    }
+                }
+                if self.selected_target() == Some(target) {
+                    update_labels(&mut self.active_labels, &label, added);
+                }
+                self.status_message = Some(message);
+            }
             BoardUpdate::DetailError { target, message } => {
                 if self.loading_detail == Some(target) {
                     self.loading_detail = None;
@@ -458,6 +495,16 @@ impl BoardApp {
                 self.loading_comments = None;
             }
         }
+    }
+}
+
+fn update_labels(labels: &mut Vec<String>, label: &str, added: bool) {
+    if added {
+        if !labels.iter().any(|existing| existing == label) {
+            labels.push(label.to_string());
+        }
+    } else {
+        labels.retain(|existing| existing != label);
     }
 }
 
@@ -685,6 +732,55 @@ mod tests {
         });
 
         assert!(!app.detail_error.contains_key(&BoardTarget::Pr(1)));
+    }
+
+    #[test]
+    fn label_mutation_updates_cached_pr_and_picker_state_without_refresh() {
+        let mut app = BoardApp::new("o/r".to_string(), BoardTabSelection::PullRequests, false);
+        app.prs = vec![pr(1, "a", &["bug"])];
+        app.pr_selected = 0;
+        app.active_labels = vec!["bug".to_string()];
+        let mut detail = pr_detail(1, false);
+        detail.labels = vec!["bug".to_string()];
+        app.pr_details.insert(1, detail);
+
+        app.apply_update(BoardUpdate::LabelMutation {
+            target: BoardTarget::Pr(1),
+            label: "feature".to_string(),
+            added: true,
+            message: "Added label \"feature\"".to_string(),
+        });
+
+        assert_eq!(app.prs[0].labels, vec!["bug", "feature"]);
+        assert_eq!(app.pr_details[&1].labels, vec!["bug", "feature"]);
+        assert_eq!(app.active_labels, vec!["bug", "feature"]);
+
+        app.apply_update(BoardUpdate::LabelMutation {
+            target: BoardTarget::Pr(1),
+            label: "bug".to_string(),
+            added: false,
+            message: "Removed label \"bug\"".to_string(),
+        });
+
+        assert_eq!(app.prs[0].labels, vec!["feature"]);
+        assert_eq!(app.pr_details[&1].labels, vec!["feature"]);
+        assert_eq!(app.active_labels, vec!["feature"]);
+    }
+
+    #[test]
+    fn failed_label_mutation_keeps_picker_selection_unchanged() {
+        let mut app = BoardApp::new("o/r".to_string(), BoardTabSelection::PullRequests, false);
+        app.active_labels = vec!["bug".to_string()];
+
+        app.apply_update(BoardUpdate::Error(
+            "Failed to remove label: forbidden".to_string(),
+        ));
+
+        assert_eq!(app.active_labels, vec!["bug"]);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Failed to remove label: forbidden")
+        );
     }
 
     #[test]
