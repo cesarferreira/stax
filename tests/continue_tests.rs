@@ -252,6 +252,90 @@ fn test_continue_resumes_remaining_restack_after_conflict() {
     );
 }
 
+#[test]
+fn restack_continue_after_manual_rebase_continue_and_parent_advance_keeps_ancestry_valid_boundary()
+{
+    let repo = TestRepo::new();
+
+    // main -> A -> B, with a change on B that will conflict with a later A commit.
+    repo.run_stax(&["bc", "race-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("shared.txt", "a1\n");
+    repo.commit("A1");
+
+    repo.run_stax(&["bc", "race-b"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("shared.txt", "a1\nb\n");
+    repo.commit("B commit");
+
+    // Advance A with a conflicting change so restacking B triggers a real conflict.
+    repo.run_stax(&["checkout", &branch_a]);
+    repo.create_file("shared.txt", "a2\n");
+    repo.commit("A2");
+
+    repo.run_stax(&["checkout", &branch_b]);
+    let output = repo.run_stax(&["restack"]);
+    assert!(
+        !output.status.success(),
+        "expected restack to conflict\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(repo.has_rebase_in_progress());
+
+    // Resolve and complete the rebase MANUALLY (git rebase --continue), not via
+    // `stax continue` -- this is the exact scenario the bug requires: stax's own
+    // metadata write for `race-b` never runs.
+    repo.resolve_conflicts_ours();
+    // `rebase --continue` after a conflict opens an editor to confirm the
+    // commit message; force a no-op editor so this doesn't depend on the
+    // ambient environment having one configured (it isn't in CI's dumb
+    // terminal, which otherwise fails with "Terminal is dumb, but EDITOR unset").
+    let manual_continue = repo.git_with_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
+    assert!(
+        manual_continue.status.success(),
+        "manual git rebase --continue should complete: {}",
+        TestRepo::stderr(&manual_continue)
+    );
+    assert!(!repo.has_rebase_in_progress());
+
+    // Advance A AGAIN during the "pause" window -- B's real tip only contains
+    // A2, not this next commit.
+    repo.run_stax(&["checkout", &branch_a]);
+    repo.create_file("shared.txt", "a2\na3\n");
+    repo.commit("A3");
+    repo.run_stax(&["checkout", &branch_b]);
+
+    let recovery = repo.run_stax(&["restack", "--continue"]);
+    assert!(
+        recovery.status.success(),
+        "restack --continue recovery should succeed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&recovery),
+        TestRepo::stderr(&recovery)
+    );
+
+    let meta_output = repo.git(&["show", &format!("refs/branch-metadata/{}", branch_b)]);
+    let meta: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&meta_output)).expect("valid JSON");
+    let boundary = meta["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_b]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {} (issue #830)",
+        boundary,
+        branch_b
+    );
+    let a_tip_after_third_commit = repo.get_commit_sha(&branch_a);
+    assert_ne!(
+        boundary, a_tip_after_third_commit,
+        "boundary must not have been stamped to the parent's latest tip, which B was never rebased onto"
+    );
+}
+
 // =============================================================================
 // Sync Continue Tests
 // =============================================================================
