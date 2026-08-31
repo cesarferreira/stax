@@ -49,8 +49,13 @@ const PROXY_ENV_VARS: [&str; 6] = [
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Whether this process has an HTTP proxy configured for outbound requests.
+pub(crate) fn proxy_is_configured() -> bool {
+    proxy_env_override().is_some()
+}
+
 /// The proxy variable in effect for this process, as `(name, value)`.
-pub(crate) fn proxy_env_override() -> Option<(&'static str, String)> {
+fn proxy_env_override() -> Option<(&'static str, String)> {
     proxy_env_from(|name| std::env::var(name).ok())
 }
 
@@ -66,7 +71,7 @@ where
 }
 
 /// Strip any `user:password@` userinfo so a proxy URL is safe to print.
-pub(crate) fn redact_proxy_url(value: &str) -> String {
+fn redact_proxy_url(value: &str) -> String {
     let (scheme, rest) = match value.split_once("://") {
         Some((scheme, rest)) => (Some(scheme), rest),
         None => (None, value),
@@ -78,6 +83,47 @@ pub(crate) fn redact_proxy_url(value: &str) -> String {
     match scheme {
         Some(scheme) => format!("{scheme}://{rest}"),
         None => rest,
+    }
+}
+
+/// Guidance for an error that never got as far as talking to GitHub, or `None`
+/// when the error is not a connect failure.
+///
+/// A connect failure says nothing about the token, so it must not inherit the
+/// auth guidance `enrich_api_error` adds otherwise. What matters instead is
+/// whether the request was supposed to go through a proxy.
+pub(crate) fn connect_failure_context(message: &str) -> Option<String> {
+    const CONNECT_MARKERS: [&str; 6] = [
+        "(Connect)",
+        "deadline has elapsed",
+        "error trying to connect",
+        "dns error",
+        "operation timed out",
+        "Connection refused",
+    ];
+
+    if !CONNECT_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        return None;
+    }
+
+    Some(connect_failure_hint(proxy_env_override()))
+}
+
+fn connect_failure_hint(proxy: Option<(&str, String)>) -> String {
+    match proxy {
+        Some((name, value)) => format!(
+            "Could not reach the GitHub API. Requests use the proxy from {}={}; check that the \
+             proxy is up and permits CONNECT to the API host, or exclude the host via NO_PROXY.",
+            name,
+            redact_proxy_url(&value),
+        ),
+        None => "Could not reach the GitHub API, and no HTTP proxy is configured. If this network \
+                 requires one, set HTTPS_PROXY (stax honours ALL_PROXY/HTTPS_PROXY/HTTP_PROXY and \
+                 NO_PROXY); otherwise check your VPN, DNS, or firewall."
+            .to_string(),
     }
 }
 
@@ -153,19 +199,15 @@ async fn send_with_retry(
         })?
         .to_bytes();
 
+    let request =
+        reqwest::Request::try_from(Request::from_parts(parts, reqwest::Body::from(body)))?;
+
     let mut attempts_left = retries;
     loop {
-        let mut builder = http::Request::builder()
-            .method(parts.method.clone())
-            .uri(parts.uri.clone())
-            .version(parts.version);
-        for (name, value) in parts.headers.iter() {
-            builder = builder.header(name, value);
-        }
-        let attempt = builder
-            .body(reqwest::Body::from(body.clone()))
-            .map_err(BoxError::from)?;
-        let attempt = reqwest::Request::try_from(attempt).map_err(BoxError::from)?;
+        // A buffered body always clones; this only fails if that stops holding.
+        let attempt = request
+            .try_clone()
+            .ok_or("GitHub request body cannot be replayed")?;
 
         let result = http.execute(attempt).await;
         let retryable = match &result {
@@ -177,9 +219,7 @@ async fn send_with_retry(
             continue;
         }
 
-        return result
-            .map(http::Response::<reqwest::Body>::from)
-            .map_err(BoxError::from);
+        return Ok(result?.into());
     }
 }
 
@@ -243,6 +283,42 @@ mod tests {
     fn blank_proxy_env_is_not_a_proxy() {
         assert_eq!(proxy_env_from(lookup(&[("HTTPS_PROXY", "   ")])), None);
         assert_eq!(proxy_env_from(lookup(&[])), None);
+    }
+
+    #[test]
+    fn connect_failure_context_ignores_unrelated_errors() {
+        assert_eq!(connect_failure_context("Bad credentials (401)"), None);
+        assert!(
+            connect_failure_context(
+                "Service Error: client error (Connect): client error (Connect): deadline has elapsed"
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn connect_failure_hint_names_the_proxy_variable_without_credentials() {
+        let hint = connect_failure_hint(Some((
+            "HTTPS_PROXY",
+            "http://alice:s3cret@proxy.example:8080".to_string(),
+        )));
+
+        assert!(
+            hint.contains("HTTPS_PROXY=http://***@proxy.example:8080"),
+            "expected redacted proxy in hint: {hint}"
+        );
+        assert!(
+            !hint.contains("s3cret") && !hint.contains("alice"),
+            "proxy credentials leaked into hint: {hint}"
+        );
+    }
+
+    #[test]
+    fn connect_failure_hint_without_a_proxy_points_at_the_env_vars() {
+        let hint = connect_failure_hint(None);
+
+        assert!(hint.contains("HTTPS_PROXY"), "got: {hint}");
+        assert!(hint.contains("NO_PROXY"), "got: {hint}");
     }
 
     #[test]

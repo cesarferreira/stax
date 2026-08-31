@@ -230,39 +230,6 @@ struct RepoListIssue {
     pull_request: Option<serde_json::Value>,
 }
 
-/// Connect-level failures never reach GitHub, so the auth hints below do not
-/// apply — what matters is whether traffic is supposed to go through a proxy.
-fn is_connect_error(msg: &str) -> bool {
-    const CONNECT_MARKERS: [&str; 6] = [
-        "(Connect)",
-        "deadline has elapsed",
-        "error trying to connect",
-        "dns error",
-        "operation timed out",
-        "Connection refused",
-    ];
-    CONNECT_MARKERS.iter().any(|marker| msg.contains(marker))
-}
-
-fn connect_failure_hint() -> String {
-    connect_failure_hint_for(transport::proxy_env_override())
-}
-
-fn connect_failure_hint_for(proxy: Option<(&str, String)>) -> String {
-    match proxy {
-        Some((name, value)) => format!(
-            "Could not reach the GitHub API. Requests use the proxy from {}={}; check that the \
-             proxy is up and permits CONNECT to the API host, or exclude the host via NO_PROXY.",
-            name,
-            transport::redact_proxy_url(&value),
-        ),
-        None => "Could not reach the GitHub API, and no HTTP proxy is configured. If this network \
-                 requires one, set HTTPS_PROXY (stax honours ALL_PROXY/HTTPS_PROXY/HTTP_PROXY and \
-                 NO_PROXY); otherwise check your VPN, DNS, or firewall."
-            .to_string(),
-    }
-}
-
 impl GitHubClient {
     /// Create a new GitHub client from config
     pub fn new(owner: &str, repo: &str, api_base_url: Option<String>) -> Result<Self> {
@@ -298,7 +265,7 @@ impl GitHubClient {
     ) -> Result<Self> {
         // octocrab's own client cannot reach GitHub through an HTTP proxy, so
         // when one is configured we swap in a reqwest-backed transport.
-        let octocrab = if transport::proxy_env_override().is_some() {
+        let octocrab = if transport::proxy_is_configured() {
             transport::build_proxy_aware_client(
                 &token,
                 api_base_url.as_deref(),
@@ -357,8 +324,8 @@ impl GitHubClient {
     /// when the token lacks access, not 403).
     pub(crate) fn enrich_api_error(&self, err: anyhow::Error) -> anyhow::Error {
         let msg = format!("{:#}", err);
-        if is_connect_error(&msg) {
-            return err.context(connect_failure_hint());
+        if let Some(hint) = transport::connect_failure_context(&msg) {
+            return err.context(hint);
         }
         if msg.contains("Not Found")
             || msg.contains("404")
@@ -1564,33 +1531,6 @@ mod tests {
             "Connect errors should not get the auth hint, got: {}",
             msg
         );
-    }
-
-    #[test]
-    fn test_connect_hint_names_proxy_variable_without_credentials() {
-        let hint = connect_failure_hint_for(Some((
-            "HTTPS_PROXY",
-            "http://alice:s3cret@proxy.example:8080".to_string(),
-        )));
-
-        assert!(
-            hint.contains("HTTPS_PROXY=http://***@proxy.example:8080"),
-            "Expected redacted proxy in hint, got: {}",
-            hint
-        );
-        assert!(
-            !hint.contains("s3cret") && !hint.contains("alice"),
-            "Proxy credentials leaked into hint: {}",
-            hint
-        );
-    }
-
-    #[test]
-    fn test_connect_hint_without_proxy_points_at_env_vars() {
-        let hint = connect_failure_hint_for(None);
-
-        assert!(hint.contains("HTTPS_PROXY"), "got: {}", hint);
-        assert!(hint.contains("NO_PROXY"), "got: {}", hint);
     }
 
     #[tokio::test]
