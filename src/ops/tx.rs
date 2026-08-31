@@ -231,6 +231,17 @@ impl Transaction {
     /// may be absent (e.g., metadata was deleted) — that's recorded as
     /// `oid_after = None`, which `stax undo` handles by re-creating the ref
     /// from `oid_before`.
+    ///
+    /// Safe for callers that only ever *write* a branch's metadata ref (via
+    /// `BranchMetadata::write` -> `git::refs::write_metadata`, a `git update-ref`
+    /// subprocess): `update-ref` always leaves a loose ref file, and libgit2 reads
+    /// loose refs straight off disk, ahead of the stat-cached packed-refs backend,
+    /// so there's no staleness window to worry about here (verified empirically,
+    /// including with the ref pre-packed via `git pack-refs`). Callers that instead
+    /// *delete* a metadata ref (`git update-ref -d`, which does rewrite packed-refs)
+    /// must resolve the after-OID via a subprocess `git rev-parse --verify <ref>`
+    /// helper and `record_known_metadata_after` instead — see `sync.rs`, `split.rs`,
+    /// `branch/create.rs`, `detach.rs`, `edit.rs`, `tui/split/app.rs` for the pattern.
     pub fn record_metadata_ref_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
         let oid = refs::metadata_ref_oid(repo.inner(), branch);
         self.receipt
