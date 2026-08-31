@@ -682,6 +682,16 @@ mod tests {
     }
 
     #[test]
+    fn test_bundled_agent_skill_documents_current_work_pr_flow() {
+        let content = bundled_agent_skill_markdown();
+
+        assert!(content.contains("### Create a PR for the Current Work"));
+        assert!(content.contains("stax branch submit --draft --ai --yes"));
+        assert!(content.contains("plain `stax submit` submits the full stack"));
+        assert!(content.contains("preserve its ready-for-review state"));
+    }
+
+    #[test]
     fn test_build_content_with_frontmatter() {
         let loc = &SKILL_LOCATIONS[0]; // Codex — has_frontmatter = true
         let body = "<!-- stax-skills-version: 0.50.2 -->\n# Skills\n";
