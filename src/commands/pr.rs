@@ -144,7 +144,7 @@ pub fn run_body(edit: bool) -> Result<()> {
     let body = rt.block_on(async { client.get_pr_body(pr_number).await })?;
 
     if edit {
-        let updated = edit_body(&body)?;
+        let updated = edit_body(&body, config.editor.as_deref())?;
         if updated == body {
             println!("PR #{} body unchanged", pr_number.to_string().cyan());
             return Ok(());
@@ -170,11 +170,13 @@ fn print_rendered_body(body: &str) {
     println!("{}", rendered);
 }
 
-fn edit_body(body: &str) -> Result<String> {
-    let editor =
-        std::env::var("EDITOR").context("$EDITOR is not set; set EDITOR to edit PR body")?;
+fn edit_body(body: &str, configured_editor: Option<&str>) -> Result<String> {
+    let editor = configured_editor
+        .map(str::to_string)
+        .or_else(|| std::env::var("EDITOR").ok())
+        .context("No editor configured; set `stax user editor --set <editor>` or $EDITOR")?;
     if editor.trim().is_empty() {
-        bail!("$EDITOR is empty; set EDITOR to edit PR body");
+        bail!("Configured editor is empty; set `stax user editor --set <editor>` or $EDITOR");
     }
 
     let mut file = tempfile::Builder::new()

@@ -170,6 +170,8 @@ mod track_plan_tests;
 mod tui_commands_tests;
 #[path = "upstack_onto_tests.rs"]
 mod upstack_onto_tests;
+#[path = "user_tests.rs"]
+mod user_tests;
 #[path = "validate_tests.rs"]
 mod validate_tests;
 #[path = "web_tests.rs"]

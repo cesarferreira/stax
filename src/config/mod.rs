@@ -9,6 +9,10 @@ use crate::remote::ForgeType;
 /// Main config (safe to commit to dotfiles)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
+    /// Preferred editor for interactive text edits (e.g. `stax pr --edit`).
+    /// Falls back to `$EDITOR` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
     #[serde(default)]
     pub branch: BranchConfig,
     #[serde(default)]
@@ -162,7 +166,7 @@ pub struct RemoteConfig {
     pub fork_remote: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
@@ -180,6 +184,22 @@ pub struct SubmitConfig {
     /// PR exists, all PRs in the stack get links synced normally.
     #[serde(default)]
     pub single_stack: SingleStackMode,
+    /// Whether the default PR body (used when no template is picked) includes
+    /// a `## Summary` bullet list of commit messages (default: true).
+    #[serde(default = "default_true")]
+    pub commit_messages_in_body: bool,
+}
+
+impl Default for SubmitConfig {
+    fn default() -> Self {
+        Self {
+            stack_links: StackLinksMode::default(),
+            native_stack: NativeStackMode::default(),
+            stack_links_when_native: StackLinksWhenNative::default(),
+            single_stack: SingleStackMode::default(),
+            commit_messages_in_body: default_true(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -740,6 +760,55 @@ impl Config {
         let path = Self::path()?;
         let mut config = Self::load_path_or_default(&path)?;
         config.board.mine_only = mine_only;
+        config.save()
+    }
+
+    /// Persist the branch prefix preference (global config only).
+    pub fn set_branch_prefix(prefix: Option<String>) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.prefix = prefix;
+        config.save()
+    }
+
+    /// Persist whether new branch names include a date (global config only).
+    pub fn set_branch_date(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.date = enabled;
+        config.save()
+    }
+
+    /// Persist the branch name replacement character (global config only).
+    pub fn set_branch_replacement(replacement: String) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.replacement = replacement;
+        config.save()
+    }
+
+    /// Persist the preferred editor for interactive text edits (global config only).
+    pub fn set_editor(editor: Option<String>) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.editor = editor;
+        config.save()
+    }
+
+    /// Persist whether contextual tips/suggestions are shown (global config only).
+    pub fn set_tips(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.ui.tips = enabled;
+        config.save()
+    }
+
+    /// Persist whether the default PR body includes a commit-message summary
+    /// (global config only).
+    pub fn set_submit_commit_messages_in_body(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.submit.commit_messages_in_body = enabled;
         config.save()
     }
 
