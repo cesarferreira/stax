@@ -516,3 +516,23 @@ fn merge_accepts_timeout_of_one() {
         Some(Commands::Merge { timeout: 1, .. })
     ));
 }
+
+#[test]
+fn merge_accepts_ignore_failed_ci() {
+    let cli = parse_cli(&["stax", "merge", "--ignore-failed-ci"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Merge {
+            ignore_failed_ci: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn merge_queue_rejects_ignore_failed_ci() {
+    assert!(
+        try_parse_cli(&["stax", "merge", "--queue", "--ignore-failed-ci"]).is_err(),
+        "--queue and --ignore-failed-ci should be mutually exclusive"
+    );
+}

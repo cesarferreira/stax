@@ -327,6 +327,7 @@ stax merge --remote                # Merge via GitHub API only — no local chec
 stax merge --remote --all          # Include full stack (GitHub only)
 stax merge --interval 30           # Positive poll seconds for --when-ready / --remote / --queue / --stack --when-ready
 stax merge --no-wait               # Fail fast if CI is pending
+stax merge --ignore-failed-ci      # Merge even when CI failed (still blocks draft/conflicts/changes-requested); incompatible with --queue
 stax merge --timeout 60            # Positive max-wait minutes (default 30; zero is rejected)
 stax merge --no-delete             # Keep branches after merge
 stax merge --no-sync               # Skip post-merge sync

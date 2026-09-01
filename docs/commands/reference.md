@@ -334,6 +334,7 @@ st completions elvish
 - `--timeout <minutes>` — positive whole minutes (default: 30); zero is rejected
 - `--interval <seconds>` — positive whole seconds (default: 15) for `--when-ready`, `--remote`, `--queue`, and `--stack --when-ready`; zero is rejected
 - `--no-wait` / `--no-sync` / `--no-delete` / `--quiet`
+- `--ignore-failed-ci` — merge even when CI checks have failed; still blocks on draft, changes-requested, conflicts, and closed. Incompatible with `--queue`. Use when only optional checks failed and branch protection does not require them.
 
 For `--queue`, the timeout is a real deadline: stax caps the final sleep to the remaining budget and does not start another forge status poll once the deadline is reached.
 

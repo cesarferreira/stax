@@ -184,10 +184,34 @@ pub struct PrMergeStatus {
     pub head_sha: String,
 }
 
+/// Which merge-readiness signals the caller is willing to waive.
+///
+/// The default waives nothing. `stax merge --ignore-failed-ci` waives only a
+/// failed CI rollup; draft, changes-requested, conflict, and closed gates stay
+/// in force, and a *pending* rollup is still waited on rather than waived.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReadinessPolicy {
+    pub ignore_failed_ci: bool,
+}
+
+impl ReadinessPolicy {
+    /// Block on every readiness signal — the default `stax merge` behaviour.
+    pub fn strict() -> Self {
+        Self::default()
+    }
+
+    /// Waive a failed CI rollup only (`stax merge --ignore-failed-ci`).
+    pub fn ignoring_failed_ci() -> Self {
+        Self {
+            ignore_failed_ci: true,
+        }
+    }
+}
+
 impl PrMergeStatus {
     /// Check if PR is ready to merge (approved + CI passed + mergeable)
-    pub fn is_ready(&self) -> bool {
-        self.ci_status.is_success()
+    pub fn is_ready(&self, policy: ReadinessPolicy) -> bool {
+        (self.ci_status.is_success() || (policy.ignore_failed_ci && self.ci_status.is_failure()))
             && !self.is_draft
             && self.mergeable.unwrap_or(false)
             && !self.changes_requested
@@ -200,15 +224,15 @@ impl PrMergeStatus {
     }
 
     /// Check if PR has a blocking issue
-    pub fn is_blocked(&self) -> bool {
-        self.ci_status.is_failure()
+    pub fn is_blocked(&self, policy: ReadinessPolicy) -> bool {
+        (self.ci_status.is_failure() && !policy.ignore_failed_ci)
             || self.changes_requested
             || self.is_draft
             || self.mergeable == Some(false)
     }
 
     /// Get human-readable status
-    pub fn status_text(&self) -> &'static str {
+    pub fn status_text(&self, policy: ReadinessPolicy) -> &'static str {
         if self.state.to_lowercase() != "open" {
             return "Closed";
         }
@@ -218,7 +242,7 @@ impl PrMergeStatus {
         if self.changes_requested {
             return "Changes requested";
         }
-        if self.ci_status.is_failure() {
+        if self.ci_status.is_failure() && !policy.ignore_failed_ci {
             return "CI failed";
         }
         if self.mergeable == Some(false) {
@@ -230,7 +254,7 @@ impl PrMergeStatus {
         if self.mergeable.is_none() {
             return "mergeability check";
         }
-        if self.is_ready() {
+        if self.is_ready(policy) {
             return "Ready";
         }
         "Ready" // Default to ready if nothing is blocking

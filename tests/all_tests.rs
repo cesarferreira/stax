@@ -88,6 +88,8 @@ mod github_list_tests;
 mod guard_rail_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
+#[path = "merge_ignore_failed_ci_tests.rs"]
+mod merge_ignore_failed_ci_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
 #[path = "performance_tests.rs"]

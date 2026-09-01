@@ -6,12 +6,13 @@ use crate::commands::merge_shared::{
     BlockedReasonStyle, PrBaseUpdate, WaitResult, calculate_scope, print_header,
     print_header_error, print_header_success, print_native_stack_locked_note,
     record_ci_history_for_branch, update_pr_base_unless_current, wait_for_pr_ready,
+    warn_ignored_ci_failure,
 };
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::pr::MergeMethod;
+use crate::github::pr::{MergeMethod, ReadinessPolicy};
 use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
@@ -43,6 +44,7 @@ pub fn run(
     method: MergeMethod,
     timeout_mins: u64,
     interval_secs: u64,
+    readiness: ReadinessPolicy,
     no_delete: bool,
     no_sync: bool,
     yes: bool,
@@ -255,9 +257,12 @@ pub fn run(
                 timeout,
                 poll_interval,
                 BlockedReasonStyle::StatusText,
+                readiness,
                 quiet,
             )? {
-                WaitResult::Ready(_) => {}
+                WaitResult::Ready(status) => {
+                    warn_ignored_ci_failure(&status, readiness, quiet);
+                }
                 WaitResult::Failed(reason) => {
                     failed_pr = Some((branch_name, pr_number, reason));
                     break;

@@ -6,14 +6,14 @@
 
 use crate::commands::merge_shared::{
     PrBaseUpdate, WaitResult, print_header, print_header_success,
-    rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
+    rebase_and_finalize_remaining_branch, update_pr_base_unless_current, warn_ignored_ci_failure,
 };
 use crate::config::{Config, NativeStackMode};
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::gh_stack::{self, FeatureState, StackMergeOutcome};
-use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus};
+use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus, ReadinessPolicy};
 use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
@@ -152,6 +152,7 @@ pub fn run(
     method: MergeMethod,
     timeout_mins: u64,
     interval_secs: u64,
+    readiness: ReadinessPolicy,
     no_delete: bool,
     no_sync: bool,
     yes: bool,
@@ -260,7 +261,7 @@ pub fn run(
     let tip = resolved.last().context("stack merge scope is empty")?;
     let mut tip_status = statuses.last().context("missing tip status")?.clone();
 
-    if !when_ready && let Some(reason) = tip_blocker(&tip_status) {
+    if !when_ready && let Some(reason) = tip_blocker(&tip_status, readiness) {
         anyhow::bail!(
             "Selected tip {} ({}) is not ready: {}.\n\nRun `stax merge --stack --when-ready` to wait.",
             item_label(forge, tip.pr_number),
@@ -328,10 +329,14 @@ pub fn run(
             tip.pr_number,
             timeout,
             poll_interval,
+            readiness,
             quiet,
             forge,
         )? {
-            WaitResult::Ready(status) => tip_status = status,
+            WaitResult::Ready(status) => {
+                warn_ignored_ci_failure(&status, readiness, quiet);
+                tip_status = status;
+            }
             WaitResult::Failed(reason) => {
                 anyhow::bail!(
                     "Selected tip {} ({}) is not ready: {}",
@@ -348,6 +353,8 @@ pub fn run(
                 )
             }
         }
+    } else {
+        warn_ignored_ci_failure(&tip_status, readiness, quiet);
     }
 
     verify_tip_head_matches_local(&repo, tip, &tip_status, forge)?;
@@ -725,11 +732,11 @@ fn downstack_blocker(status: &PrMergeStatus) -> Option<&'static str> {
     None
 }
 
-fn tip_blocker(status: &PrMergeStatus) -> Option<&'static str> {
+fn tip_blocker(status: &PrMergeStatus, policy: ReadinessPolicy) -> Option<&'static str> {
     downstack_blocker(status).or_else(|| match status.ci_status {
-        CiStatus::Failure => Some("CI failed"),
+        CiStatus::Failure if !policy.ignore_failed_ci => Some("CI failed"),
         CiStatus::Pending => Some("CI is still pending"),
-        CiStatus::Success | CiStatus::NoCi => {
+        CiStatus::Failure | CiStatus::Success | CiStatus::NoCi => {
             if status.mergeable.is_none() {
                 Some("mergeability is still being checked")
             } else {
@@ -739,12 +746,14 @@ fn tip_blocker(status: &PrMergeStatus) -> Option<&'static str> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn wait_for_tip_ready(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     pr_number: u64,
     timeout: Duration,
     poll_interval: Duration,
+    policy: ReadinessPolicy,
     quiet: bool,
     forge: ForgeType,
 ) -> Result<WaitResult> {
@@ -753,7 +762,7 @@ fn wait_for_tip_ready(
 
     loop {
         let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
-        if let Some(reason) = tip_blocker(&status) {
+        if let Some(reason) = tip_blocker(&status, policy) {
             if matches!(
                 reason,
                 "CI is still pending" | "mergeability is still being checked"
@@ -1372,6 +1381,7 @@ fn print_stack_preview(
 mod tests {
     use super::*;
     use crate::engine::stack::StackBranch;
+    use crate::github::pr::ReadinessPolicy;
     use std::collections::HashMap;
 
     #[test]
@@ -1573,11 +1583,49 @@ mod tests {
     #[test]
     fn tip_blocker_checks_tip_ci() {
         assert_eq!(
-            tip_blocker(&status(CiStatus::Pending)),
+            tip_blocker(&status(CiStatus::Pending), ReadinessPolicy::strict()),
             Some("CI is still pending")
         );
-        assert_eq!(tip_blocker(&status(CiStatus::Failure)), Some("CI failed"));
-        assert_eq!(tip_blocker(&status(CiStatus::Success)), None);
+        assert_eq!(
+            tip_blocker(&status(CiStatus::Failure), ReadinessPolicy::strict()),
+            Some("CI failed")
+        );
+        assert_eq!(
+            tip_blocker(&status(CiStatus::Success), ReadinessPolicy::strict()),
+            None
+        );
+    }
+
+    #[test]
+    fn tip_blocker_ignores_ci_failure_under_override() {
+        assert_eq!(
+            tip_blocker(
+                &status(CiStatus::Failure),
+                ReadinessPolicy::ignoring_failed_ci()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn tip_blocker_still_blocks_pending_ci_under_override() {
+        assert_eq!(
+            tip_blocker(
+                &status(CiStatus::Pending),
+                ReadinessPolicy::ignoring_failed_ci()
+            ),
+            Some("CI is still pending")
+        );
+    }
+
+    #[test]
+    fn tip_blocker_still_blocks_draft_under_override() {
+        let mut s = status(CiStatus::Failure);
+        s.is_draft = true;
+        assert_eq!(
+            tip_blocker(&s, ReadinessPolicy::ignoring_failed_ci()),
+            Some("item is draft")
+        );
     }
 
     #[test]

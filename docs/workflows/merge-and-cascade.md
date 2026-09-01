@@ -6,7 +6,7 @@ How to merge an entire stack safely.
 
 Cascade-merges PRs from the bottom of your stack up to your current branch. For each PR, stax:
 
-1. Waits for readiness (CI + approvals + mergeability) unless `--no-wait`
+1. Waits for readiness (CI + approvals + mergeability) unless `--no-wait`, or `--ignore-failed-ci` to proceed despite a red CI rollup
 2. Merges with the selected strategy
 3. Rebases the next branch onto updated trunk
 4. Updates the next PR base
@@ -31,6 +31,7 @@ st merge --when-ready                       # wait for readiness explicitly
 st merge --when-ready --interval 10
 st merge --no-wait --no-delete --no-sync
 st merge --timeout 60 --yes
+st merge --ignore-failed-ci               # override a failed CI rollup (still blocks on draft/conflicts)
 ```
 
 `--downstack-only` (`--ds`) merges only ancestors below the current branch, then rebases the current branch onto trunk and keeps descendants stacked above it. It composes with `--stack`, and is incompatible with `--all`, `--full`, `--remote`, and `--queue`.
@@ -38,6 +39,8 @@ st merge --timeout 60 --yes
 `--full` is only valid with `--stack`; it includes descendants above the current branch in the selected stack merge.
 
 `--when-ready` is incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`. With `--stack`, it waits only for the selected tip PR/MR.
+
+`--ignore-failed-ci` merges even when the forge reports the CI rollup as failed. Use it when only optional checks are red — a preview deployment, say — and branch protection does not require them. It waives nothing else: draft PRs, requested changes, merge conflicts, and closed PRs still block, and a *pending* rollup is still waited on (that is `--no-wait`'s job, not this flag's). stax prints a warning whenever the override actually skips a red rollup, and the forge's own branch protection remains the final gate — if it refuses the merge, you get that error instead. Works with the default cascade, `--stack`, `--remote`, and `--when-ready`; incompatible with `--queue`, where the forge's merge queue makes the readiness decision.
 
 ### Partial stack merge
 

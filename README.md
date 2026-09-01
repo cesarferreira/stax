@@ -232,6 +232,7 @@ st merge --stack          # GitHub/GitLab: preserve lower PR/MR merged state thr
 st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
+st merge --ignore-failed-ci  # merge despite a red CI rollup (e.g. only optional checks failed)
 ```
 
 On GitHub, if the current stack is a confirmed-enabled native GitHub Stack and
@@ -366,7 +367,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
 | `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
 | `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
-| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
+| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`, `--ignore-failed-ci`) |
 | `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
 | `st board` / `st home` | Interactive repository dashboard (GitHub only) — PULL REQUESTS / ISSUES tabs with a detail pane, inline diff/comments, label editing, draft toggle, and API-only merge (`--limit`, `--tab`, `--interval`, `--plain` for static tables) |
 | `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack; GitHub statuses and check runs are fetched across all pages before roll-up |

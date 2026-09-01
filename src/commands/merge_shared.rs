@@ -12,7 +12,7 @@ use crate::commands::merge_rebase::{
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
-use crate::github::pr::{PrMergeStatus, is_native_stack_base_locked_error};
+use crate::github::pr::{PrMergeStatus, ReadinessPolicy, is_native_stack_base_locked_error};
 use crate::progress::LiveTimer;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -98,14 +98,37 @@ pub(crate) fn calculate_scope(
 }
 
 /// Map a blocked `PrMergeStatus` to a descriptive, actionable message.
-pub(crate) fn blocked_reason(status: &PrMergeStatus) -> String {
+pub(crate) fn blocked_reason(status: &PrMergeStatus, policy: ReadinessPolicy) -> String {
     if status.is_draft {
         return "PR is in Draft state — remove Draft status before merging".to_string();
     }
-    status.status_text().to_string()
+    status.status_text(policy).to_string()
+}
+
+/// Warn when `--ignore-failed-ci` waived a real CI failure, so overriding is
+/// never silent. The forge's branch protection remains the final gate.
+pub(crate) fn warn_ignored_ci_failure(
+    status: &PrMergeStatus,
+    policy: ReadinessPolicy,
+    quiet: bool,
+) {
+    if quiet || !policy.ignore_failed_ci || !status.ci_status.is_failure() {
+        return;
+    }
+    println!(
+        "  {} {}",
+        "warning:".yellow().bold(),
+        format!(
+            "#{} has failing CI — merging anyway because --ignore-failed-ci was passed; \
+             the forge's branch protection is still the final gate",
+            status.number
+        )
+        .yellow()
+    );
 }
 
 /// Wait for a PR to be ready to merge (CI passed, approved).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wait_for_pr_ready(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
@@ -113,6 +136,7 @@ pub(crate) fn wait_for_pr_ready(
     timeout: Duration,
     poll_interval: Duration,
     blocked_style: BlockedReasonStyle,
+    policy: ReadinessPolicy,
     quiet: bool,
 ) -> Result<WaitResult> {
     let start = Instant::now();
@@ -122,7 +146,7 @@ pub(crate) fn wait_for_pr_ready(
         let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
 
         // Check if ready
-        if status.is_ready() {
+        if status.is_ready(policy) {
             if !quiet && last_status.is_some() {
                 println!(); // End the waiting line
             }
@@ -130,13 +154,13 @@ pub(crate) fn wait_for_pr_ready(
         }
 
         // Check if blocked (won't become ready)
-        if status.is_blocked() {
+        if status.is_blocked(policy) {
             if !quiet && last_status.is_some() {
                 println!(); // End the waiting line
             }
             let reason = match blocked_style {
-                BlockedReasonStyle::Detailed => blocked_reason(&status),
-                BlockedReasonStyle::StatusText => status.status_text().to_string(),
+                BlockedReasonStyle::Detailed => blocked_reason(&status, policy),
+                BlockedReasonStyle::StatusText => status.status_text(policy).to_string(),
             };
             return Ok(WaitResult::Failed(reason));
         }
@@ -155,7 +179,7 @@ pub(crate) fn wait_for_pr_ready(
             let status_text = format!(
                 "      {} Waiting for {}... ({}s)",
                 "⏳".yellow(),
-                status.status_text().to_lowercase(),
+                status.status_text(policy).to_lowercase(),
                 elapsed
             );
 
@@ -590,7 +614,7 @@ pub(crate) fn print_header_error(title: &str) {
 mod tests {
     use super::*;
     use crate::engine::stack::StackBranch;
-    use crate::github::pr::CiStatus;
+    use crate::github::pr::{CiStatus, ReadinessPolicy};
     use std::collections::HashMap;
 
     fn create_test_stack() -> Stack {
@@ -772,7 +796,7 @@ mod tests {
         let mut status = merge_status("open");
         status.is_draft = true;
 
-        let reason = blocked_reason(&status);
+        let reason = blocked_reason(&status, ReadinessPolicy::strict());
         assert!(reason.contains("Draft"));
         assert!(reason.contains("remove Draft"));
     }
@@ -782,7 +806,10 @@ mod tests {
         let mut status = merge_status("open");
         status.changes_requested = true;
 
-        assert_eq!(blocked_reason(&status), "Changes requested");
+        assert_eq!(
+            blocked_reason(&status, ReadinessPolicy::strict()),
+            "Changes requested"
+        );
     }
 
     #[test]
@@ -790,7 +817,22 @@ mod tests {
         let mut status = merge_status("open");
         status.ci_status = CiStatus::Failure;
 
-        assert_eq!(blocked_reason(&status), "CI failed");
+        assert_eq!(
+            blocked_reason(&status, ReadinessPolicy::strict()),
+            "CI failed"
+        );
+    }
+
+    #[test]
+    fn blocked_reason_under_override_reports_conflicts_not_ci() {
+        let mut status = merge_status("open");
+        status.ci_status = CiStatus::Failure;
+        status.mergeable = Some(false);
+
+        assert_eq!(
+            blocked_reason(&status, ReadinessPolicy::ignoring_failed_ci()),
+            "Has conflicts"
+        );
     }
 
     #[test]

@@ -395,6 +395,9 @@ pub(crate) enum Commands {
         /// Fail if CI pending (don't poll/wait)
         #[arg(long)]
         no_wait: bool,
+        /// Merge even when CI checks failed (still blocks on draft, changes requested, and conflicts)
+        #[arg(long)]
+        ignore_failed_ci: bool,
         /// Max wait time for CI per PR in minutes
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
@@ -409,7 +412,7 @@ pub(crate) enum Commands {
         stack: bool,
         /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
         /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack", "ignore_failed_ci"])]
         queue: bool,
         /// Polling interval in seconds for --when-ready, --remote, --queue, and --stack --when-ready
         #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..))]
