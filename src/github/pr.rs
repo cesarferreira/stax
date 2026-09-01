@@ -37,7 +37,7 @@ pub(crate) fn is_native_stack_base_locked_error(err: &anyhow::Error) -> bool {
 
 pub use crate::forge::{
     CiStatus, EnqueueResult, IssueComment, MergeMethod, MergeQueueEntry, PrComment, PrInfo,
-    PrInfoWithHead, PrMergeStatus, ReviewComment,
+    PrInfoWithHead, PrMergeStatus, ReadinessPolicy, ReviewComment,
 };
 
 #[derive(Debug, Deserialize)]
@@ -1574,9 +1574,9 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(status.is_ready());
+        assert!(status.is_ready(ReadinessPolicy::strict()));
         assert!(!status.is_waiting());
-        assert!(!status.is_blocked());
+        assert!(!status.is_blocked(ReadinessPolicy::strict()));
     }
 
     #[test]
@@ -1596,10 +1596,10 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
         assert!(status.is_waiting());
-        assert!(!status.is_blocked());
-        assert_eq!(status.status_text(), "CI checks");
+        assert!(!status.is_blocked(ReadinessPolicy::strict()));
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "CI checks");
     }
 
     #[test]
@@ -1619,9 +1619,12 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
         assert!(status.is_waiting());
-        assert_eq!(status.status_text(), "mergeability check");
+        assert_eq!(
+            status.status_text(ReadinessPolicy::strict()),
+            "mergeability check"
+        );
     }
 
     #[test]
@@ -1641,8 +1644,8 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
-        assert!(status.is_blocked());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
+        assert!(status.is_blocked(ReadinessPolicy::strict()));
     }
 
     #[test]
@@ -1662,8 +1665,8 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
-        assert!(status.is_blocked());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
+        assert!(status.is_blocked(ReadinessPolicy::strict()));
     }
 
     #[test]
@@ -1683,8 +1686,8 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
-        assert!(status.is_blocked());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
+        assert!(status.is_blocked(ReadinessPolicy::strict()));
     }
 
     #[test]
@@ -1704,8 +1707,8 @@ mod tests {
             head_sha: "abc123".to_string(),
         };
 
-        assert!(!status.is_ready());
-        assert!(status.is_blocked());
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
+        assert!(status.is_blocked(ReadinessPolicy::strict()));
     }
 
     #[test]
@@ -1725,14 +1728,14 @@ mod tests {
             changes_requested: false,
             head_sha: "abc123".to_string(),
         };
-        assert_eq!(status.status_text(), "Ready");
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "Ready");
 
         // Draft
         let status = PrMergeStatus {
             is_draft: true,
             ..status.clone()
         };
-        assert_eq!(status.status_text(), "Draft");
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "Draft");
 
         // CI Failed
         let status = PrMergeStatus {
@@ -1740,7 +1743,7 @@ mod tests {
             ci_status: CiStatus::Failure,
             ..status.clone()
         };
-        assert_eq!(status.status_text(), "CI failed");
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "CI failed");
 
         // Changes requested
         let status = PrMergeStatus {
@@ -1748,7 +1751,10 @@ mod tests {
             changes_requested: true,
             ..status.clone()
         };
-        assert_eq!(status.status_text(), "Changes requested");
+        assert_eq!(
+            status.status_text(ReadinessPolicy::strict()),
+            "Changes requested"
+        );
 
         // Has conflicts
         let status = PrMergeStatus {
@@ -1756,7 +1762,10 @@ mod tests {
             mergeable: Some(false),
             ..status.clone()
         };
-        assert_eq!(status.status_text(), "Has conflicts");
+        assert_eq!(
+            status.status_text(ReadinessPolicy::strict()),
+            "Has conflicts"
+        );
 
         // Closed
         let status = PrMergeStatus {
@@ -1764,7 +1773,148 @@ mod tests {
             state: "Closed".to_string(),
             ..status.clone()
         };
-        assert_eq!(status.status_text(), "Closed");
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "Closed");
+    }
+
+    #[test]
+    fn ignore_failed_ci_makes_ci_failed_pr_ready() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "open".to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Failure,
+            review_decision: Some("APPROVED".to_string()),
+            approvals: 1,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
+        assert!(status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(!status.is_blocked(ReadinessPolicy::ignoring_failed_ci()));
+        assert_eq!(
+            status.status_text(ReadinessPolicy::ignoring_failed_ci()),
+            "Ready"
+        );
+    }
+
+    #[test]
+    fn ignore_failed_ci_does_not_waive_draft() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "open".to_string(),
+            updated_at: None,
+            is_draft: true,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Failure,
+            review_decision: Some("APPROVED".to_string()),
+            approvals: 1,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(status.is_blocked(ReadinessPolicy::ignoring_failed_ci()));
+        assert_eq!(
+            status.status_text(ReadinessPolicy::ignoring_failed_ci()),
+            "Draft"
+        );
+    }
+
+    #[test]
+    fn ignore_failed_ci_does_not_waive_changes_requested() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "open".to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Failure,
+            review_decision: Some("CHANGES_REQUESTED".to_string()),
+            approvals: 0,
+            changes_requested: true,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(status.is_blocked(ReadinessPolicy::ignoring_failed_ci()));
+        assert_eq!(
+            status.status_text(ReadinessPolicy::ignoring_failed_ci()),
+            "Changes requested"
+        );
+    }
+
+    #[test]
+    fn ignore_failed_ci_does_not_waive_conflicts() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "open".to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(false),
+            mergeable_state: "dirty".to_string(),
+            ci_status: CiStatus::Failure,
+            review_decision: Some("APPROVED".to_string()),
+            approvals: 1,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(status.is_blocked(ReadinessPolicy::ignoring_failed_ci()));
+        assert_eq!(
+            status.status_text(ReadinessPolicy::ignoring_failed_ci()),
+            "Has conflicts"
+        );
+    }
+
+    #[test]
+    fn ignore_failed_ci_does_not_waive_closed_pr() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "closed".to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Failure,
+            review_decision: None,
+            approvals: 0,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert_eq!(
+            status.status_text(ReadinessPolicy::ignoring_failed_ci()),
+            "Closed"
+        );
+    }
+
+    #[test]
+    fn ignore_failed_ci_still_waits_on_pending_ci() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "open".to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Pending,
+            review_decision: Some("APPROVED".to_string()),
+            approvals: 1,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        assert!(!status.is_ready(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(!status.is_blocked(ReadinessPolicy::ignoring_failed_ci()));
+        assert!(status.is_waiting());
     }
 
     #[test]
@@ -2878,8 +3028,8 @@ mod tests {
         let client = create_test_client(&mock_server).await;
         let status = client.get_pr_merge_status(11).await.unwrap();
 
-        assert_eq!(status.status_text(), "Closed");
-        assert!(!status.is_ready());
+        assert_eq!(status.status_text(ReadinessPolicy::strict()), "Closed");
+        assert!(!status.is_ready(ReadinessPolicy::strict()));
         assert_eq!(status.review_decision, None);
         assert_eq!(status.approvals, 0);
         assert_eq!(status.ci_status, CiStatus::Success);

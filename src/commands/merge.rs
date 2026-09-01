@@ -4,13 +4,13 @@ use crate::commands::merge_rebase::{
 use crate::commands::merge_shared::{
     BlockedReasonStyle, PrBaseUpdate, WaitResult, blocked_reason, print_native_stack_locked_note,
     rebase_and_finalize_remaining_branch, record_ci_history_for_branch, sync_head_after_push,
-    update_pr_base_unless_current, wait_for_pr_ready,
+    update_pr_base_unless_current, wait_for_pr_ready, warn_ignored_ci_failure,
 };
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
-use crate::github::pr::{MergeMethod, PrMergeStatus};
+use crate::github::pr::{MergeMethod, PrMergeStatus, ReadinessPolicy};
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
@@ -53,6 +53,7 @@ pub fn run(
     method: MergeMethod,
     no_delete: bool,
     no_wait: bool,
+    readiness: ReadinessPolicy,
     timeout_mins: u64,
     no_sync: bool,
     yes: bool,
@@ -220,9 +221,12 @@ pub fn run(
                     timeout,
                     Duration::from_secs(10),
                     BlockedReasonStyle::Detailed,
+                    readiness,
                     quiet,
                 )? {
-                    WaitResult::Ready(_) => {}
+                    WaitResult::Ready(status) => {
+                        warn_ignored_ci_failure(&status, readiness, quiet);
+                    }
                     WaitResult::Failed(reason) => {
                         failed_pr = Some((branch_info.branch.clone(), pr_number, reason));
                         break;
@@ -239,15 +243,16 @@ pub fn run(
             } else {
                 // Check if ready without waiting
                 let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
-                if !status.is_ready() {
-                    let reason = if status.is_blocked() {
-                        blocked_reason(&status)
+                if !status.is_ready(readiness) {
+                    let reason = if status.is_blocked(readiness) {
+                        blocked_reason(&status, readiness)
                     } else {
-                        format!("PR not ready: {}", status.status_text())
+                        format!("PR not ready: {}", status.status_text(readiness))
                     };
                     failed_pr = Some((branch_info.branch.clone(), pr_number, reason));
                     break;
                 }
+                warn_ignored_ci_failure(&status, readiness, quiet);
             }
 
             // Merge the PR
@@ -466,6 +471,12 @@ pub fn run(
 
     if let Some((branch, pr, reason)) = failed_pr {
         println!("  {} #{} {} → {}", "✗".red(), pr, branch, reason);
+        if reason == "CI failed" && !readiness.ignore_failed_ci {
+            println!(
+                "{}",
+                "If only optional checks failed, re-run with --ignore-failed-ci.".dimmed()
+            );
+        }
         println!("{}", "Fix the issue and run 'stax merge' again.".dimmed());
     } else {
         let pr_word = if merged_prs.len() == 1 { "PR" } else { "PRs" };

@@ -1,3 +1,4 @@
+use crate::github::pr::ReadinessPolicy;
 use crate::{commands, config::Config, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -293,6 +294,7 @@ pub fn run() -> Result<()> {
             method,
             no_delete,
             no_wait,
+            ignore_failed_ci,
             timeout,
             when_ready,
             remote,
@@ -305,6 +307,11 @@ pub fn run() -> Result<()> {
         } => {
             let default_method = if stack { "merge" } else { "squash" };
             let merge_method = method.as_deref().unwrap_or(default_method).parse()?;
+            let readiness = if ignore_failed_ci {
+                ReadinessPolicy::ignoring_failed_ci()
+            } else {
+                ReadinessPolicy::strict()
+            };
             if queue {
                 commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
             } else if remote {
@@ -313,6 +320,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -327,6 +335,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -339,6 +348,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -352,6 +362,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     no_delete,
                     no_wait,
+                    readiness,
                     timeout,
                     no_sync,
                     yes,
@@ -377,6 +388,7 @@ pub fn run() -> Result<()> {
                 merge_method,
                 timeout,
                 interval,
+                ReadinessPolicy::strict(),
                 no_delete,
                 no_sync,
                 yes,
