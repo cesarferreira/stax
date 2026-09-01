@@ -3593,6 +3593,8 @@ dependencies = [
  "fuzzy-matcher",
  "getrandom 0.4.3",
  "git2",
+ "http",
+ "http-body-util",
  "indicatif",
  "maud",
  "octocrab",
@@ -3607,6 +3609,7 @@ dependencies = [
  "termimad",
  "tokio",
  "toml",
+ "tower",
  "update-informer",
  "wiremock",
 ]

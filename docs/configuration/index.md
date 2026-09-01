@@ -391,3 +391,29 @@ not an authentication problem.
 ```bash
 st auth status
 ```
+
+## HTTP proxies
+
+Stax routes forge API traffic through the proxy named by the standard
+environment variables, in this order: `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`
+(both upper and lower case). `NO_PROXY` exclusions and `user:password@` proxy
+credentials are honoured, so the same values that work for `git` and `curl`
+work here.
+
+Nothing needs to be configured in `config.toml` — an exported proxy variable is
+enough:
+
+```bash
+export HTTPS_PROXY=http://proxy.example:8080
+export NO_PROXY=localhost,127.0.0.1,.internal.example
+```
+
+When a proxy variable is set, GitHub API calls run on a proxy-aware HTTP client
+(the GitHub client library stax builds on cannot speak to a proxy on its own)
+that verifies TLS against the operating system trust store, which also covers
+proxies that terminate TLS with a corporate CA. When no proxy variable is set,
+nothing changes.
+
+If the API is unreachable, stax says whether a proxy was in play and which
+variable named it (credentials redacted), so a connect timeout is not mistaken
+for an auth problem.

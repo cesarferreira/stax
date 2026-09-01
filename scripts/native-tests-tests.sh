@@ -14,6 +14,10 @@ if env | grep -Eq '^(GITHUB_TOKEN|STAX_GITHUB_TOKEN|GH_TOKEN)='; then
   echo "GitHub token environment leaked into cargo" >&2
   exit 90
 fi
+if env | grep -Eiq '^(ALL_PROXY|HTTPS_PROXY|HTTP_PROXY|NO_PROXY)='; then
+  echo "proxy environment leaked into cargo" >&2
+  exit 91
+fi
 printf '%s\n' "$*" >>"${STAX_NATIVE_TEST_LOG}"
 if [[ -n "${STAX_NATIVE_TEST_FAIL_MATCH:-}" ]] && \
   [[ "$*" == *"${STAX_NATIVE_TEST_FAIL_MATCH}"* ]]; then
@@ -25,6 +29,8 @@ chmod +x "${fake_cargo}"
 
 log="${tmp}/cargo.log"
 GITHUB_TOKEN=secret STAX_GITHUB_TOKEN=secret GH_TOKEN=secret \
+  HTTPS_PROXY=http://proxy.invalid:8080 https_proxy=http://proxy.invalid:8080 \
+  ALL_PROXY=http://proxy.invalid:8080 NO_PROXY=example.com \
   STAX_NATIVE_TEST_CARGO="${fake_cargo}" \
   STAX_NATIVE_TEST_LOG="${log}" \
   STAX_TEST_TMPDIR="${tmp}/test-tmp" \
