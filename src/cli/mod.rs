@@ -490,6 +490,7 @@ pub fn run() -> Result<()> {
             no_prompt,
             auto_stash_pop,
             all_stacks,
+            delete_merged,
         } => commands::refresh::run(
             no_pr,
             no_submit,
@@ -500,6 +501,7 @@ pub fn run() -> Result<()> {
             no_prompt,
             auto_stash_pop,
             all_stacks,
+            delete_merged,
         ),
         Commands::Checkout {
             branch,

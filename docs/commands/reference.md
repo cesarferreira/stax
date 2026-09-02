@@ -38,7 +38,7 @@ st --trace status --json >/dev/null
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
 | `st sweep --json` | | Machine-readable branch classification (conflicts with `--delete`) |
-| `st refresh` | `r` | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack |
+| `st refresh` | `r` | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack (pass `--delete-merged` to opt into `sync`-style cleanup) |
 | `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
 | `st refresh --all-stacks` | | Refresh every stack in the repo (fetch/trunk sync once, then restack + submit each stack); stops at the first conflict |
