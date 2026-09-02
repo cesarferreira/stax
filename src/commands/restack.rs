@@ -54,25 +54,36 @@ pub fn run(
                 .as_ref()
                 .and_then(|e| e.failed_branch.as_deref())
             {
-                if let Some(meta) = BranchMetadata::read(repo.inner(), failed_branch)?
-                    && let Ok(actual_parent_rev) = repo.branch_commit(&meta.parent_branch_name)
-                {
-                    // `actual_parent_rev` is only a valid boundary if `failed_branch` was
-                    // actually rebased onto it. If the parent advanced again during the
-                    // pause window (between the conflict and a manual `git rebase
-                    // --continue`), it wasn't -- verify ancestry before trusting it, else
-                    // keep the previously recorded (still-valid) boundary (see #830).
-                    let resolved = repo.resolve_child_parent_boundary(
-                        failed_branch,
-                        &[Some(actual_parent_rev.as_str())],
-                        &meta.parent_branch_revision,
-                    );
-                    if resolved != meta.parent_branch_revision {
-                        let updated = BranchMetadata {
-                            parent_branch_revision: resolved,
-                            ..meta
-                        };
-                        updated.write(repo.inner(), failed_branch)?;
+                if let Some(meta) = BranchMetadata::read(repo.inner(), failed_branch)? {
+                    // The recorded parent may no longer exist locally (e.g. it was merged
+                    // upstream and pruned before the restack started) -- mirror the same
+                    // orphan-to-trunk fallback `stax continue` uses instead of failing on a
+                    // branch that is gone.
+                    let parent_name = crate::commands::continue_cmd::effective_parent_branch(
+                        &repo,
+                        &meta.parent_branch_name,
+                    )?;
+                    if let Ok(actual_parent_rev) = repo.branch_commit(&parent_name) {
+                        // `actual_parent_rev` is only a valid boundary if `failed_branch` was
+                        // actually rebased onto it. If the parent advanced again during the
+                        // pause window (between the conflict and a manual `git rebase
+                        // --continue`), it wasn't -- verify ancestry before trusting it, else
+                        // keep the previously recorded (still-valid) boundary (see #830).
+                        let resolved = repo.resolve_child_parent_boundary(
+                            failed_branch,
+                            &[Some(actual_parent_rev.as_str())],
+                            &meta.parent_branch_revision,
+                        );
+                        if resolved != meta.parent_branch_revision
+                            || parent_name != meta.parent_branch_name
+                        {
+                            let updated = BranchMetadata {
+                                parent_branch_name: parent_name,
+                                parent_branch_revision: resolved,
+                                ..meta
+                            };
+                            updated.write(repo.inner(), failed_branch)?;
+                        }
                     }
                 }
                 completed_from_receipt.insert(failed_branch.to_string());
