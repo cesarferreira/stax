@@ -50,13 +50,19 @@ pub fn find_merged_branches_all(
 
     // Method 1: git branch --merged <trunk>
     let output = Command::new("git")
-        .args(["branch", "--merged", trunk])
+        .args([
+            "for-each-ref",
+            "--merged",
+            trunk,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])
         .current_dir(workdir)
         .output()
         .context("Failed to list merged branches")?;
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let branch = line.trim().trim_start_matches("* ");
+        let branch = line.trim();
         if branch.is_empty() || branch == trunk {
             continue;
         }
@@ -69,12 +75,18 @@ pub fn find_merged_branches_all(
     // Method 1b: git branch --merged <remote/trunk> (handles stale local trunk)
     if let Some(remote_ref) = remote_trunk_ref {
         let output = Command::new("git")
-            .args(["branch", "--merged", remote_ref])
+            .args([
+                "for-each-ref",
+                "--merged",
+                remote_ref,
+                "--format=%(refname:short)",
+                "refs/heads",
+            ])
             .current_dir(workdir)
             .output();
         if let Ok(output) = output {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
-                let branch = line.trim().trim_start_matches("* ");
+                let branch = line.trim();
                 if branch.is_empty() || branch == trunk {
                     continue;
                 }
