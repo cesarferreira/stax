@@ -8507,6 +8507,27 @@ mod forge_mock_tests {
         decision: &str,
         head_sha: &str,
     ) {
+        mount_github_merge_status_with_rollup(
+            mock_server,
+            number,
+            state,
+            decision,
+            head_sha,
+            "SUCCESS",
+            5,
+        )
+        .await;
+    }
+
+    async fn mount_github_merge_status_with_rollup(
+        mock_server: &MockServer,
+        number: u64,
+        state: &str,
+        decision: &str,
+        head_sha: &str,
+        rollup_state: &str,
+        priority: u8,
+    ) {
         let nodes = if decision == "APPROVED" {
             serde_json::json!([{ "state": "APPROVED" }])
         } else {
@@ -8532,12 +8553,13 @@ mod forge_mock_tests {
                             "mergeable": "MERGEABLE",
                             "reviewDecision": decision,
                             "headRefOid": head_sha,
-                            "statusCheckRollup": { "state": "SUCCESS" },
+                            "statusCheckRollup": { "state": rollup_state },
                             "reviews": { "nodes": nodes }
                         }
                     }
                 }
             })))
+            .with_priority(priority)
             .mount(mock_server)
             .await;
     }
@@ -12820,6 +12842,54 @@ mod forge_mock_tests {
                 && combined.contains("Fix the issue and run 'stax merge' again."),
             "Expected duplicate PR base error to surface. Output:\n{}",
             combined
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_stack_ignore_failed_ci_merges_failed_selected_tip_and_warns() {
+        let fixture = setup_three_branch_stack_merge_fixture(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerPending,
+        )
+        .await;
+        mount_github_merge_status_with_rollup(
+            &fixture.mock_server,
+            603,
+            "OPEN",
+            "APPROVED",
+            &fixture.tip_sha,
+            "FAILURE",
+            1,
+        )
+        .await;
+
+        let output = run_stax_with_env(
+            &fixture.repo,
+            fixture.home.path(),
+            &[
+                "merge",
+                "--stack",
+                "--ignore-failed-ci",
+                "--yes",
+                "--no-delete",
+                "--no-sync",
+            ],
+        );
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(output.status.success(), "merge --stack failed: {combined}");
+        assert!(
+            combined.contains("warning:"),
+            "expected override warning; got: {combined}"
+        );
+        assert!(
+            combined.contains("--ignore-failed-ci"),
+            "expected override flag in warning; got: {combined}"
+        );
+
+        let requests = fixture.mock_server.received_requests().await.unwrap();
+        assert!(
+            !find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "merge --stack must merge the selected tip after waiving failed CI"
         );
     }
 
