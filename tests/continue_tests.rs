@@ -336,6 +336,88 @@ fn restack_continue_after_manual_rebase_continue_and_parent_advance_keeps_ancest
     );
 }
 
+#[test]
+fn restack_continue_after_manual_rebase_continue_reparents_orphaned_branch_onto_trunk() {
+    let repo = TestRepo::new();
+
+    // main -> branch-a -> branch-b -> branch-c
+    repo.run_stax(&["bc", "branch-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a\n");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "branch-b"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("b.txt", "b\n");
+    repo.commit("B commit");
+
+    repo.run_stax(&["bc", "branch-c"]);
+    let branch_c = repo.current_branch();
+    repo.create_file("shared.txt", "c\n");
+    repo.commit("C commit touches shared.txt");
+
+    // Simulate branch-a and branch-b having been squash-merged into main and
+    // pruned locally, with the merge including a conflicting edit to shared.txt.
+    repo.run_stax(&["checkout", "main"]);
+    repo.create_file("a.txt", "a\n");
+    repo.create_file("b.txt", "b\n");
+    repo.create_file("shared.txt", "main-side-fix\n");
+    repo.commit("squash merge branch-a + branch-b (#1)");
+    repo.git(&["branch", "-D", &branch_a, &branch_b])
+        .assert_success();
+
+    repo.run_stax(&["checkout", &branch_c]);
+    let output = repo.run_stax(&["restack"]);
+    assert!(
+        !output.status.success(),
+        "expected restack to conflict\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(repo.has_rebase_in_progress());
+
+    // Resolve and complete the rebase MANUALLY (git rebase --continue), not via
+    // `stax continue` -- this exercises restack's own receipt-recovery metadata
+    // fixup (src/commands/restack.rs), the parallel path to `continue_cmd.rs`.
+    repo.resolve_conflicts_ours();
+    let manual_continue = repo.git_with_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
+    assert!(
+        manual_continue.status.success(),
+        "manual git rebase --continue should complete: {}",
+        TestRepo::stderr(&manual_continue)
+    );
+    assert!(!repo.has_rebase_in_progress());
+
+    let recovery = repo.run_stax(&["restack", "--continue"]);
+    assert!(
+        recovery.status.success(),
+        "restack --continue recovery should succeed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&recovery),
+        TestRepo::stderr(&recovery)
+    );
+
+    let meta_output = repo.git(&["show", &format!("refs/branch-metadata/{}", branch_c)]);
+    let meta: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&meta_output)).expect("valid JSON");
+    assert_eq!(
+        meta["parentBranchName"].as_str(),
+        Some("main"),
+        "expected orphaned branch-c (parent branch-b deleted) to be reparented onto trunk: {meta}"
+    );
+
+    let boundary = meta["parentBranchRevision"]
+        .as_str()
+        .expect("parentBranchRevision missing")
+        .to_string();
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &branch_c]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {}",
+        boundary,
+        branch_c
+    );
+}
+
 // =============================================================================
 // Sync Continue Tests
 // =============================================================================
@@ -445,6 +527,48 @@ fn test_continue_on_untracked_branch() {
             || !output.status.success(),
         "Expected graceful handling on untracked branch, got: {}",
         combined
+    );
+}
+
+#[test]
+fn continue_after_conflict_reparents_orphaned_branch_onto_trunk() {
+    let repo = TestRepo::new_with_remote();
+    let branches = repo.create_stack(&["json-output", "conflict-report", "dual-role-keys"]);
+    // give dual-role-keys a change that will conflict with the squashed trunk content
+    repo.create_file("shared.txt", "dual\n");
+    repo.commit("dual role keys touches shared.txt");
+    repo.git(&["push", "origin", "--all"]).assert_success();
+
+    // squash-merge the bottom two into trunk, with content that conflicts with dual-role-keys' change
+    repo.simulate_remote_commit(
+        "shared.txt",
+        "conflict-with-review-fix\n",
+        "squash merge json-output + conflict-report (#1)",
+    );
+
+    // the local branches are already gone before refresh runs (merged PRs pruned locally)
+    repo.git(&["fetch", "--prune", "origin"]).assert_success();
+    repo.git(&["checkout", &branches[2]]).assert_success();
+    repo.git(&["branch", "-D", &branches[0], &branches[1]])
+        .assert_success();
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
+    assert!(
+        repo.has_rebase_in_progress(),
+        "{}",
+        TestRepo::stdout(&output)
+    );
+
+    repo.resolve_conflicts_ours();
+    repo.run_stax(&["continue"]).assert_success();
+
+    let meta =
+        TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{}", branches[2])]));
+    let main_sha = repo.get_commit_sha("main");
+    assert!(meta.contains(r#""parentBranchName":"main""#), "{meta}");
+    assert!(
+        meta.contains(&format!(r#""parentBranchRevision":"{main_sha}""#)),
+        "expected fresh trunk tip {main_sha}, got:\n{meta}"
     );
 }
 
