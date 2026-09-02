@@ -601,6 +601,9 @@ pub(crate) enum Commands {
         /// Refresh every stack in the repo, not just the current one
         #[arg(long)]
         all_stacks: bool,
+        /// Delete local branches whose PRs were merged (off by default, unlike `stax sync`)
+        #[arg(long)]
+        delete_merged: bool,
     },
 
     /// Checkout a branch in the stack

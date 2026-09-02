@@ -18,6 +18,7 @@ pub fn run(
     no_prompt: bool,
     auto_stash_pop: bool,
     all_stacks: bool,
+    delete_merged: bool,
 ) -> Result<()> {
     if all_stacks {
         return run_all_stacks(
@@ -29,6 +30,7 @@ pub fn run(
             yes,
             no_prompt,
             auto_stash_pop,
+            delete_merged,
         );
     }
 
@@ -64,7 +66,7 @@ pub fn run(
     commands::sync::run(
         true,  // restack
         false, // full
-        false, // delete_merged
+        delete_merged,
         false, // delete_upstream_gone
         force,
         safe,
@@ -229,6 +231,7 @@ fn run_all_stacks(
     yes: bool,
     no_prompt: bool,
     auto_stash_pop: bool,
+    delete_merged: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
@@ -270,7 +273,7 @@ fn run_all_stacks(
     if let Err(error) = commands::sync::run(
         true,  // restack
         false, // full
-        false, // delete_merged
+        delete_merged,
         false, // delete_upstream_gone
         force,
         safe,
