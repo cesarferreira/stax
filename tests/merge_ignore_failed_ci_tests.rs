@@ -236,6 +236,103 @@ async fn merge_with_override_merges_failed_ci_pr() {
 }
 
 #[tokio::test]
+async fn merge_remote_with_override_merges_failed_ci_pr_and_warns() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let branches = repo.create_stack(&["feat"]);
+    let sha = repo.get_commit_sha(&branches[0]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 1);
+
+    mount_merge_status(&server, 1, &sha, "FAILURE", "MERGEABLE", false, "APPROVED").await;
+    mount_pr_get(&server, 1, &sha).await;
+    mount_merge_endpoint(&server, 1).await;
+
+    let output = repo.run_stax_with_env(
+        &[
+            "merge",
+            "--remote",
+            "--yes",
+            "--no-delete",
+            "--no-sync",
+            "--ignore-failed-ci",
+        ],
+        &auth_env(),
+    );
+
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(output.status.success(), "merge --remote failed: {combined}");
+    assert!(
+        combined.contains("warning:"),
+        "expected override warning; got: {combined}"
+    );
+    assert!(
+        combined.contains("--ignore-failed-ci"),
+        "expected override flag in warning; got: {combined}"
+    );
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests.iter().any(|r| {
+            r.method == wiremock::http::Method::PUT
+                && r.url.path() == "/repos/test-owner/test-repo/pulls/1/merge"
+        }),
+        "merge --remote must call the merge endpoint after waiving failed CI"
+    );
+}
+
+#[tokio::test]
+async fn merge_when_ready_with_override_merges_failed_ci_pr_and_warns() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let branches = repo.create_stack(&["feat"]);
+    let sha = repo.get_commit_sha(&branches[0]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 1);
+
+    mount_merge_status(&server, 1, &sha, "FAILURE", "MERGEABLE", false, "APPROVED").await;
+    mount_pr_get(&server, 1, &sha).await;
+    mount_merge_endpoint(&server, 1).await;
+
+    let output = repo.run_stax_with_env(
+        &[
+            "merge",
+            "--when-ready",
+            "--yes",
+            "--no-delete",
+            "--no-sync",
+            "--ignore-failed-ci",
+        ],
+        &auth_env(),
+    );
+
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        output.status.success(),
+        "merge --when-ready failed: {combined}"
+    );
+    assert!(
+        combined.contains("warning:"),
+        "expected override warning; got: {combined}"
+    );
+    assert!(
+        combined.contains("--ignore-failed-ci"),
+        "expected override flag in warning; got: {combined}"
+    );
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert!(
+        requests.iter().any(|r| {
+            r.method == wiremock::http::Method::PUT
+                && r.url.path() == "/repos/test-owner/test-repo/pulls/1/merge"
+        }),
+        "merge --when-ready must call the merge endpoint after waiving failed CI"
+    );
+}
+
+#[tokio::test]
 async fn merge_with_override_still_blocks_draft() {
     ensure_crypto_provider();
     let server = MockServer::start().await;
