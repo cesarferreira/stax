@@ -245,6 +245,61 @@ fn stats_json_counts_match_human_output() {
 }
 
 #[test]
+fn stats_omits_zero_valued_counters() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_stack(&["zero-noise-branch"]);
+
+    let out = repo.run_stax(&["stats"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+
+    for noise in ["0 draft", "0 missing parent", "0 open", "0 frozen"] {
+        assert!(
+            !stdout.contains(noise),
+            "expected '{}' to be omitted:\n{}",
+            noise,
+            stdout
+        );
+    }
+}
+
+#[test]
+fn stats_reports_all_clear_health_when_nothing_is_broken() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_stack(&["healthy-branch"]);
+
+    let out = repo.run_stax(&["stats"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+
+    assert!(
+        stdout.contains("all clear"),
+        "expected a clean health line:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn stats_hides_single_bar_pr_mix_chart() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_stack(&["only-one-category"]);
+
+    let out = repo.run_stax(&["stats"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+
+    // One non-zero category repeats the PRs row, so the chart is suppressed.
+    assert!(
+        !stdout.contains("PR mix"),
+        "expected the PR mix chart to be hidden for a single category:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn stats_ci_without_forge_auth_reports_unavailable_and_exits_zero() {
     let repo = TestRepo::new();
     repo.run_stax(&["init"]).assert_success();

@@ -25,11 +25,17 @@ st stats --ci           # add an opt-in CI roll-up (network call, reuses the sta
   branches without a PR, branches with missing parent metadata, and dirty/clean
   worktree lanes.
 - **Biggest stacks** — the largest (by height) independent stacks, with
-  commits-ahead and PR range.
+  commits-ahead and PR range. Shown only when there are at least two stacks to
+  compare.
+- **PR mix** chart — a bar chart of ready/draft/no-PR, shown only when at least
+  two of those categories are non-zero.
 - **Hygiene** — merged-but-local, upstream-gone, and stale branch counts (same
   classification as `st sweep`), with a hint to run `st sweep --delete`.
 - **Next** — one or two suggested follow-up commands (e.g. `st restack --all`
   then `st ss`, or `st sweep`).
+
+Counters with a zero value are omitted rather than printed as `0`, and the
+health row collapses to `✓ all clear` when nothing needs attention.
 
 `--ci` is opt-in because it makes a network call; without it (or without forge
 auth configured), the CI line is omitted and `st stats` still exits `0`.

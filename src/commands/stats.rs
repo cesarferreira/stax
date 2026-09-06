@@ -280,13 +280,65 @@ fn gather_ci_facts(
 // Rendering
 // ---------------------------------------------------------------------------
 
+/// Width of the left-hand label column shared by the header and counter rows.
+const LABEL_WIDTH: usize = 11;
+const RULE_MIN: usize = 44;
+const RULE_MAX: usize = 74;
+
+fn rule_width() -> usize {
+    (console::Term::stdout().size().1 as usize).clamp(RULE_MIN, RULE_MAX)
+}
+
+/// Join value chunks with a dimmed separator so the values stay the bright part
+/// of each row.
+fn join_parts(parts: &[String]) -> String {
+    parts.join(&format!("{}", "  ·  ".dimmed()))
+}
+
+/// A count and its unit, e.g. a bright `3` followed by a dimmed `open`.
+fn metric(value: &str, label: &str, color: colored::Color) -> String {
+    format!("{} {}", value.color(color).bold(), label.dimmed())
+}
+
+/// The inverse of [`metric`], for values that read better after their name
+/// ("deepest 6" rather than "6 deepest").
+fn labeled(label: &str, value: &str) -> String {
+    format!("{} {}", label.dimmed(), value.bold())
+}
+
+/// Truncate to a visible width, appending an ellipsis. Only safe for strings
+/// that carry no ANSI codes (attention details are built plain by the engine).
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
+/// Pad to a fixed width, truncating anything longer so the column never
+/// shifts. ANSI-free input only.
+fn cell(text: &str, width: usize) -> String {
+    format!("{:<width$}", truncate(text, width), width = width)
+}
+
+fn label_cell(label: &str) -> colored::ColoredString {
+    format!("{:<LABEL_WIDTH$}", label).dimmed()
+}
+
+fn heading(text: &str) -> colored::ColoredString {
+    text.bold().underline()
+}
+
 fn divergence_arrows(ahead: usize, behind: usize) -> String {
     let mut parts = Vec::new();
     if ahead > 0 {
-        parts.push(format!("{}", format!("{}↑", ahead).green()));
+        parts.push(format!("{}", format!("{}↑", ahead).green().bold()));
     }
     if behind > 0 {
-        parts.push(format!("{}", format!("{}↓", behind).red()));
+        parts.push(format!("{}", format!("{}↓", behind).red().bold()));
     }
     parts.join(" ")
 }
@@ -301,189 +353,290 @@ fn attention_label(kind: &str) -> &'static str {
     }
 }
 
-fn render_human(stats: &RepoStats) {
-    // --- Header ---
-    let mut header_parts: Vec<String> = Vec::new();
-    if let Some(repo) = &stats.repo {
-        header_parts.push(repo.clone());
+fn attention_color(kind: &str) -> colored::Color {
+    match kind {
+        "missing_parent" => colored::Color::Red,
+        "restack" | "no_pr" => colored::Color::Yellow,
+        _ => colored::Color::Cyan,
     }
-    header_parts.push(stats.trunk.clone());
+}
+
+/// `stats::bar` emits filled cells followed by empty ones; color the two runs
+/// separately so the empty track recedes.
+fn colored_bar(value: usize, max: usize, cells: usize, color: colored::Color) -> String {
+    let bar = stats::bar(value, max, cells);
+    let filled: String = bar.chars().filter(|c| *c == '█').collect();
+    let empty: String = bar.chars().filter(|c| *c != '█').collect();
+    format!("{}{}", filled.color(color), empty.dimmed())
+}
+
+fn render_human(stats: &RepoStats) {
+    println!();
+    render_header(stats);
+    render_counters(stats);
+    render_attention(stats);
+    render_biggest_stacks(stats);
+    render_pr_mix(stats);
+    render_hygiene(stats);
+    render_next(stats);
+    println!();
+}
+
+fn render_header(stats: &RepoStats) {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(repo) = &stats.repo {
+        parts.push(format!("{}", repo.bold()));
+    }
+    parts.push(format!("{}", stats.trunk.cyan().bold()));
     if let (Some(ahead), Some(behind)) = (stats.trunk_ahead, stats.trunk_behind) {
         if ahead == 0 && behind == 0 {
-            header_parts.push("in sync".to_string());
+            parts.push(format!("{}", "in sync".green()));
         } else {
-            header_parts.push(divergence_arrows(ahead, behind));
+            parts.push(divergence_arrows(ahead, behind));
         }
     }
+    if stats.scope == "current" {
+        parts.push(format!("{}", "current stack only".dimmed()));
+    }
+
+    println!("{}{}", label_cell("Repo"), join_parts(&parts));
     println!(
         "{}{}",
-        format!("{:<6}", "Stats").bold(),
-        header_parts.join(" · ")
+        label_cell("You"),
+        stats.current.bright_cyan().bold()
     );
-    println!("{}{}", format!("{:<6}", "You").bold(), stats.current.cyan());
-    println!();
+    println!("{}", "─".repeat(rule_width()).dimmed());
+}
 
-    // --- Counters ---
+fn render_counters(stats: &RepoStats) {
+    use colored::Color::{Blue, Cyan, Green, Red, White, Yellow};
+
+    let mut rows: Vec<(&str, String)> = Vec::new();
+
     let shape = &stats.stack_shape;
-    let mut counter_lines: Vec<(&str, String)> = Vec::new();
-
-    if shape.tracked > 0 || shape.independent > 0 || shape.deepest > 0 {
-        counter_lines.push((
+    if shape.tracked > 0 {
+        rows.push((
             "Stacks",
-            format!(
-                "{} tracked  ·  {} independent  ·  deepest {}  ·  avg {:.1}",
-                shape.tracked, shape.independent, shape.deepest, shape.avg_height
-            ),
+            join_parts(&[
+                metric(
+                    &shape.independent.to_string(),
+                    if shape.independent == 1 {
+                        "stack"
+                    } else {
+                        "stacks"
+                    },
+                    White,
+                ),
+                metric(&shape.tracked.to_string(), "tracked", White),
+                labeled("deepest", &shape.deepest.to_string()),
+                labeled("avg", &format!("{:.1}", shape.avg_height)),
+            ]),
         ));
     }
 
     let pr = &stats.pr_mix;
-    if pr.open > 0 || pr.no_pr > 0 || pr.frozen > 0 {
-        let mut parts = vec![
-            format!("{} open", pr.open),
-            format!("{} draft", pr.draft),
-            format!("{} no PR", pr.no_pr),
-        ];
-        if pr.frozen > 0 {
-            parts.push(format!("{} frozen", pr.frozen));
-        }
-        counter_lines.push(("PRs", parts.join("  ·  ")));
+    let mut pr_parts: Vec<String> = Vec::new();
+    if pr.ready > 0 {
+        pr_parts.push(metric(&pr.ready.to_string(), "ready", Green));
+    }
+    if pr.draft > 0 {
+        pr_parts.push(metric(&pr.draft.to_string(), "draft", Yellow));
+    }
+    if pr.no_pr > 0 {
+        pr_parts.push(metric(&pr.no_pr.to_string(), "no PR", Yellow));
+    }
+    if pr.frozen > 0 {
+        pr_parts.push(metric(&pr.frozen.to_string(), "frozen", Blue));
+    }
+    if !pr_parts.is_empty() {
+        rows.push(("PRs", join_parts(&pr_parts)));
     }
 
     let health = &stats.health;
-    if health.need_restack > 0
-        || health.missing_parent > 0
-        || health.dirty_worktrees.unwrap_or(0) > 0
+    let mut health_parts: Vec<String> = Vec::new();
+    if health.need_restack > 0 {
+        health_parts.push(metric(
+            &health.need_restack.to_string(),
+            "need restack",
+            Yellow,
+        ));
+    }
+    if health.missing_parent > 0 {
+        health_parts.push(metric(
+            &health.missing_parent.to_string(),
+            "missing parent",
+            Red,
+        ));
+    }
+    if let Some(dirty) = health.dirty_worktrees
+        && dirty > 0
     {
-        let mut parts = vec![
-            format!("{} need restack", health.need_restack),
-            format!("{} missing parent", health.missing_parent),
-        ];
-        if let Some(dirty) = health.dirty_worktrees {
-            parts.push(format!("{} dirty", dirty));
-        }
-        counter_lines.push(("Health", parts.join("  ·  ")));
+        health_parts.push(metric(&dirty.to_string(), "dirty", Yellow));
+    }
+    if health_parts.is_empty() && shape.tracked > 0 {
+        health_parts.push(format!("{} {}", "✓".green(), "all clear".dimmed()));
+    }
+    if !health_parts.is_empty() {
+        rows.push(("Health", join_parts(&health_parts)));
     }
 
     let wt = &stats.worktrees;
-    if wt.linked > 0 || wt.idle_slots > 0 {
-        counter_lines.push((
-            "Worktrees",
-            format!("{} linked  ·  {} idle", wt.linked, wt.idle_slots),
-        ));
+    let mut wt_parts: Vec<String> = Vec::new();
+    if wt.linked > 0 {
+        wt_parts.push(metric(&wt.linked.to_string(), "linked", Cyan));
+    }
+    if wt.idle_slots > 0 {
+        wt_parts.push(metric(&wt.idle_slots.to_string(), "idle", White));
+    }
+    if !wt_parts.is_empty() {
+        rows.push(("Worktrees", join_parts(&wt_parts)));
     }
 
     if let Some(ci) = &stats.ci {
-        if ci.failing > 0 || ci.pending > 0 || ci.passing > 0 {
-            counter_lines.push((
-                "CI",
-                format!(
-                    "{} failing  ·  {} pending  ·  {} passing",
-                    ci.failing, ci.pending, ci.passing
-                ),
-            ));
+        let mut ci_parts: Vec<String> = Vec::new();
+        if ci.failing > 0 {
+            ci_parts.push(metric(&ci.failing.to_string(), "failing", Red));
+        }
+        if ci.pending > 0 {
+            ci_parts.push(metric(&ci.pending.to_string(), "pending", Yellow));
+        }
+        if ci.passing > 0 {
+            ci_parts.push(metric(&ci.passing.to_string(), "passing", Green));
+        }
+        if !ci_parts.is_empty() {
+            rows.push(("CI", join_parts(&ci_parts)));
         }
     } else if let Some(reason) = &stats.ci_unavailable_reason {
-        counter_lines.push(("CI", format!("{}", reason.dimmed())));
+        rows.push(("CI", format!("{}", reason.dimmed())));
     }
 
-    if !counter_lines.is_empty() {
-        for (label, value) in &counter_lines {
-            println!("{:<11}{}", label, value);
-        }
-        println!();
+    if rows.is_empty() {
+        let hint = if stats.scope == "current" {
+            "No tracked branches in the current stack — run `st create` to start one."
+        } else {
+            "No tracked branches yet — run `st create` to start a stack."
+        };
+        println!("{}", hint.dimmed());
+        return;
     }
 
-    // --- Attention ---
-    if !stats.attention.is_empty() {
-        println!("{}", "Attention".bold());
-        for item in &stats.attention {
-            println!(
-                "   {}  {:<10}{}",
-                item.glyph,
-                attention_label(item.kind),
-                item.detail
-            );
-        }
-        println!();
+    for (label, value) in &rows {
+        println!("{}{}", label_cell(label), value);
     }
+}
 
-    // --- Biggest stacks ---
-    if !stats.biggest_stacks.is_empty() {
-        println!("{}", "Biggest stacks".bold());
-        for summary in &stats.biggest_stacks {
-            let pr_range = match (summary.pr_low, summary.pr_high) {
-                (Some(low), Some(high)) if low == high => format!("#{}", low),
-                (Some(low), Some(high)) => format!("#{}\u{2013}#{}", low, high),
-                _ => "–".to_string(),
-            };
-            println!(
-                "   {:>2}  {:<20} {:>4}  {:<8}  {}",
-                summary.height,
-                summary.root,
-                format!("{}↑", summary.commits_ahead),
-                summary.label,
-                pr_range
-            );
-        }
-        println!();
+fn render_attention(stats: &RepoStats) {
+    if stats.attention.is_empty() {
+        return;
     }
-
-    // --- PR mix bar chart ---
-    let max = pr.ready.max(pr.draft).max(pr.no_pr);
-    if max > 0 {
-        println!("{}", "PR mix (open)".bold());
+    println!();
+    println!("{}", heading("Attention"));
+    let detail_width = rule_width().saturating_sub(14);
+    for item in &stats.attention {
+        let color = attention_color(item.kind);
         println!(
-            "   {:<5} {}  {}",
-            "ready",
-            stats::bar(pr.ready, max, 10),
-            pr.ready
+            "  {} {} {}",
+            item.glyph.color(color).bold(),
+            format!("{:<9}", attention_label(item.kind)).color(color),
+            truncate(&item.detail, detail_width)
         );
-        println!(
-            "   {:<5} {}  {}",
-            "draft",
-            stats::bar(pr.draft, max, 10),
-            pr.draft
-        );
-        println!(
-            "   {:<5} {}  {}",
-            "none",
-            stats::bar(pr.no_pr, max, 10),
-            pr.no_pr
-        );
-        println!();
     }
+}
 
-    // --- Hygiene ---
+fn render_biggest_stacks(stats: &RepoStats) {
+    // With a single stack the table repeats the counters above, so it only
+    // earns its space once there is something to compare.
+    if stats.biggest_stacks.len() < 2 {
+        return;
+    }
+    println!();
+    println!("{}", heading("Biggest stacks"));
+    for (index, summary) in stats.biggest_stacks.iter().enumerate() {
+        let lane = crate::commands::stack_palette::lane_color(index);
+        let pr_range = match (summary.pr_low, summary.pr_high) {
+            (Some(low), Some(high)) if low == high => format!("#{}", low),
+            (Some(low), Some(high)) => format!("#{}\u{2013}#{}", low, high),
+            _ => "—".to_string(),
+        };
+        println!(
+            "  {} {} {} {} {}",
+            format!("{:>2}", summary.height).color(lane).bold(),
+            cell(&summary.root, 30).color(lane),
+            format!("{:>5}", format!("{}↑", summary.commits_ahead)).green(),
+            cell(&summary.label, 9).dimmed(),
+            pr_range.bright_magenta()
+        );
+    }
+}
+
+fn render_pr_mix(stats: &RepoStats) {
+    let pr = &stats.pr_mix;
+    let categories = [
+        ("ready", pr.ready, colored::Color::Green),
+        ("draft", pr.draft, colored::Color::Yellow),
+        ("none", pr.no_pr, colored::Color::BrightBlack),
+    ];
+    // A chart of one non-zero bar says nothing the PRs row did not.
+    if categories.iter().filter(|(_, value, _)| *value > 0).count() < 2 {
+        return;
+    }
+    let max = categories
+        .iter()
+        .map(|(_, value, _)| *value)
+        .max()
+        .unwrap_or(0);
+
+    println!();
+    println!("{}", heading("PR mix"));
+    for (label, value, color) in categories {
+        println!(
+            "  {} {}  {}",
+            format!("{:<5}", label).dimmed(),
+            colored_bar(value, max, 12, color),
+            value.to_string().color(color).bold()
+        );
+    }
+}
+
+fn render_hygiene(stats: &RepoStats) {
     let hygiene = &stats.hygiene;
-    if hygiene.merged_but_local > 0 || hygiene.upstream_gone > 0 || hygiene.stale > 0 {
-        println!("{}", "Hygiene".bold());
-        if hygiene.merged_but_local > 0 {
-            println!(
-                "   {:<17}  {:<2}  {}",
-                "merged-but-local",
-                hygiene.merged_but_local,
-                "st sweep --delete".dimmed()
-            );
-        }
-        if hygiene.upstream_gone > 0 {
-            println!("   {:<17}  {:<2}", "upstream-gone", hygiene.upstream_gone);
-        }
-        if hygiene.stale > 0 {
-            println!(
-                "   {:<17}  {:<2}",
-                format!("stale ({}d+)", hygiene.stale_days),
-                hygiene.stale
-            );
-        }
-        println!();
+    let rows = [
+        (
+            "merged-but-local".to_string(),
+            hygiene.merged_but_local,
+            "st sweep --delete",
+        ),
+        ("upstream-gone".to_string(), hygiene.upstream_gone, ""),
+        (format!("stale {}d+", hygiene.stale_days), hygiene.stale, ""),
+    ];
+    if rows.iter().all(|(_, count, _)| *count == 0) {
+        return;
     }
 
-    // --- Next actions ---
-    if !stats.next_actions.is_empty() {
-        println!("{}", "Next".bold());
-        for action in &stats.next_actions {
-            println!("   {}", action.cyan());
+    println!();
+    println!("{}", heading("Hygiene"));
+    for (label, count, hint) in rows.iter().filter(|(_, count, _)| *count > 0) {
+        let mut line = format!(
+            "  {} {}",
+            format!("{:<17}", label).dimmed(),
+            format!("{:>2}", count).yellow().bold()
+        );
+        if !hint.is_empty() {
+            line.push_str(&format!("   {}", hint.dimmed()));
         }
+        println!("{}", line);
     }
+}
+
+fn render_next(stats: &RepoStats) {
+    if stats.next_actions.is_empty() {
+        return;
+    }
+    let actions: Vec<String> = stats
+        .next_actions
+        .iter()
+        .map(|action| format!("{}", action.cyan().bold()))
+        .collect();
+    println!();
+    println!("{}{}", label_cell("Next"), join_parts(&actions));
 }
