@@ -744,3 +744,45 @@ fn sweep_reparents_tracked_children_on_delete() {
     let status_out = repo.run_stax(&["status"]);
     status_out.assert_success();
 }
+
+#[test]
+fn sweep_ignores_worktree_checkout_marker() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "side"]).assert_success();
+    repo.create_file("side.txt", "side");
+    repo.commit("side commit");
+
+    let worktree_path = repo.path().join("wt-main");
+    let out = repo.git(&[
+        "worktree",
+        "add",
+        worktree_path.to_str().expect("worktree path"),
+        "main",
+    ]);
+    assert!(
+        out.status.success(),
+        "failed to add worktree: {}",
+        TestRepo::stderr(&out)
+    );
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+
+    let names: Vec<&str> = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array")
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .collect();
+
+    assert!(
+        !names.iter().any(|n| n.starts_with('+') || *n == "main"),
+        "trunk checked out in another worktree must not be swept: {:?}",
+        names
+    );
+}

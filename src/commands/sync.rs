@@ -3363,7 +3363,13 @@ pub(super) fn find_merged_branches(
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
-        .args(["branch", "--merged", &stack.trunk])
+        .args([
+            "for-each-ref",
+            "--merged",
+            &stack.trunk,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])
         .current_dir(workdir)
         .output()
         .context("Failed to list merged branches")?;
@@ -3371,7 +3377,7 @@ pub(super) fn find_merged_branches(
     let merged_output = String::from_utf8_lossy(&output.stdout);
 
     for line in merged_output.lines() {
-        let branch = branch_name_from_merged_output(line);
+        let branch = line.trim();
 
         // Skip trunk itself and any non-tracked branches
         if branch == stack.trunk || branch.is_empty() {
@@ -3391,7 +3397,13 @@ pub(super) fn find_merged_branches(
 
     // Method 1b: git branch --merged origin/trunk (handles stale/diverged local trunk)
     let output = Command::new("git")
-        .args(["branch", "--merged", &remote_trunk_ref])
+        .args([
+            "for-each-ref",
+            "--merged",
+            &remote_trunk_ref,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])
         .current_dir(workdir)
         .output();
 
@@ -3399,7 +3411,7 @@ pub(super) fn find_merged_branches(
         let merged_output = String::from_utf8_lossy(&output.stdout);
 
         for line in merged_output.lines() {
-            let branch = branch_name_from_merged_output(line);
+            let branch = line.trim();
 
             // Skip trunk itself and any non-tracked branches
             if branch == stack.trunk || branch.is_empty() {
@@ -3730,14 +3742,6 @@ fn count_extra_commits(workdir: &Path, branch: &str, bases: &[&str]) -> Result<u
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().parse::<usize>().unwrap_or(0))
-}
-
-fn branch_name_from_merged_output(line: &str) -> &str {
-    let branch = line.trim();
-    branch
-        .strip_prefix("* ")
-        .or_else(|| branch.strip_prefix("+ "))
-        .unwrap_or(branch)
 }
 
 pub(super) fn find_upstream_gone_branches(
