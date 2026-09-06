@@ -1182,6 +1182,19 @@ pub(crate) enum Commands {
     /// Interactive tutorial (no auth or repo needed)
     Demo,
 
+    /// Single-screen snapshot of local stacking health
+    Stats {
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+        /// Scope to the current stack only (default: all tracked branches)
+        #[arg(long)]
+        current: bool,
+        /// Include a CI roll-up (may add network latency)
+        #[arg(long)]
+        ci: bool,
+    },
+
     /// Generate standup summary of recent activity
     Standup {
         /// Output raw JSON (standup data, or summary JSON when combined with --ai)
@@ -2018,7 +2031,8 @@ impl Commands {
             | Commands::Web(_)
             | Commands::W
             | Commands::Wtll { .. }
-            | Commands::Wtls => CommandPolicy::RebaseSafe,
+            | Commands::Wtls
+            | Commands::Stats { .. } => CommandPolicy::RebaseSafe,
             Commands::Issue { command } => match command {
                 None | Some(IssueCommands::List { .. }) => CommandPolicy::RebaseSafe,
             },

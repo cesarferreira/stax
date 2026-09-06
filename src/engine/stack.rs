@@ -244,6 +244,47 @@ impl Stack {
     }
 }
 
+/// Facts read straight from branch metadata, gathered in a single pass over
+/// tracked branches (trunk excluded).
+#[derive(Debug, Clone, Default)]
+pub struct TrackedFacts {
+    pub frozen: HashSet<String>,
+    pub missing_parent: HashMap<String, String>,
+    pub imported: HashSet<String>,
+}
+
+/// Collect frozen/imported/missing-parent facts for every tracked branch in one pass.
+///
+/// The `missing_parent` rule is lifted verbatim from
+/// `status.rs::collect_missing_parent_branches`: a branch has a missing parent
+/// when its recorded parent name is non-empty, is not trunk, and no longer
+/// resolves to a local branch commit.
+pub fn collect_tracked_facts(repo: &GitRepo, stack: &Stack) -> TrackedFacts {
+    let mut facts = TrackedFacts::default();
+
+    for name in stack.branches.keys().filter(|name| *name != &stack.trunk) {
+        let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), name) else {
+            continue;
+        };
+
+        if meta.frozen {
+            facts.frozen.insert(name.clone());
+        }
+        if meta.source_remote.is_some() {
+            facts.imported.insert(name.clone());
+        }
+
+        let parent = meta.parent_branch_name.trim();
+        if !parent.is_empty() && parent != stack.trunk && repo.branch_commit(parent).is_err() {
+            facts
+                .missing_parent
+                .insert(name.clone(), parent.to_string());
+        }
+    }
+
+    facts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

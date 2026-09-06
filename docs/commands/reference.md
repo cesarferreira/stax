@@ -38,6 +38,9 @@ st --trace status --json >/dev/null
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
 | `st sweep --json` | | Machine-readable branch classification (conflicts with `--delete`) |
+| `st stats` | | Single-screen, local-only snapshot of stacking health (stack shape, PR mix, health, worktrees, hygiene, next action); `--current` scopes to the current stack |
+| `st stats --json` | | Machine-readable `RepoStats` document |
+| `st stats --ci` | | Add an opt-in CI roll-up (network call, reuses the standup CI pattern); omitted (and non-fatal) without forge auth |
 | `st refresh` | `r` | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack (pass `--delete-merged` to opt into `sync`-style cleanup) |
 | `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
@@ -502,6 +505,17 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 - `--ci` checks only the selected branches and may add network latency; combine it with `--all` to check all tracked branches.
 - GitHub authored reviews come from one time-bounded, maximum-100 GraphQL query. GitLab and Gitea mark that signal unsupported rather than scanning every MR/PR.
 - JSON preserves `reviews_given` and `needs_attention.ci_failing`; use `signals.<name>.status` (`available`, `unsupported`, `unavailable`, or `not_requested`) to interpret empty arrays.
+
+### `st stats`
+
+- `--current` scopes to the current stack (ancestors + current + descendants); when the current branch is untracked, the scope is empty and the command still exits `0`.
+- `--json` emits a single `RepoStats` document with top-level keys: `scope` (`"all"` or `"current"`), `trunk`, `current`, `repo` (project slug, omitted with no forge remote), `trunk_ahead` / `trunk_behind` (omitted with no remote-tracking branch), `stack_shape`, `pr_mix`, `health`, `worktrees`, `ci` (omitted unless `--ci` produced counts), `ci_unavailable_reason` (present when `--ci` was requested but unavailable), `attention`, `biggest_stacks`, `hygiene`, `next_actions`.
+- `stack_shape`: `tracked`, `independent`, `deepest`, `avg_height`.
+- `pr_mix`: `open` (includes drafts), `draft`, `ready` (`open - draft`), `no_pr`, `merged`, `closed`, `frozen`.
+- `health`: `need_restack`, `missing_parent`, `dirty_worktrees` (repo-wide, not scoped by `--current`; `null` when the dirty check was skipped for having too many worktrees).
+- `worktrees`: `linked`, `idle_slots`.
+- `hygiene`: `merged_but_local`, `upstream_gone`, `stale`, `stale_days` — same ancestry-based classification `st sweep` uses.
+- `--ci` is opt-in because it makes a network call; without forge auth configured, `ci` is omitted and `ci_unavailable_reason` explains why. `st stats` always exits `0` regardless of CI availability.
 
 ### `st pr` / `st issue`
 

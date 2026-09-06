@@ -2,6 +2,38 @@
 
 Commands to validate, repair, and test your stack metadata.
 
+## `st stats`
+
+Single-screen, local-only snapshot of stacking health: stack shape, PR mix,
+restack/parent/dirty health, worktree lanes, local branch hygiene, and a
+next-action hint. Read-only and safe to run at any time.
+
+```bash
+st stats              # all tracked branches
+st stats --current    # scope to the current stack only
+st stats --json        # machine-readable output
+st stats --ci           # add an opt-in CI roll-up (network call, reuses the standup CI pattern)
+```
+
+- **Stack shape** — tracked branch count, number of independent stacks, deepest
+  stack, and average stack height.
+- **PR mix** — open/draft/ready/no-PR/frozen counts across the scoped branches.
+- **Health** — branches needing restack, branches with missing parent
+  metadata, and (repo-wide, not scoped by `--current`) dirty linked worktrees.
+- **Worktrees** — linked worktree count and idle pool slots.
+- **Attention** — up to a few highlighted items: stacks needing restack,
+  branches without a PR, branches with missing parent metadata, and dirty/clean
+  worktree lanes.
+- **Biggest stacks** — the largest (by height) independent stacks, with
+  commits-ahead and PR range.
+- **Hygiene** — merged-but-local, upstream-gone, and stale branch counts (same
+  classification as `st sweep`), with a hint to run `st sweep --delete`.
+- **Next** — one or two suggested follow-up commands (e.g. `st restack --all`
+  then `st ss`, or `st sweep`).
+
+`--ci` is opt-in because it makes a network call; without it (or without forge
+auth configured), the CI line is omitted and `st stats` still exits `0`.
+
 ## `st validate`
 
 Check that all branch metadata is consistent.
