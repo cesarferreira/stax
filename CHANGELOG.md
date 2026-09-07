@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.111.0] - 2026-09-07
+## [0.112.0] - 2026-09-07
 
 ### 🚀 Features
 
@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 ### 🐛 Bug Fixes
 
 - *(sweep)* Stop parsing the worktree marker into branch names ([#861](https://github.com/cesarferreira/stax/issues/861))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.110.0] - 2026-09-02
 
 ### 🚀 Features
