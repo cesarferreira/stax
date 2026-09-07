@@ -203,7 +203,7 @@ when it points at the same commit. `--all` conflicts with `--parent` and
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |
 
-`st skills update` fetches the remote body and compares each fully rendered harness file byte-for-byte, rewriting instructions that differ even when the installed package-version marker matches. It leaves byte-identical files untouched; `--dry-run` reports the same decision without writing. `st skills list` is intentionally local-only: its current/stale indicator compares the installed package-version marker with this stax binary and does not verify fetched content.
+`st skills update` fetches the remote body and compares each fully rendered harness file byte-for-byte, rewriting instructions that differ even when the installed package-version marker matches. It leaves byte-identical files untouched; `--dry-run` reports the same decision without writing. `st skills list` is intentionally local-only: its current/stale indicator compares the installed package-version marker with this stax binary and does not verify fetched content. When a symlink at the skill directory or file position no longer resolves, `st skills update` removes it and replaces it with a real path (working symlinks are left intact and written through); if a harness cannot be written for any other reason it is reported and skipped so the remaining harnesses still update, and the command exits non-zero afterwards.
 
 ### `st tmux`
 
