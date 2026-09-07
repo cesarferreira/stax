@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.111.0] - 2026-09-07
+
+### 🚀 Features
+
+- *(stats)* Add local stacking health snapshot ([#866](https://github.com/cesarferreira/stax/issues/866))
+
+### 🐛 Bug Fixes
+
+- *(sweep)* Stop parsing the worktree marker into branch names ([#861](https://github.com/cesarferreira/stax/issues/861))
 ## [0.110.0] - 2026-09-02
 
 ### 🚀 Features
@@ -20,6 +29,7 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Release
 - Release
 ## [0.109.0] - 2026-08-31
 
@@ -2143,13 +2153,46 @@ All notable changes to this project will be documented in this file.
 - Now when stax rs deletes a merged branch, it will:
 ## [0.3.0] - 2025-12-27
 
+### 💼 Other
+
+- Clearer message when deleting merged branches
+- Updated comments on PRs
+- Rename branch command
+- New-readme
+- Re-added screenshot
+- Updated readme
+- Added tests to rename
+- Tui
+- Reorder panes
+- Edit works properly
+- Details view
+- Updated SS
+- Remote comparisons
+- Stack reorder
+- Reordering preview
+- Updated readme
+- Updated readme
+- Added screenshots
+## [0.2.1] - 2025-12-27
+
+### 🐛 Bug Fixes
+
+- Fix release
+- Fixed pipeline
+
+### 💼 Other
+
+- Improved test accuracy
+- Workflow trigger
+- Added locked openssl for cross compilation
+- Bumped octocrab
+## [0.2.0] - 2025-12-26
+
 ### 🐛 Bug Fixes
 
 - Fix tracking
 - Fixing bco
 - Fix for icon in remote branches
-- Fix release
-- Fixed pipeline
 
 ### 💼 Other
 
@@ -2235,28 +2278,6 @@ All notable changes to this project will be documented in this file.
 - Improved bco
 - Tags publish
 - Bumped version
-- Improved test accuracy
-- Workflow trigger
-- Added locked openssl for cross compilation
-- Bumped octocrab
-- Clearer message when deleting merged branches
-- Updated comments on PRs
-- Rename branch command
-- New-readme
-- Re-added screenshot
-- Updated readme
-- Added tests to rename
-- Tui
-- Reorder panes
-- Edit works properly
-- Details view
-- Updated SS
-- Remote comparisons
-- Stack reorder
-- Reordering preview
-- Updated readme
-- Updated readme
-- Added screenshots
 
 ### 📚 Documentation
 
