@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REMOTE_URL: &str = "https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md";
@@ -280,6 +280,96 @@ fn skill_path(loc: &SkillLocation) -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(loc.relative_path))
 }
 
+/// Records broken symlinks that block writing a skill file.
+///
+/// `std::path::Path::is_symlink` / `symlink_metadata` do **not** follow the
+/// link; `is_dir` / `is_file` do.  A path that is a symlink but whose target
+/// does not resolve is therefore exactly the broken case we need to remove.
+/// A symlink that resolves correctly to an existing directory or file is
+/// intentional (a symlink farm) and must be left untouched.
+///
+/// At most one of `dir` and `file` is `Some` at any time: a broken directory
+/// symlink makes the leaf unobservable, so `file` is only populated when the
+/// directory chain is sound.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BrokenLinks {
+    /// Shallowest broken directory symlink in the ancestor chain, if any.
+    dir: Option<PathBuf>,
+    /// Broken symlink at the skill-file position itself (only set when `dir` is
+    /// `None`), if any.
+    file: Option<PathBuf>,
+}
+
+impl BrokenLinks {
+    fn is_empty(&self) -> bool {
+        self.dir.is_none() && self.file.is_none()
+    }
+
+    fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.dir.iter().chain(self.file.iter())
+    }
+}
+
+/// Returns `true` when `path` is a symlink that does **not** resolve to a
+/// usable directory (i.e. it is broken or points at a non-directory target).
+///
+/// A symlink pointing at an existing regular file at a directory position is
+/// treated as broken because `create_dir_all` would fail on it regardless.
+/// Only the link itself is ever removed, never the file it points at.
+fn is_broken_dir_link(path: &Path) -> bool {
+    path.is_symlink() && !path.is_dir()
+}
+
+/// Returns `true` when `path` is a symlink that does **not** resolve to a
+/// usable regular file.
+fn is_broken_file_link(path: &Path) -> bool {
+    path.is_symlink() && !path.is_file()
+}
+
+/// Walk the ancestor chain of `dir` (shallowest first, bounded by `home`)
+/// and return the first broken directory symlink found.
+///
+/// `home` itself is never a repair candidate: we only consider paths that are
+/// strictly inside it.  A single broken link in the chain is the only
+/// observable case — if a shallower component is a dangling symlink,
+/// `symlink_metadata` on any deeper component fails with `ENOENT`, so
+/// `is_symlink()` returns `false` there.
+fn broken_dir_link(dir: &Path, home: &Path) -> Option<PathBuf> {
+    let mut chain: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|p| p.starts_with(home) && *p != home)
+        .collect();
+    chain.reverse();
+    chain
+        .into_iter()
+        .find(|p| is_broken_dir_link(p))
+        .map(PathBuf::from)
+}
+
+/// Inspect `path` for broken symlinks that would prevent writing it.
+///
+/// The leaf is only inspected when the directory chain is sound: a broken
+/// directory link makes the leaf unobservable, and the repair recreates the
+/// subtree as real directories anyway.
+fn detect_broken_links(path: &Path, home: &Path) -> BrokenLinks {
+    let dir = path.parent().and_then(|p| broken_dir_link(p, home));
+    let file = (dir.is_none() && is_broken_file_link(path)).then(|| path.to_path_buf());
+    BrokenLinks { dir, file }
+}
+
+/// Remove all broken symlinks listed in `links`.
+///
+/// `std::fs::remove_file` on a symlink removes the link itself, never the
+/// target — so a valid symlink farm is never disturbed (valid links are never
+/// present in `links`).
+fn repair_broken_links(links: &BrokenLinks) -> Result<()> {
+    for p in links.paths() {
+        std::fs::remove_file(p)
+            .with_context(|| format!("Failed to remove broken symlink {}", p.display()))?;
+    }
+    Ok(())
+}
+
 /// Generate the content to write for a given location given the remote body.
 ///
 /// For `has_frontmatter = true` files we prepend a minimal YAML front-matter so
@@ -423,6 +513,99 @@ pub fn run_list() -> Result<()> {
     Ok(())
 }
 
+/// Outcome of a single per-harness update attempt.
+enum HarnessOutcome {
+    Updated,
+    Skipped,
+    Planned,
+}
+
+/// Attempt to install or refresh the skill file for a single harness location.
+///
+/// Broken symlinks at the directory or file position are detected and repaired
+/// before writing (in the non-dry-run path).  A valid symlink farm (symlinks
+/// resolving to existing targets) is left completely intact and written through.
+///
+/// The dry-run branch is strictly read-only: no `remove_file`, `create_dir_all`,
+/// or `write` calls are made.
+fn update_location(
+    loc: &SkillLocation,
+    remote_body: &str,
+    dry_run: bool,
+) -> Result<HarnessOutcome> {
+    let home = dirs::home_dir().context("Could not determine home directory")?;
+    let path = home.join(loc.relative_path);
+
+    let content = build_content(remote_body, loc);
+    let file_exists = path.exists();
+    let needs_update = std::fs::read(&path)
+        .map(|installed| installed != content.as_bytes())
+        .unwrap_or(true);
+
+    if !needs_update && file_exists {
+        println!(
+            "{}  {} {}",
+            "✓".green(),
+            loc.name.cyan(),
+            "already up to date".dimmed(),
+        );
+        return Ok(HarnessOutcome::Skipped);
+    }
+
+    let action = if file_exists { "update" } else { "install" };
+    let result = if file_exists { "updated" } else { "installed" };
+    let broken = detect_broken_links(&path, &home);
+
+    if dry_run {
+        for p in broken.paths() {
+            println!(
+                "{}  {} {}",
+                "⚠".yellow(),
+                loc.name.cyan(),
+                format!(
+                    "would replace broken symlink {} with a real path",
+                    p.display()
+                )
+                .yellow(),
+            );
+        }
+        println!(
+            "{}  {} {}",
+            "→".cyan(),
+            loc.name.cyan(),
+            format!("would {action}: {}", path.display()).dimmed(),
+        );
+        return Ok(HarnessOutcome::Planned);
+    }
+
+    if !broken.is_empty() {
+        repair_broken_links(&broken)?;
+        for p in broken.paths() {
+            println!(
+                "{}  {} {}",
+                "⚠".yellow(),
+                loc.name.cyan(),
+                format!("replaced broken symlink {} with a real path", p.display()).yellow(),
+            );
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    std::fs::write(&path, &content)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    println!(
+        "{}  {} {}",
+        "✓".green(),
+        loc.name.cyan(),
+        format!("{result}: {}", path.display()).dimmed(),
+    );
+    Ok(HarnessOutcome::Updated)
+}
+
 pub fn run_update(dry_run: bool) -> Result<()> {
     let (sel, origin) = configured_selection_with_origin();
     run_update_with(dry_run, &sel, origin)
@@ -442,6 +625,7 @@ pub fn run_update_with(
         return Ok(());
     }
 
+    let total = locations.len();
     let harness_ids: Vec<String> = locations.iter().map(|loc| loc.id.to_string()).collect();
 
     println!("{}", format_update_command_line(dry_run, &origin).bold());
@@ -470,76 +654,56 @@ pub fn run_update_with(
 
     let mut updated = 0usize;
     let mut skipped = 0usize;
+    let mut failed = 0usize;
+    let mut failed_names: Vec<&'static str> = Vec::new();
 
-    for loc in locations {
-        let Some(path) = skill_path(loc) else {
-            continue;
-        };
-
-        let content = build_content(&remote_body, loc);
-        let file_exists = path.exists();
-        let needs_update = std::fs::read(&path)
-            .map(|installed| installed != content.as_bytes())
-            .unwrap_or(true);
-
-        if !needs_update && file_exists {
-            println!(
-                "{}  {} {}",
-                "✓".green(),
-                loc.name.cyan(),
-                "already up to date".dimmed(),
-            );
-            skipped += 1;
-            continue;
-        }
-
-        let action = if file_exists { "update" } else { "install" };
-        let result = if file_exists { "updated" } else { "installed" };
-
-        if dry_run {
-            println!(
-                "{}  {} {}",
-                "→".cyan(),
-                loc.name.cyan(),
-                format!("would {action}: {}", path.display()).dimmed(),
-            );
-        } else {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    for loc in &locations {
+        match update_location(loc, &remote_body, dry_run) {
+            Ok(HarnessOutcome::Updated) => updated += 1,
+            Ok(HarnessOutcome::Skipped) => skipped += 1,
+            Ok(HarnessOutcome::Planned) => {}
+            Err(err) => {
+                failed += 1;
+                failed_names.push(loc.name);
+                println!(
+                    "{}  {} {}",
+                    "✗".red(),
+                    loc.name.cyan(),
+                    format!("failed: {err:#}").red(),
+                );
             }
-            std::fs::write(&path, &content)
-                .with_context(|| format!("Failed to write {}", path.display()))?;
-
-            println!(
-                "{}  {} {}",
-                "✓".green(),
-                loc.name.cyan(),
-                format!("{result}: {}", path.display()).dimmed(),
-            );
-            updated += 1;
         }
     }
 
     println!();
+    let names = failed_names.join(", ");
     if dry_run {
         println!("{}", "Dry run complete — no files were written.".dimmed());
-    } else if updated == 0 {
+    } else if updated == 0 && failed == 0 {
         println!("{}", "All skill files are already up to date.".green());
-    } else {
+    } else if updated > 0 {
+        let skipped_part = if skipped > 0 {
+            format!(", {skipped} already current")
+        } else {
+            String::new()
+        };
+        let failed_part = if failed > 0 {
+            format!(", {failed} failed")
+        } else {
+            String::new()
+        };
         println!(
             "{}",
-            format!(
-                "Updated {} skill file(s){}.",
-                updated,
-                if skipped > 0 {
-                    format!(", {skipped} already current")
-                } else {
-                    String::new()
-                }
-            )
-            .green()
+            format!("Updated {updated} skill file(s){skipped_part}{failed_part}.").green()
         );
+    }
+
+    if failed > 0 {
+        println!(
+            "{}",
+            format!("Failed to update {failed} of {total} harness(es): {names}").red()
+        );
+        bail!("{failed} harness(es) failed to update: {names}");
     }
 
     Ok(())
@@ -629,6 +793,72 @@ pub fn propose_skills_update() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn detect_broken_links_flags_dangling_dir_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().to_path_buf();
+        // Create a skill directory as a broken symlink:
+        //   ~/.codex/skills exists (real dir), but ~/.codex/skills/stax → missing
+        let skills_dir = home.join(".codex/skills");
+        std::fs::create_dir_all(&skills_dir).expect("create skills dir");
+        let link = skills_dir.join("stax");
+        symlink(home.join("missing"), &link).expect("create broken symlink");
+
+        let path = link.join("SKILL.md");
+        let result = detect_broken_links(&path, &home);
+        assert_eq!(result.dir, Some(link));
+        assert!(result.file.is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn detect_broken_links_ignores_valid_dir_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().to_path_buf();
+        // Create a real target directory and a symlink pointing at it.
+        let target = home.join("dotfiles/stax-skill");
+        std::fs::create_dir_all(&target).expect("create target");
+        let skills_dir = home.join(".codex/skills");
+        std::fs::create_dir_all(&skills_dir).expect("create skills dir");
+        let link = skills_dir.join("stax");
+        symlink(&target, &link).expect("create valid symlink");
+
+        let path = link.join("SKILL.md");
+        let result = detect_broken_links(&path, &home);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn detect_broken_links_flags_dangling_file_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().to_path_buf();
+        // Real directory, but the SKILL.md is a broken symlink.
+        let skill_dir = home.join(".codex/skills/stax");
+        std::fs::create_dir_all(&skill_dir).expect("create dir");
+        let path = skill_dir.join("SKILL.md");
+        symlink(home.join("nonexistent/SKILL.md"), &path).expect("create broken file symlink");
+
+        let result = detect_broken_links(&path, &home);
+        assert!(result.dir.is_none());
+        assert_eq!(result.file, Some(path));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn broken_dir_link_stops_at_home() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().to_path_buf();
+        // home itself is never a repair candidate, even if it is a dangling symlink.
+        // We call broken_dir_link with home as both dir and home — it should return None.
+        let result = broken_dir_link(&home, &home);
+        assert!(result.is_none());
+    }
 
     #[test]
     fn test_extract_html_comment_version() {

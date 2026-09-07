@@ -122,6 +122,8 @@ mod runtime_safety_tests;
 mod scoped_submit_tests;
 #[path = "skills_selection_tests.rs"]
 mod skills_selection_tests;
+#[path = "skills_symlink_tests.rs"]
+mod skills_symlink_tests;
 #[path = "split_hunk_tests.rs"]
 mod split_hunk_tests;
 #[path = "split_tests.rs"]
