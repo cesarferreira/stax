@@ -30,6 +30,7 @@ stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit 
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
+stax stats                     # Single-screen local stacking health snapshot (--current, --json, --ci)
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates (no trunk fetch; offline-friendly)
 
@@ -372,6 +373,11 @@ stax sweep --delete --include-stale  # Also delete stale branches
 stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
+
+stax stats                          # Single-screen local-only stacking health snapshot (stack shape, PR mix, health, worktrees, hygiene, next action)
+stax stats --current                # Scope to the current stack only
+stax stats --json                   # Machine-readable RepoStats document
+stax stats --ci                     # Add an opt-in CI roll-up (network call); omitted (non-fatal) without forge auth — always exits 0
 
 stax refresh|r                      # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
 stax refresh --no-pr                # Push only after trunk sync/restack

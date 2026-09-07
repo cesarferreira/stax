@@ -132,6 +132,8 @@ mod stack_test_tests;
 mod staging_menu_tests;
 #[path = "standup_tests.rs"]
 mod standup_tests;
+#[path = "stats_tests.rs"]
+mod stats_tests;
 #[path = "status_tests.rs"]
 mod status_tests;
 #[path = "submit_fetch_failure_tests.rs"]

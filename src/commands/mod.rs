@@ -53,6 +53,7 @@ pub mod stack_cmd;
 pub(crate) mod stack_palette;
 pub mod staging;
 pub mod standup;
+pub mod stats;
 pub mod status;
 pub mod submit;
 pub(crate) mod submit_plan;

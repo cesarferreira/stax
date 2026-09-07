@@ -26,27 +26,18 @@ pub struct StaleBranchInfo {
     pub days_old: u64,
 }
 
-/// Find all local branches that are merged into trunk (ancestor or squash-merged).
+/// Find local branches that are ancestors of `trunk` (methods 1 and 1b of
+/// [`find_merged_branches_all`]).
 ///
-/// Unlike sync's private `find_merged_branches`, this operates on ALL local
-/// branches — not just stax-tracked ones. It uses only git-level merge detection
-/// (no metadata-based heuristics), so it works equally well for untracked branches.
-///
-/// Detection runs in two passes:
-///   1. `git branch --merged` against local trunk and (optionally) remote trunk —
-///      catches plain (fast-forward / merge-commit) integrations via ancestry.
-///   2. Patch-id provenance (`is_branch_merged_equivalent_to_trunk`) for branches
-///      not caught by ancestry — catches squash- and rebase-merges where the
-///      branch's commits were rewritten into trunk and are no longer ancestors.
-///
-/// `remote_trunk_ref` is e.g. `"origin/main"` — pass it if available for method 1b.
-pub fn find_merged_branches_all(
-    repo: &GitRepo,
+/// Runs plain `git branch --merged` ancestry checks against local `trunk` and,
+/// when available, the remote-tracking trunk ref (to catch a stale local
+/// trunk). Returns de-duplicated branch names, excluding `trunk` itself.
+pub fn find_ancestor_merged_branches(
     workdir: &Path,
     trunk: &str,
     remote_trunk_ref: Option<&str>,
-) -> Result<Vec<MergedBranchInfo>> {
-    let mut merged: Vec<MergedBranchInfo> = Vec::new();
+) -> Result<Vec<String>> {
+    let mut merged: Vec<String> = Vec::new();
 
     // Method 1: git branch --merged <trunk>
     let output = Command::new("git")
@@ -66,10 +57,7 @@ pub fn find_merged_branches_all(
         if branch.is_empty() || branch == trunk {
             continue;
         }
-        merged.push(MergedBranchInfo {
-            branch: branch.to_string(),
-            merge_type: MergeType::Ancestor,
-        });
+        merged.push(branch.to_string());
     }
 
     // Method 1b: git branch --merged <remote/trunk> (handles stale local trunk)
@@ -90,15 +78,45 @@ pub fn find_merged_branches_all(
                 if branch.is_empty() || branch == trunk {
                     continue;
                 }
-                if !merged.iter().any(|m| m.branch == branch) {
-                    merged.push(MergedBranchInfo {
-                        branch: branch.to_string(),
-                        merge_type: MergeType::Ancestor,
-                    });
+                if !merged.iter().any(|m| m == branch) {
+                    merged.push(branch.to_string());
                 }
             }
         }
     }
+
+    Ok(merged)
+}
+
+/// Find all local branches that are merged into trunk (ancestor or squash-merged).
+///
+/// Unlike sync's private `find_merged_branches`, this operates on ALL local
+/// branches — not just stax-tracked ones. It uses only git-level merge detection
+/// (no metadata-based heuristics), so it works equally well for untracked branches.
+///
+/// Detection runs in two passes:
+///   1. [`find_ancestor_merged_branches`] against local trunk and (optionally)
+///      remote trunk — catches plain (fast-forward / merge-commit) integrations
+///      via ancestry.
+///   2. Patch-id provenance (`is_branch_merged_equivalent_to_trunk`) for branches
+///      not caught by ancestry — catches squash- and rebase-merges where the
+///      branch's commits were rewritten into trunk and are no longer ancestors.
+///
+/// `remote_trunk_ref` is e.g. `"origin/main"` — pass it if available for method 1b.
+pub fn find_merged_branches_all(
+    repo: &GitRepo,
+    workdir: &Path,
+    trunk: &str,
+    remote_trunk_ref: Option<&str>,
+) -> Result<Vec<MergedBranchInfo>> {
+    let mut merged: Vec<MergedBranchInfo> =
+        find_ancestor_merged_branches(workdir, trunk, remote_trunk_ref)?
+            .into_iter()
+            .map(|branch| MergedBranchInfo {
+                branch,
+                merge_type: MergeType::Ancestor,
+            })
+            .collect();
 
     // Method 2: patch-id provenance for squash/rebase merges.
     //

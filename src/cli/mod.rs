@@ -711,6 +711,7 @@ pub fn run() -> Result<()> {
         } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast, parallel, jobs),
         Commands::Demo => unreachable!(),        // Handled above
         Commands::UpdateCheck => unreachable!(), // Handled before setup/config work
+        Commands::Stats { json, current, ci } => commands::stats::run(json, current, ci),
         Commands::Standup {
             json,
             all,
