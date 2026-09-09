@@ -90,9 +90,9 @@ Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`, `pi`.
 
 ```bash
 st lane api-tests   --agent gemini
-st lane api-tests   --agent opencode --model opencode/gpt-5.5-fast
+st lane api-tests   --agent opencode --model opencode/gpt-5.6-terra
 st lane review-pass --agent codex "address the open PR comments"
-st lane deep-dive   --agent pi --model anthropic/claude-opus-4-8
+st lane deep-dive   --agent pi --model anthropic/claude-opus-5
 ```
 
 - `--model` requires `--agent`

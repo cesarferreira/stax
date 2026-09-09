@@ -1192,7 +1192,7 @@ fn parse_model_version(model: &str) -> (i32, i32, i32) {
 }
 
 fn is_codex_picker_candidate(model: &str) -> bool {
-    model.starts_with("gpt-5") || model.starts_with("gpt-4.1")
+    model.starts_with("gpt-6") || model.starts_with("gpt-5") || model.starts_with("gpt-4.1")
 }
 
 fn model_matches_agent_family(agent: &str, model: &str) -> bool {
@@ -1491,31 +1491,36 @@ mod tests {
     #[test]
     fn known_models_include_gemini_defaults() {
         let models = known_models_for("gemini");
+        assert!(models.iter().any(|m| m.id == "gemini-3.8-flash"));
+        assert!(models.iter().any(|m| m.id == "gemini-3.5-flash-lite"));
         assert!(models.iter().any(|m| m.id == "gemini-2.5-pro"));
-        assert!(models.iter().any(|m| m.id == "gemini-2.5-flash"));
     }
 
     #[test]
     fn known_models_include_opencode_defaults() {
         let models = known_models_for("opencode");
-        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.5"));
-        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.5-fast"));
-        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.1-codex"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.6-sol"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.6-terra"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.6-luna"));
     }
 
     #[test]
-    fn known_models_include_codex_gpt_5_5_defaults() {
+    fn known_models_include_codex_gpt_5_6_defaults() {
         let models = known_models_for("codex");
+        assert!(models.iter().any(|m| m.id == "gpt-6-astra"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-sol"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-terra"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.6-luna"));
         assert!(models.iter().any(|m| m.id == "gpt-5.5"));
-        assert!(models.iter().any(|m| m.id == "gpt-5.5-fast"));
     }
 
     #[test]
     fn known_models_include_current_claude_defaults() {
         let models = known_models_for("claude");
-        assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
+        assert!(models.iter().any(|m| m.id == "claude-opus-5"));
         assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
         assert!(models.iter().any(|m| m.id == "claude-haiku-4-5"));
+        assert!(models.iter().any(|m| m.id == "claude-fable-5-1"));
     }
 
     #[test]
@@ -1550,6 +1555,9 @@ mod tests {
     fn live_codex_model_filter_keeps_latest_aliases() {
         let filtered = filter_live_codex_models(vec![
             OpenAiModel {
+                id: "gpt-6-astra".to_string(),
+            },
+            OpenAiModel {
                 id: "gpt-5.4-2026-03-05".to_string(),
             },
             OpenAiModel {
@@ -1567,7 +1575,7 @@ mod tests {
         ]);
 
         let ids: Vec<&str> = filtered.iter().map(|model| model.id.as_str()).collect();
-        assert_eq!(ids.first().copied(), Some("gpt-5.4"));
+        assert_eq!(ids.first().copied(), Some("gpt-6-astra"));
         assert!(ids.contains(&"gpt-5.4"));
         assert!(ids.contains(&"gpt-5.3-codex"));
         assert!(!ids.contains(&"gpt-5.4-2026-03-05"));
@@ -1596,7 +1604,7 @@ mod tests {
     #[test]
     fn resolve_model_ignores_opencode_model_for_other_agent() {
         let mut config = Config::default();
-        config.ai.model = Some("opencode/gpt-5.1-codex".to_string());
+        config.ai.model = Some("opencode/gpt-5.6-sol".to_string());
 
         let resolved = resolve_model(None, &config, "claude", "generate").unwrap();
         assert_eq!(resolved, None);
@@ -1623,17 +1631,21 @@ mod tests {
 
     #[test]
     fn known_agent_for_model_recognizes_newer_codex_family_models() {
+        assert_eq!(known_agent_for_model("gpt-6-astra"), Some("codex"));
+        assert_eq!(known_agent_for_model("gpt-5.6-sol"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.5"), Some("codex"));
-        assert_eq!(known_agent_for_model("gpt-5.5-fast"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.4"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.4-pro"), Some("codex"));
     }
 
     #[test]
-    fn known_agent_for_model_recognizes_opencode_gpt_5_5_models() {
-        assert_eq!(known_agent_for_model("opencode/gpt-5.5"), Some("opencode"));
+    fn known_agent_for_model_recognizes_opencode_gpt_5_6_models() {
         assert_eq!(
-            known_agent_for_model("opencode/gpt-5.5-fast"),
+            known_agent_for_model("opencode/gpt-5.6-sol"),
+            Some("opencode")
+        );
+        assert_eq!(
+            known_agent_for_model("opencode/gpt-5.6-terra"),
             Some("opencode")
         );
     }
