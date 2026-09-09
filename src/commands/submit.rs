@@ -41,6 +41,7 @@ pub struct SubmitOptions {
     pub no_fetch: bool,
     pub prefetched: bool,
     pub no_verify: bool,
+    pub no_restack: bool,
     /// Deprecated; kept for CLI compatibility (currently a no-op).
     pub force: bool,
     pub yes: bool,
@@ -479,6 +480,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         no_fetch,
         prefetched,
         no_verify,
+        no_restack,
         force,
         yes,
         no_prompt,
@@ -762,6 +764,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         &stack,
         &branches_to_submit,
         &empty_set,
+        no_restack,
         quiet,
         verbose,
     )?;
@@ -3201,10 +3204,15 @@ fn prepare_publish_sources_for_submit(
     stack: &Stack,
     branches_to_submit: &[String],
     empty_set: &HashSet<&String>,
+    no_restack: bool,
     quiet: bool,
     verbose: bool,
 ) -> Result<(HashMap<String, PublishSource>, TemporaryPublishRefs)> {
     let workdir = repo.workdir()?;
+    if no_restack {
+        return Ok((HashMap::new(), TemporaryPublishRefs::empty(workdir)));
+    }
+
     let mut sources: HashMap<String, PublishSource> = HashMap::new();
     let temp_root = std::env::temp_dir().join(format!(
         "stax-submit-{}-{}",

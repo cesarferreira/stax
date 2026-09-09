@@ -80,7 +80,8 @@ pub(crate) fn run(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
             .get(&branch)
             .with_context(|| format!("Branch {branch} is not in the loaded stack"))?;
         let is_imported = meta.source_remote.is_some();
-        let needs_temporary_publish = !is_imported
+        let needs_temporary_publish = !options.no_restack
+            && !is_imported
             && (stack_branch.needs_restack
                 || temporary_publish_branches.contains(&meta.parent_branch_name));
         if needs_temporary_publish {

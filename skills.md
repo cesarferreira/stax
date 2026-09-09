@@ -25,6 +25,7 @@ stax log|l                     # Stack status with commits + PR info
 stax web [path] [--port <n>] [--no-open]  # Start localhost workspace; busy ports fall back automatically
 
 stax submit|ss                 # Submit full stack
+stax submit --no-restack       # Push unchanged local branch heads instead of temporary rebased publish refs
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
 stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
@@ -241,6 +242,7 @@ stax submit --no-pr                # Push only (no PR create/update)
 stax submit --no-fetch             # Skip git fetch
 stax submit --no-verify            # Skip pre-push hooks while pushing
 stax submit -n                     # Short for --no-verify
+stax submit --no-restack           # Push current local branch heads without temporary restacks
 stax submit --open                 # Open current PR after submit
 stax submit --reviewers a,b        # Set reviewers
 stax submit --labels bug,urgent    # Set labels
@@ -309,8 +311,10 @@ stax bs                            # Hidden shortcut alias for branch submit
 stax upstack submit                # Submit current + descendants
 stax downstack submit              # Submit ancestors + current
 
-# submit can publish temporary rebased heads for branches that need restack;
-# local branch tips and metadata are not moved. Scoped submit still requires an
+# submit publishes temporary rebased heads for branches that need restack by
+# default; descendants chain onto those temporary heads. Use --no-restack to
+# push every branch's current local head unchanged. Restack health and PR-base
+# verification/retargeting remain active, and scoped submit still requires an
 # excluded parent to be remote-synced; otherwise use downstack/full submit or
 # restack first.
 

@@ -32,6 +32,7 @@ Branch names are lowercased — `st create -am "Bump Fastlane Version"` creates 
 | Command | What it does |
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
+| `st submit --no-restack` | Push current local branch heads without preparing temporary restacks |
 | `st stack link` | Register the current PR stack as a native GitHub Stack when `gh-stack` is available |
 | `st stack unlink [<stack-number>]` | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
@@ -49,7 +50,7 @@ Branch names are lowercased — `st create -am "Bump Fastlane Version"` creates 
 | `st merge --all` | Merge the entire stack regardless of where you are |
 | `st cascade` | Restack, push, and create/update PRs in one shot (no trunk fetch; offline-friendly) |
 
-Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
+By default, full and scoped submit prepare temporary rebased publish heads for branches that need restack. Pass `--no-restack` to `st submit`, `st stack submit`, `st branch submit`, `st upstack submit`, or `st downstack submit` to push current local branch heads instead. PR bases are still verified and retargeted as needed; the flag changes the pushed content source only. Submit keeps local branch metadata unchanged either way, and `st restack` remains the command that updates local branch tips and parent revisions.
 
 On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. `gh-stack` v0.0.8+ supports normal GitHub CLI authentication, including token environment variables; stax keeps its token-stripping OAuth fallback only for known older versions. `st doctor` always reports the installed version and marks versions below v0.2.1 as out of date (v0.1.0 added `gh stack merge` for atomic `st merge --stack` delegation and v0.2.1 fixes custom SSH host aliases; the legacy-OAuth warning itself still only applies below v0.0.8). `st stack unlink <stack-number>` delegates to v0.0.8's remote unstack operation without requiring local tracking; omit the number to target the active locally tracked stack. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
 

@@ -302,11 +302,13 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--dry-run` / `--plan` prints a read-only plan without fetching, pushing, editing metadata, or calling forge mutation APIs; add `--json` for the versioned machine-readable schema (currently version 2; action strings are extensible)
 - Plans query live remote head IDs with `git ls-remote` without updating local tracking refs; `--no-fetch` deliberately plans from cached tracking refs instead
 - A stale branch, and each submitted descendant that must follow its temporary publish head, reports `evaluate_after_temporary_restack` because the final push decision depends on the rewritten commit ID
+- With `--no-restack`, human and JSON plans use `local_branch` as the publish source and report the concrete local-head push action (`none`, `create`, or `update`) while preserving `needs_restack`
 - Stack-link plans report `update_unless_native_link_succeeds` when native-stack success would suppress Stax-managed links
 - Stack-link and native-stack plans report `evaluate_after_pr_discovery` when PRs missing from local metadata could change link or fork eligibility at runtime
 - Native-stack plans otherwise report `skip` for known exclusions or `attempt` when the prerequisites are known
-- `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--open` / `--quiet` / `--verbose`
+- `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--no-restack` / `--open` / `--quiet` / `--verbose`
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
+- `--no-restack` pushes current local branch heads without preparing temporary rebased publish refs
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
 - `--squash` squash commits on each branch before pushing
 - `--ai` generate PR title and body with AI; narrow with `--title` or `--body`
@@ -431,9 +433,11 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 
 ### Temporary publish restack
 
-`st submit`, `st downstack submit`, `st branch submit`, and `st upstack submit` can publish a temporary rebased head without moving local branch tips. When a submitted branch needs restack, Stax creates an internal temporary ref, replays the branch's current commits onto the submitted parent for the push, and keeps local metadata unchanged. Descendants chain onto those temporary publish heads so the remote stack stays linear.
+By default, `st submit`, `st stack submit`, `st downstack submit`, `st branch submit`, and `st upstack submit` can publish a temporary rebased head without moving local branch tips. When a submitted branch needs restack, Stax creates an internal temporary ref, replays the branch's current commits onto the submitted parent for the push, and keeps local metadata unchanged. Descendants chain onto those temporary publish heads so the remote stack stays linear.
 
-If the excluded parent has local-only commits, scoped submit still refuses and asks you to include ancestors with `st downstack submit` / `st submit` or restack first. `--squash` also requires a local restack first because squashing rewrites local branch history.
+Pass `--no-restack` to push each branch from its current local head instead. Stax does not prepare or propagate temporary publish refs, but still reports restack health and verifies or retargets PR bases. Narrow-scope parent synchronization checks remain in force. The flag disables only the automatic rebase; combining it with an explicitly requested `--squash` still rewrites branch history.
+
+If the excluded parent has local-only commits, scoped submit still refuses and asks you to include ancestors with `st downstack submit` / `st submit` or restack first.
 
 ### `st resolve`
 

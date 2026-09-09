@@ -75,6 +75,19 @@ fn branch_plan<'a>(plan: &'a serde_json::Value, branch: &str) -> &'a serde_json:
         .unwrap_or_else(|| panic!("missing plan for {branch}"))
 }
 
+fn no_restack_plan_repo() -> (TestRepo, Vec<String>) {
+    let repo = TestRepo::new_with_remote();
+    let branches = repo.create_stack(&["plan-parent", "plan-child", "plan-grandchild"]);
+    repo.configure_github_like_submit_remote();
+    repo.git(&["push", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    repo.run_stax(&["checkout", &branches[0]]).assert_success();
+    repo.create_file("parent-update.txt", "parent update\n");
+    repo.commit("advance plan parent");
+    repo.run_stax(&["checkout", &branches[2]]).assert_success();
+    (repo, branches)
+}
+
 #[test]
 fn submit_plan_json_is_read_only_and_describes_stack_actions() {
     let repo = TestRepo::new_with_remote();
@@ -183,6 +196,55 @@ fn submit_plan_propagates_temporary_restack_to_current_descendants() {
     assert_eq!(grandchild["needs_restack"], false);
     assert_eq!(grandchild["publish_source"], "temporary_restack");
     assert_eq!(grandchild["push"], "evaluate_after_temporary_restack");
+}
+
+#[test]
+fn submit_plan_no_restack_uses_local_heads_and_remains_read_only() {
+    let (repo, branches) = no_restack_plan_repo();
+    let refs_before = TestRepo::stdout(&repo.git(&["show-ref"]));
+    let worktrees_before = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    let status_before = TestRepo::stdout(&repo.git(&["status", "--porcelain=v1"]));
+
+    let output = repo.run_stax(&["submit", "--plan", "--json", "--no-fetch", "--no-restack"]);
+    output.assert_success();
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
+
+    let parent = branch_plan(&plan, &branches[0]);
+    assert_eq!(parent["publish_source"], "local_branch");
+    assert_eq!(parent["push"], "update");
+
+    let child = branch_plan(&plan, &branches[1]);
+    assert_eq!(child["needs_restack"], true);
+    assert_eq!(child["publish_source"], "local_branch");
+    assert_eq!(child["push"], "none");
+
+    let grandchild = branch_plan(&plan, &branches[2]);
+    assert_eq!(grandchild["needs_restack"], false);
+    assert_eq!(grandchild["publish_source"], "local_branch");
+    assert_eq!(grandchild["push"], "create");
+
+    assert_eq!(TestRepo::stdout(&repo.git(&["show-ref"])), refs_before);
+    assert_eq!(
+        TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"])),
+        worktrees_before
+    );
+    assert_eq!(
+        TestRepo::stdout(&repo.git(&["status", "--porcelain=v1"])),
+        status_before
+    );
+}
+
+#[test]
+fn submit_plan_no_restack_human_output_omits_temporary_preparation() {
+    let (repo, branches) = no_restack_plan_repo();
+
+    let output = repo.run_stax(&["submit", "--plan", "--no-fetch", "--no-restack"]);
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+
+    assert!(stdout.contains(&format!("{} <- {}: push=none", branches[1], branches[0])));
+    assert!(stdout.contains(&format!("{} <- {}: push=create", branches[2], branches[1])));
+    assert!(!stdout.contains("prepare temporary restack before push"));
 }
 
 #[test]
