@@ -450,6 +450,37 @@ impl TestRepo {
             .expect("Failed to push merge");
     }
 
+    /// Squash-merge a branch into remote main, then remove its remote ref.
+    pub fn squash_merge_branch_on_remote(&self, branch: &str) {
+        let remote_path = self.remote_path().expect("No remote configured");
+        let clone_dir = test_tempdir();
+
+        let run = |args: &[&str]| {
+            let output = hermetic_git_command()
+                .args(args)
+                .current_dir(clone_dir.path())
+                .output()
+                .expect("Failed to run git in remote clone");
+            assert!(
+                output.status.success(),
+                "git {:?} failed\nstdout: {}\nstderr: {}",
+                args,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["clone", remote_path.to_str().unwrap(), "."]);
+        run(&["checkout", "-B", "main", "origin/main"]);
+        run(&["config", "user.email", "merger@test.com"]);
+        run(&["config", "user.name", "Merger"]);
+        run(&["fetch", "origin", branch]);
+        run(&["merge", "--squash", &format!("origin/{branch}")]);
+        run(&["commit", "-m", &format!("Squash merge {branch}")]);
+        run(&["push", "origin", "main"]);
+        run(&["push", "origin", "--delete", branch]);
+    }
+
     /// List remote branches
     pub fn list_remote_branches(&self) -> Vec<String> {
         let output = hermetic_git_command()
