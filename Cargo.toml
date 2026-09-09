@@ -102,7 +102,7 @@ regex = "1"
 
 # Config
 toml = "1"
-dirs = "6"
+dirs = "7"
 chrono = "0.4"
 
 # Update checking
