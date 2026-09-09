@@ -322,10 +322,8 @@ fn toggle_label(app: &mut BoardApp, req_tx: &Sender<BoardRequest>) {
     };
 
     if app.active_labels.contains(&label) {
-        app.active_labels.retain(|active| active != &label);
         let _ = req_tx.send(BoardRequest::RemoveLabel { target, label });
     } else {
-        app.active_labels.push(label.clone());
         let _ = req_tx.send(BoardRequest::AddLabel { target, label });
     }
 }
@@ -704,9 +702,11 @@ async fn handle_request(
                 .await
             {
                 Ok(()) => {
-                    let _ = tx.send(BoardUpdate::ActionDone {
+                    let _ = tx.send(BoardUpdate::LabelMutation {
+                        target,
+                        label: label.clone(),
+                        added: true,
                         message: format!("Added label \"{label}\""),
-                        refresh: false,
                     });
                 }
                 Err(error) => {
@@ -718,9 +718,11 @@ async fn handle_request(
             let number = target_number(target);
             match client.remove_label(number, &label).await {
                 Ok(()) => {
-                    let _ = tx.send(BoardUpdate::ActionDone {
+                    let _ = tx.send(BoardUpdate::LabelMutation {
+                        target,
+                        label: label.clone(),
+                        added: false,
                         message: format!("Removed label \"{label}\""),
-                        refresh: false,
                     });
                 }
                 Err(error) => {
@@ -804,11 +806,45 @@ async fn fetch_pr_checks(
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::github::board::BoardPrSummary;
     use crate::remote::{ForgeType, RemoteInfo};
+    use chrono::Utc;
     use std::env;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn pr(number: u64, labels: &[&str]) -> BoardPrSummary {
+        BoardPrSummary {
+            number,
+            title: "title".to_string(),
+            author: "octocat".to_string(),
+            head_branch: "feature".to_string(),
+            base_branch: "main".to_string(),
+            is_draft: false,
+            labels: labels.iter().map(|label| label.to_string()).collect(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            url: format!("https://github.com/o/r/pull/{number}"),
+        }
+    }
+
+    #[test]
+    fn label_picker_waits_for_success_before_changing_active_labels() {
+        let mut app = BoardApp::new("o/r".to_string(), BoardTabSelection::PullRequests, false);
+        app.prs = vec![pr(1, &["bug"])];
+        app.active_labels = vec!["bug".to_string()];
+        app.repo_labels = vec!["bug".to_string()];
+        let (tx, rx) = mpsc::channel();
+
+        toggle_label(&mut app, &tx);
+
+        assert!(matches!(
+            rx.recv().expect("label request"),
+            BoardRequest::RemoveLabel { target: BoardTarget::Pr(1), label } if label == "bug"
+        ));
+        assert_eq!(app.active_labels, vec!["bug"]);
+    }
 
     #[test]
     fn board_worker_constructs_github_client_with_entered_runtime() {
