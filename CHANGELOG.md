@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.113.0] - 2026-09-09
+
+### 🚀 Features
+
+- *(ai)* Refresh LLM picker model IDs to current catalogs ([#875](https://github.com/cesarferreira/stax/issues/875))
+
+### 🐛 Bug Fixes
+
+- *(skills)* Repair broken symlinks and keep per-harness failures non-fatal ([#868](https://github.com/cesarferreira/stax/issues/868))
+- *(board)* Commit label state after mutation succeeds ([#850](https://github.com/cesarferreira/stax/issues/850))
+
+### 💼 Other
+
+- Bump libraries ([#874](https://github.com/cesarferreira/stax/issues/874))
+
+### 🧪 Testing
+
+- *(refresh)* Cover all-stacks delete merged ([#863](https://github.com/cesarferreira/stax/issues/863))
+- *(merge)* Cover ignore failed CI merge modes ([#859](https://github.com/cesarferreira/stax/issues/859))
 ## [0.112.0] - 2026-09-07
 
 ### 🚀 Features
@@ -14,6 +33,7 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Release
 - Release
 ## [0.110.0] - 2026-09-02
 
