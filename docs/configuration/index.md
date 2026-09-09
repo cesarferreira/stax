@@ -107,7 +107,7 @@ single_stack = "on"    # "on" | "off"
 
 [ai]
 # agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
-# model = "claude-opus-4-8"
+# model = "claude-opus-5"
 
 # Per-feature overrides — optional, fall back to [ai] above
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai
@@ -118,7 +118,7 @@ single_stack = "on"    # "on" | "off"
 
 [ai.standup]    # st standup --ai
 # agent = "gemini"
-# model = "gemini-2.5-pro"
+# model = "gemini-3.8-flash"
 
 [ai.resolve]    # st resolve
 # agent = "claude"

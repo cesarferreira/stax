@@ -18,7 +18,7 @@ Enables workflow assistance for stacked branch creation, submit flows, and relat
 st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent codex
-st generate --pr-body --agent codex --model gpt-5.3-codex
+st generate --pr-body --agent codex --model gpt-5.6-terra
 st gen --pr-title --agent codex
 st gen --commit-msg --agent codex
 ```

@@ -256,7 +256,7 @@ When a rebase stops on a conflict, `st resolve` sends only the conflicted text f
 
 ```bash
 st resolve
-st resolve --agent codex --model gpt-5.3-codex
+st resolve --agent codex --model gpt-5.6-terra
 ```
 
 Before each rebase, stax also runs a **preflight repair** that compares the

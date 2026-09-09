@@ -26,7 +26,7 @@ OpenCode loads skills from `~/.config/opencode/skills/<name>/SKILL.md`.
 st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent opencode
-st generate --pr-body --agent opencode --model opencode/gpt-5.5-fast
+st generate --pr-body --agent opencode --model opencode/gpt-5.6-terra
 st gen --pr-title --agent opencode
 st gen --commit-msg --agent opencode
 ```
