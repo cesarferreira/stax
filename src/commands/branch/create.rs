@@ -397,6 +397,7 @@ fn branch_name_context(
         legacy_date: config.branch.date,
         date_format: config.branch.date_format.clone(),
         replacement: config.branch.replacement.clone(),
+        lowercase: config.branch.lowercase,
         user,
         date: chrono::Local::now().date_naive(),
     }

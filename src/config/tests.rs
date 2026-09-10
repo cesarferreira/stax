@@ -1324,6 +1324,29 @@ fn test_format_branch_name_consecutive_replacements_collapsed() {
 }
 
 #[test]
+fn test_format_branch_name_lowercases_by_default() {
+    let mut config = Config::default();
+    config.branch.format = Some("{user}/{message}".to_string());
+    config.branch.user = Some("Cesar".to_string());
+    assert_eq!(
+        config.format_branch_name("Bump Fastlane Version"),
+        "cesar/bump-fastlane-version"
+    );
+}
+
+#[test]
+fn test_format_branch_name_lowercase_can_be_disabled() {
+    let mut config = Config::default();
+    config.branch.lowercase = false;
+    config.branch.format = Some("{user}/{message}".to_string());
+    config.branch.user = Some("Cesar".to_string());
+    assert_eq!(
+        config.format_branch_name("Bump Fastlane Version"),
+        "Cesar/Bump-Fastlane-Version"
+    );
+}
+
+#[test]
 fn test_token_priority_stax_env_first() {
     let _guard = env_lock();
 
@@ -2059,7 +2082,7 @@ fn test_format_template_sanitizes_user() {
     config.branch.user = Some("John Doe".to_string());
 
     let result = config.format_branch_name("feature");
-    assert_eq!(result, "John-Doe/feature");
+    assert_eq!(result, "john-doe/feature");
 }
 
 #[test]
