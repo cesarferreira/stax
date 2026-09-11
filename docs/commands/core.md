@@ -25,6 +25,8 @@ st create --below -am "fix: patch CVE-2026-0001"
 `--below` auto-stashes prepared tracked and untracked changes before moving to the lower base, then reapplies them on the inserted branch. With `-am`, those changes are staged and committed on the new lower branch.
 When `-m` or `--ai` derives a branch name that already exists, Stax stops instead of creating a suffixed duplicate; pass an explicit different name or checkout/reparent the existing branch.
 
+Branch names are lowercased — `st create -am "Bump Fastlane Version"` creates `bump-fastlane-version` and commits `Bump Fastlane Version` unchanged. Set [`branch.lowercase = false`](../configuration/index.md#branch-name-casing) to keep the original casing.
+
 ## Submit and merge
 
 | Command | What it does |

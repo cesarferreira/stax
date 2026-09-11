@@ -7,6 +7,9 @@ pub(crate) struct BranchNameContext {
     pub legacy_date: bool,
     pub date_format: String,
     pub replacement: String,
+    /// Lowercase the generated branch name. Only affects the branch name —
+    /// callers keep the original text for commit messages.
+    pub lowercase: bool,
     pub user: Option<String>,
     pub date: chrono::NaiveDate,
 }
@@ -19,6 +22,7 @@ impl BranchNameContext {
             legacy_date: false,
             date_format: "%Y-%m-%d".into(),
             replacement: "-".into(),
+            lowercase: true,
             user: None,
             date: chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
         }
@@ -42,7 +46,7 @@ pub(crate) fn format_branch_name(
     input: &str,
     context: &BranchNameContext,
 ) -> Result<BranchNameResult, BranchNameError> {
-    let message = sanitize_branch_segment(input, &context.replacement);
+    let message = sanitize_segment(input, context);
     let mut candidate = if let Some(format) = &context.format {
         if !format.contains("{message}") {
             return Err(BranchNameError::MissingMessagePlaceholder {
@@ -62,6 +66,10 @@ pub(crate) fn format_branch_name(
         }
         apply_prefix(name, context.prefix.as_deref())
     };
+
+    if context.lowercase {
+        candidate = candidate.to_lowercase();
+    }
 
     if candidate.is_empty() {
         return Err(BranchNameError::Empty);
@@ -96,7 +104,7 @@ fn apply_format_template(template: &str, message: &str, context: &BranchNameCont
     let user = context
         .user
         .as_deref()
-        .map(|user| sanitize_branch_segment(user, &context.replacement))
+        .map(|user| sanitize_segment(user, context))
         .unwrap_or_default();
     if result.contains("{user}") {
         result = result.replace("{user}", &user);
@@ -128,6 +136,17 @@ fn apply_prefix(mut name: String, prefix: Option<&str>) -> String {
         name = format!("{prefix}{name}");
     }
     name
+}
+
+/// Sanitize a segment and apply the configured casing. Lowercasing the segments
+/// (not just the assembled name) keeps the `{user}` dedupe below comparable.
+fn sanitize_segment(segment: &str, context: &BranchNameContext) -> String {
+    let sanitized = sanitize_branch_segment(segment, &context.replacement);
+    if context.lowercase {
+        sanitized.to_lowercase()
+    } else {
+        sanitized
+    }
 }
 
 fn sanitize_branch_segment(segment: &str, replacement: &str) -> String {
@@ -190,18 +209,67 @@ mod tests {
             legacy_date: false,
             date_format: "%Y-%m-%d".into(),
             replacement: "-".into(),
+            lowercase: true,
+            user: Some("César Ferreira".into()),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        };
+        let result = format_branch_name("  Fix GUI!  ", &context).unwrap();
+        assert_eq!(result.name, "césar-ferreira/fix-gui");
+        assert_eq!(
+            result.warnings,
+            vec![OperationWarning::BranchNameNormalized {
+                original: "  Fix GUI!  ".into(),
+                normalized: "césar-ferreira/fix-gui".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn format_branch_name_preserves_case_when_lowercase_is_disabled() {
+        let context = BranchNameContext {
+            format: Some("{user}/{message}".into()),
+            prefix: None,
+            legacy_date: false,
+            date_format: "%Y-%m-%d".into(),
+            replacement: "-".into(),
+            lowercase: false,
             user: Some("César Ferreira".into()),
             date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
         };
         let result = format_branch_name("  Fix GUI!  ", &context).unwrap();
         assert_eq!(result.name, "César-Ferreira/Fix-GUI");
-        assert_eq!(
-            result.warnings,
-            vec![OperationWarning::BranchNameNormalized {
-                original: "  Fix GUI!  ".into(),
-                normalized: "César-Ferreira/Fix-GUI".into(),
-            }]
-        );
+    }
+
+    #[test]
+    fn format_branch_name_lowercases_prefix_and_template_literals() {
+        let context = BranchNameContext {
+            format: None,
+            prefix: Some("Cesar/Feature".into()),
+            legacy_date: false,
+            date_format: "%Y-%m-%d".into(),
+            replacement: "-".into(),
+            lowercase: true,
+            user: None,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        };
+        let result = format_branch_name("Bump Fastlane Version", &context).unwrap();
+        assert_eq!(result.name, "cesar/feature/bump-fastlane-version");
+    }
+
+    #[test]
+    fn format_branch_name_dedupes_leading_user_segment_across_case() {
+        let context = BranchNameContext {
+            format: Some("{user}/{message}".into()),
+            prefix: None,
+            legacy_date: false,
+            date_format: "%Y-%m-%d".into(),
+            replacement: "-".into(),
+            lowercase: true,
+            user: Some("Cesar".into()),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        };
+        let result = format_branch_name("cesar/Fix Thing", &context).unwrap();
+        assert_eq!(result.name, "cesar/fix-thing");
     }
 
     #[test]
@@ -212,6 +280,7 @@ mod tests {
             legacy_date: false,
             date_format: "%Y-%m-%d".into(),
             replacement: "-".into(),
+            lowercase: true,
             user: Some("cesar".into()),
             date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
         };

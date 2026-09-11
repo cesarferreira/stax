@@ -947,7 +947,7 @@ fn wt_ls_stays_compact_and_wt_ll_shows_status() {
 fn wt_ls_disambiguates_duplicate_leaf_names_with_branch_labels() {
     let repo = TestRepo::new();
 
-    repo.run_stax(&["create", "A"]).assert_success();
+    repo.run_stax(&["create", "a"]).assert_success();
     let branch_a = repo.current_branch();
     repo.run_stax(&["checkout", "main"]).assert_success();
 
@@ -970,7 +970,7 @@ fn wt_ls_disambiguates_duplicate_leaf_names_with_branch_labels() {
 
     let names = listed_worktree_names(&TestRepo::stdout(&ls));
     assert!(
-        names.iter().any(|name| name == "A"),
+        names.iter().any(|name| name == "a"),
         "expected branch leaf label for duplicate worktree, got {:?}",
         names
     );

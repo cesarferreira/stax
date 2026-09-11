@@ -60,6 +60,7 @@ single_stack = "on"    # "on" | "off"
 # user = "cesar"
 # date_format = "%m-%d"
 # replacement = "-"
+# lowercase = true # lowercase generated branch names (commit messages keep their casing)
 # stale_days = 30 # days without commits before `stax sweep` calls a branch stale
 
 [git]
@@ -243,6 +244,15 @@ date_format = "%m-%d"
 ```
 
 The legacy `prefix` field still works when `format` is unset.
+
+### Branch name casing
+
+Generated branch names are lowercased by default, so `st create -am "Bump Fastlane Version"` produces the branch `bump-fastlane-version` while committing the message exactly as typed. Set `lowercase = false` to keep the original casing:
+
+```toml
+[branch]
+lowercase = false
+```
 
 ## Stale-branch threshold
 

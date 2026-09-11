@@ -124,6 +124,10 @@ pub struct BranchConfig {
     /// Character to replace spaces and special chars (default: "-")
     #[serde(default = "default_replacement")]
     pub replacement: String,
+    /// Lowercase generated branch names (default: true). Commit messages are
+    /// never affected — only the branch name derived from them.
+    #[serde(default = "default_branch_lowercase")]
+    pub lowercase: bool,
     /// Branch name format template. Placeholders:
     /// - {user}: Git username (from config.branch.user or git user.name)
     /// - {date}: Current date (formatted by date_format)
@@ -487,6 +491,7 @@ impl Default for BranchConfig {
             date: false,
             date_format: default_date_format(),
             replacement: default_replacement(),
+            lowercase: default_branch_lowercase(),
             format: None,
             user: None,
             stale_days: default_stale_days(),
@@ -535,6 +540,10 @@ impl Default for AuthConfig {
 
 fn default_replacement() -> String {
     "-".to_string()
+}
+
+fn default_branch_lowercase() -> bool {
+    true
 }
 
 fn default_worktree_root_dir() -> String {
@@ -1078,6 +1087,15 @@ impl Config {
         name: &str,
         prefix_override: Option<&str>,
     ) -> String {
+        let formatted = self.build_branch_name(name, prefix_override);
+        if self.branch.lowercase {
+            formatted.to_lowercase()
+        } else {
+            formatted
+        }
+    }
+
+    fn build_branch_name(&self, name: &str, prefix_override: Option<&str>) -> String {
         // Sanitize the message/name first
         let sanitized_name = self.sanitize_branch_segment(name);
 
