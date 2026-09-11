@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "stax",
+  "project_id": "a3b04742-ba10-4a8b-aad5-c5faba217635"
+}
