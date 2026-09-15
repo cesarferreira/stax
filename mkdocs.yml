@@ -74,6 +74,7 @@ nav:
   - Workflows:
       - Merge and Cascade: workflows/merge-and-cascade.md
       - Standup and Changelog: workflows/reporting.md
+      - Working Across Multiple Machines: workflows/multi-machine.md
   - Safety:
       - Undo and Redo: safety/undo-redo.md
   - Configuration:
