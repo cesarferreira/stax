@@ -41,6 +41,14 @@ pub(super) struct SyncStats {
     pub(super) cleanup_skips: Vec<CleanupSkip>,
     pub(super) checkout_change: Option<CheckoutChange>,
     pub(super) stash: StashOutcome,
+    pub(super) reconciled_branches: Vec<ReconciledBranchRecord>,
+    pub(super) get_skipped_worktree_branches: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ReconciledBranchRecord {
+    pub(super) branch: String,
+    pub(super) action: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +108,17 @@ impl SyncStats {
             branch: branch.to_string(),
             reason: reason.into(),
         });
+    }
+
+    fn record_get_worktree_skip(&mut self, branch: &str) {
+        if self
+            .get_skipped_worktree_branches
+            .iter()
+            .any(|skipped| skipped == branch)
+        {
+            return;
+        }
+        self.get_skipped_worktree_branches.push(branch.to_string());
     }
 }
 
@@ -323,6 +342,7 @@ struct SyncContext {
     /// Merged-branch detection from the interactive sync plan (pre-trunk-update).
     /// Reused after trunk moves to avoid a second full patch-id scan of the stack.
     planned_merged_detection: Option<PlannedMergedDetection>,
+    get: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +371,7 @@ impl SyncContext {
         json: bool,
         extra_fetch_refs: &[String],
         skip_interactive_plan: bool,
+        get: bool,
     ) -> Result<(Self, GitRepo)> {
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
@@ -409,6 +430,7 @@ impl SyncContext {
                 trunk_planned: false,
                 delete_confirm_strategy: DeleteConfirmStrategy::PerBranch,
                 planned_merged_detection: None,
+                get,
             },
             repo,
         ))
@@ -2182,6 +2204,177 @@ impl SyncContext {
         Ok(())
     }
 
+    fn get_phase(&mut self, repo: &GitRepo) -> Result<()> {
+        if !self.get {
+            return Ok(());
+        }
+
+        if repo.rebase_in_progress()? {
+            if !self.quiet {
+                println!(
+                    "{} skipping --get reconciliation: a rebase is already in progress.",
+                    "Warning:".yellow().bold()
+                );
+            }
+            return Ok(());
+        }
+
+        let scope_order: Vec<String> = if self.current != self.stack.trunk
+            && self.stack.branches.contains_key(&self.current)
+        {
+            self.stack.current_stack(&self.current)
+        } else {
+            Vec::new()
+        };
+
+        let mut frozen_branches = Vec::new();
+        let mut candidate_branches: Vec<String> = Vec::new();
+        for branch in &scope_order {
+            let frozen = BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false);
+            if frozen {
+                frozen_branches.push(branch.clone());
+            } else {
+                candidate_branches.push(branch.clone());
+            }
+        }
+        if !frozen_branches.is_empty() && !self.quiet {
+            println!(
+                "  {} Skipping frozen {}: {}",
+                "▸".dimmed(),
+                if frozen_branches.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                },
+                frozen_branches.join(", ").cyan()
+            );
+        }
+
+        let current_path =
+            std::fs::canonicalize(&self.workdir).unwrap_or_else(|_| self.workdir.clone());
+        let mut branches: Vec<String> = Vec::new();
+        for branch in candidate_branches {
+            let other_worktree = repo.branch_worktree(&branch)?.filter(|worktree| {
+                let other_path =
+                    std::fs::canonicalize(&worktree.path).unwrap_or_else(|_| worktree.path.clone());
+                other_path != current_path
+            });
+            if other_worktree.is_some() {
+                self.stats.record_get_worktree_skip(&branch);
+            } else {
+                branches.push(branch);
+            }
+        }
+
+        if branches.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .tx
+            .take()
+            .context("sync transaction was already finished")?;
+        for branch in &branches {
+            tx.plan_branch(repo, branch)?;
+            tx.plan_metadata_ref(repo, branch)?;
+        }
+        self.tx = Some(tx);
+
+        if !self.quiet {
+            println!();
+            println!("{}", "Fetching stack branches from remote...".bold());
+        }
+
+        for branch in &branches {
+            if !self.quiet {
+                println!(
+                    "{} {} from {}...",
+                    "Fetching".blue().bold(),
+                    branch.cyan(),
+                    self.remote_name.cyan()
+                );
+            }
+
+            let outcome = match crate::commands::get::reconcile_branch_with_remote(
+                &self.workdir,
+                &self.remote_name,
+                branch,
+                self.force,
+                false,
+            ) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    if !self.quiet {
+                        println!("{}", err.to_string().red());
+                    }
+                    if let Some(tx) = self.tx.take() {
+                        tx.finish_err("Rebase conflict", Some("get"), Some(branch))?;
+                    }
+                    return Err(ConflictStopped.into());
+                }
+            };
+
+            let (message, action) = match outcome {
+                crate::commands::get::ReconcileOutcome::NoRemote => (None, None),
+                crate::commands::get::ReconcileOutcome::UpToDate => (None, None),
+                crate::commands::get::ReconcileOutcome::Created => (
+                    Some(format!(
+                        "{} {} tracking remote.",
+                        "Created".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("created"),
+                ),
+                crate::commands::get::ReconcileOutcome::FastForwarded => (
+                    Some(format!(
+                        "{} {} to remote tip.",
+                        "Fast-forwarded".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("fast_forwarded"),
+                ),
+                crate::commands::get::ReconcileOutcome::Kept => (
+                    Some(format!(
+                        "{} {} already contains remote tip.",
+                        "Kept".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("kept"),
+                ),
+                crate::commands::get::ReconcileOutcome::Rebased => (
+                    Some(format!(
+                        "{} {} onto remote tip.",
+                        "Rebased".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("rebased"),
+                ),
+                crate::commands::get::ReconcileOutcome::Reset => (
+                    Some(format!(
+                        "{} {} to remote tip.",
+                        "Reset".yellow().bold(),
+                        branch.cyan()
+                    )),
+                    Some("reset"),
+                ),
+            };
+
+            if let Some(message) = message
+                && !self.quiet
+            {
+                println!("{}", message);
+            }
+            if let Some(action) = action {
+                self.stats.reconciled_branches.push(ReconciledBranchRecord {
+                    branch: branch.clone(),
+                    action,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn restack_phase(&mut self, repo: &GitRepo) -> Result<()> {
         if self.restack {
             let restack_started_at = Instant::now();
@@ -2667,6 +2860,7 @@ pub fn run(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
+    get: bool,
 ) -> Result<()> {
     run_with_repo(
         GitRepo::open()?,
@@ -2686,6 +2880,7 @@ pub fn run(
         json,
         extra_fetch_refs,
         skip_interactive_plan,
+        get,
     )
 }
 
@@ -2709,6 +2904,7 @@ pub(crate) fn run_at(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
+    get: bool,
 ) -> Result<()> {
     let repo = GitRepo::open_from_path(repository)?;
     for worktree in repo.list_worktrees()? {
@@ -2737,6 +2933,7 @@ pub(crate) fn run_at(
         json,
         extra_fetch_refs,
         skip_interactive_plan,
+        get,
     )
 }
 
@@ -2759,6 +2956,7 @@ fn run_with_repo(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
+    get: bool,
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let (mut ctx, repo) = SyncContext::new(
@@ -2779,6 +2977,7 @@ fn run_with_repo(
         json,
         extra_fetch_refs,
         skip_interactive_plan,
+        get,
     )?;
 
     if r#continue {
@@ -2896,6 +3095,8 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
     ctx.retry_deferred_trunk_update(&repo)?;
 
     ctx.ensure_trunk_ready_for_restack(&repo)?;
+
+    ctx.get_phase(&repo)?;
 
     ctx.restack_phase(&repo)?;
 
@@ -4519,6 +4720,13 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
         lines.push(format!(
             "⚠ Cleanup skipped for {} ({})",
             skip.branch, skip.reason
+        ));
+    }
+
+    for branch in &stats.get_skipped_worktree_branches {
+        lines.push(format!(
+            "⚠ Skipped {} for --get reconciliation (checked out in another worktree)",
+            branch
         ));
     }
 

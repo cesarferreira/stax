@@ -77,7 +77,8 @@ pub fn run(
         commands::sync::StashPolicy::Prompt,
         false, // json
         &submit_fetch_refs,
-        true, // refresh/update is an explicit workflow — no Sync plan prompt
+        true,  // refresh/update is an explicit workflow — no Sync plan prompt
+        false, // get
     )?;
 
     if repo.rebase_in_progress()? {
@@ -284,7 +285,8 @@ fn run_all_stacks(
         commands::sync::StashPolicy::Prompt,
         false, // json
         &submit_fetch_refs,
-        true, // refresh/update is an explicit workflow — no Sync plan prompt
+        true,  // refresh/update is an explicit workflow — no Sync plan prompt
+        false, // get
     ) {
         if let Some(root) = sync_root.as_deref() {
             print_all_stacks_progress(&plans, &[], root);

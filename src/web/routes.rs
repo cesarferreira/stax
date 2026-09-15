@@ -802,6 +802,7 @@ async fn op_sync(
                 false,
                 &[],
                 true,
+                false,
             )
         })
     })

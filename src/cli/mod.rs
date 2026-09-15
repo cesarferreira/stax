@@ -411,6 +411,7 @@ pub fn run() -> Result<()> {
             no_stash,
             dry_run,
             json,
+            get,
         } => {
             if prune {
                 eprintln!("{}", commands::sync::prune_deprecation_warning());
@@ -429,6 +430,7 @@ pub fn run() -> Result<()> {
                     auto_stash_pop,
                     stash_policy,
                     json,
+                    get,
                 })
             } else {
                 commands::sync::run(
@@ -446,6 +448,7 @@ pub fn run() -> Result<()> {
                     json,
                     &[],
                     false,
+                    get,
                 )
             }
         }

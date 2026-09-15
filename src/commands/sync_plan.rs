@@ -29,6 +29,7 @@ pub struct SyncPlanOptions {
     pub auto_stash_pop: bool,
     pub stash_policy: StashPolicy,
     pub json: bool,
+    pub get: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +316,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         auto_stash_pop,
         stash_policy,
         json,
+        get,
     } = options;
 
     // --json suppresses all human stdout (machine-readable output replaces it)
@@ -379,11 +381,13 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
 
     // --- Probe remote (ls-remote; read-only, no FETCH_HEAD writes) ---
     let mut use_cached_remote = false;
+    let mut remote_heads_by_branch: Option<std::collections::HashMap<String, String>> = None;
     let (remote_head_oid, remote_branch_set): (Option<String>, HashSet<String>) =
         match remote::ls_remote_head_oids(&workdir, &remote_name) {
             Ok(heads) => {
                 let trunk_oid = heads.get(&trunk).cloned();
                 let branch_count = heads.len();
+                remote_heads_by_branch = Some(heads.clone());
                 let names: HashSet<String> = heads.into_keys().collect();
                 if !quiet {
                     println!(
@@ -442,6 +446,63 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     if !quiet {
         println!("{}", "Trunk".bold());
         render_trunk_plan(&trunk, &trunk_plan);
+    }
+
+    if get && !quiet && !json {
+        println!();
+        println!("{}", "Get (stack branches vs remote)".bold());
+
+        let scope_order: Vec<String> =
+            if current != trunk && stack.branches.contains_key(current.as_str()) {
+                stack.current_stack(&current)
+            } else {
+                Vec::new()
+            };
+
+        if scope_order.is_empty() {
+            println!("  {}", "No stack branches in scope.".dimmed());
+        } else {
+            match &remote_heads_by_branch {
+                Some(remote_heads) => {
+                    for branch in &scope_order {
+                        let local_oid = resolve_ref_oid(&workdir, branch);
+                        let remote_oid = remote_heads.get(branch);
+                        match (local_oid.as_deref(), remote_oid.map(String::as_str)) {
+                            (_, None) => {
+                                println!(
+                                    "  {} {} {}",
+                                    "○".dimmed(),
+                                    branch.cyan(),
+                                    "no remote branch".dimmed()
+                                );
+                            }
+                            (Some(local), Some(remote)) if local == remote => {
+                                println!(
+                                    "  {} {} {}",
+                                    "✓".green(),
+                                    branch.cyan(),
+                                    "up to date".dimmed()
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "  {} {} {}",
+                                    "→".cyan(),
+                                    branch.cyan().bold(),
+                                    "would reconcile (diverged)".dimmed()
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    println!(
+                        "  {}",
+                        "Could not reach remote — --get preview unavailable".dimmed()
+                    );
+                }
+            }
+        }
     }
 
     let restack_would_fail = matches!(

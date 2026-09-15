@@ -642,6 +642,7 @@ pub fn run(
                 false, // json
                 &[],
                 false,
+                false, // get
             ) && !quiet
             {
                 println!();

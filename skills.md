@@ -359,6 +359,7 @@ stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
+stax sync --get                    # Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.

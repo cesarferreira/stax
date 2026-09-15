@@ -27,6 +27,7 @@ st --trace status --json >/dev/null
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
 | `st sync --stash` | `rs --stash` | Stash the current working tree before sync starts without prompting; works with `--quiet` and `--json`; does NOT auto-confirm branch deletions; conflicts with `--no-stash` at parse time |
 | `st sync --no-stash` | `rs --no-stash` | Fail if the working tree is dirty; overrides `--force`; conflicts with `--stash` at parse time |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |

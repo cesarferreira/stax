@@ -1,6 +1,7 @@
 use crate::commands::checkout;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
+use crate::errors::DirtyWorkingTree;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
@@ -38,6 +39,58 @@ enum BranchSyncOutcome {
     SkippedWorktree,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReconcileOutcome {
+    NoRemote,
+    Created,
+    UpToDate,
+    FastForwarded,
+    Kept,
+    Rebased,
+    Reset,
+}
+
+pub(crate) fn reconcile_branch_with_remote(
+    workdir: &Path,
+    remote: &str,
+    branch: &str,
+    force: bool,
+    required_remote: bool,
+) -> Result<ReconcileOutcome> {
+    if !fetch_remote_branch(workdir, remote, branch, required_remote)? {
+        return Ok(ReconcileOutcome::NoRemote);
+    }
+
+    let remote_ref = format!("{}/{}", remote, branch);
+    let remote_sha = rev_parse(workdir, &remote_ref)?;
+    let local_exists = local_branch_exists(workdir, branch)?;
+
+    if local_exists {
+        let local_sha = rev_parse(workdir, branch)?;
+        let outcome = if local_sha != remote_sha {
+            if force {
+                force_update_local_branch(workdir, branch, &remote_ref)?;
+                ReconcileOutcome::Reset
+            } else if is_ancestor(workdir, branch, &remote_ref)? {
+                fast_forward_local_branch(workdir, branch, &remote_ref)?;
+                ReconcileOutcome::FastForwarded
+            } else if is_ancestor(workdir, &remote_ref, branch)? {
+                ReconcileOutcome::Kept
+            } else {
+                rebase_local_branch(workdir, branch, &remote_ref)?;
+                ReconcileOutcome::Rebased
+            }
+        } else {
+            ReconcileOutcome::UpToDate
+        };
+        set_upstream(workdir, branch, &remote_ref)?;
+        Ok(outcome)
+    } else {
+        create_tracking_branch(workdir, branch, &remote_ref)?;
+        Ok(ReconcileOutcome::Created)
+    }
+}
+
 pub fn run(options: GetOptions) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
@@ -61,6 +114,7 @@ pub fn run(options: GetOptions) -> Result<()> {
             false, // json
             &[],
             false,
+            false, // get
         );
     };
 
@@ -175,71 +229,73 @@ fn sync_branch(
         return Ok(BranchSyncOutcome::SkippedWorktree);
     }
 
+    if force
+        && current_branch(workdir).as_deref() == Some(branch.as_str())
+        && repo.is_dirty_at(workdir)?
+    {
+        return Err(DirtyWorkingTree.into());
+    }
+
     println!(
         "{} {} from {}...",
         "Fetching".blue().bold(),
         branch.cyan(),
         remote.cyan()
     );
-    if !fetch_remote_branch(workdir, remote, branch, target.required_remote)? {
-        println!(
-            "{} {} because no remote branch exists on {}.",
-            "Skipped".yellow().bold(),
-            branch.cyan(),
-            remote.cyan()
-        );
-        return Ok(BranchSyncOutcome::Skipped);
-    }
-
     let remote_ref = format!("{}/{}", remote, branch);
-    let remote_sha = rev_parse(workdir, &remote_ref)?;
-    let local_exists = local_branch_exists(workdir, branch)?;
-
-    if local_exists {
-        let local_sha = rev_parse(workdir, branch)?;
-        if local_sha != remote_sha {
-            if force {
-                force_update_local_branch(workdir, branch, &remote_ref)?;
-                println!(
-                    "{} {} to {}.",
-                    "Reset".yellow().bold(),
-                    branch.cyan(),
-                    remote_ref.cyan()
-                );
-            } else if is_ancestor(workdir, branch, &remote_ref)? {
-                fast_forward_local_branch(workdir, branch, &remote_ref)?;
-                println!(
-                    "{} {} to {}.",
-                    "Fast-forwarded".green().bold(),
-                    branch.cyan(),
-                    remote_ref.cyan()
-                );
-            } else if is_ancestor(workdir, &remote_ref, branch)? {
-                println!(
-                    "{} {} already contains {}.",
-                    "Kept".green().bold(),
-                    branch.cyan(),
-                    remote_ref.cyan()
-                );
-            } else {
-                rebase_local_branch(workdir, branch, &remote_ref)?;
-                println!(
-                    "{} {} onto {}.",
-                    "Rebased".green().bold(),
-                    branch.cyan(),
-                    remote_ref.cyan()
-                );
-            }
+    let outcome =
+        reconcile_branch_with_remote(workdir, remote, branch, force, target.required_remote)?;
+    match outcome {
+        ReconcileOutcome::NoRemote => {
+            println!(
+                "{} {} because no remote branch exists on {}.",
+                "Skipped".yellow().bold(),
+                branch.cyan(),
+                remote.cyan()
+            );
+            return Ok(BranchSyncOutcome::Skipped);
         }
-        set_upstream(workdir, branch, &remote_ref)?;
-    } else {
-        create_tracking_branch(workdir, branch, &remote_ref)?;
-        println!(
-            "{} {} tracking {}.",
-            "Created".green().bold(),
-            branch.cyan(),
-            remote_ref.cyan()
-        );
+        ReconcileOutcome::Reset => {
+            println!(
+                "{} {} to {}.",
+                "Reset".yellow().bold(),
+                branch.cyan(),
+                remote_ref.cyan()
+            );
+        }
+        ReconcileOutcome::FastForwarded => {
+            println!(
+                "{} {} to {}.",
+                "Fast-forwarded".green().bold(),
+                branch.cyan(),
+                remote_ref.cyan()
+            );
+        }
+        ReconcileOutcome::Kept => {
+            println!(
+                "{} {} already contains {}.",
+                "Kept".green().bold(),
+                branch.cyan(),
+                remote_ref.cyan()
+            );
+        }
+        ReconcileOutcome::Rebased => {
+            println!(
+                "{} {} onto {}.",
+                "Rebased".green().bold(),
+                branch.cyan(),
+                remote_ref.cyan()
+            );
+        }
+        ReconcileOutcome::UpToDate => {}
+        ReconcileOutcome::Created => {
+            println!(
+                "{} {} tracking {}.",
+                "Created".green().bold(),
+                branch.cyan(),
+                remote_ref.cyan()
+            );
+        }
     }
 
     let repo = GitRepo::open()?;
@@ -561,11 +617,18 @@ fn create_tracking_branch(workdir: &Path, branch: &str, remote_ref: &str) -> Res
 }
 
 fn force_update_local_branch(workdir: &Path, branch: &str, remote_ref: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["branch", "--force", branch, remote_ref])
-        .current_dir(workdir)
-        .output()
-        .with_context(|| format!("Failed to reset local branch '{}'", branch))?;
+    let output = if current_branch(workdir).as_deref() == Some(branch) {
+        Command::new("git")
+            .args(["reset", "--hard", remote_ref])
+            .current_dir(workdir)
+            .output()
+    } else {
+        Command::new("git")
+            .args(["branch", "--force", branch, remote_ref])
+            .current_dir(workdir)
+            .output()
+    }
+    .with_context(|| format!("Failed to reset local branch '{}'", branch))?;
 
     if output.status.success() {
         return Ok(());

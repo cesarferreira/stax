@@ -14,37 +14,40 @@ remote tip. Don't `git pull` a stacked branch in this state — if it was rebase
 elsewhere, the local and remote histories have diverged and a plain pull will
 either conflict or silently create a merge commit.
 
-## The fix: `st get <branch>`, not bare `st get`
+## The fix: `st rs --get --restack`
 
 ```bash
-st get <top-branch-of-your-stack>
+st rs --get --restack
 ```
 
-`st get` with an explicit branch name fetches that branch **and its local
-upstack chain** from the remote, and for each one:
+`--get` fetches each branch of your **current stack** from its own remote ref
+(not just trunk) and reconciles it before the restack phase runs:
 
 - fast-forwards the local branch if the remote is simply ahead,
 - rebases local-only commits onto the fetched remote tip if histories
   diverged (e.g. the branch was rebased and re-pushed elsewhere),
-- or resets it entirely with `--force` if you want the remote to win outright.
+- or resets it entirely (with `--force`) if you want the remote to win
+  outright.
 
-This reconciles your local machine with whatever the other machine already
-pushed, instead of re-deriving a second, divergent rebase locally.
+One command converges your whole current stack with whatever another machine
+already pushed, then restacks — instead of re-deriving a second, divergent
+rebase locally.
 
-### Why not bare `st get` / `st rs`
+`st get <branch>` remains useful for a single named branch, or for a branch
+that isn't checked out locally yet at all (it creates the local tracking
+branch). `--get` only reconciles branches that already exist locally in your
+current stack.
 
-With **no argument**, `st get` is equivalent to `st sync` (`st rs`): it fetches
-**trunk only**, then restacks your local branches onto their local parents
-using your *local* commits. It does not re-fetch the SHAs your feature
-branches already have on the remote. If those branches were rebased and pushed
-from another machine, `st rs`/bare `st get` will rebase your stale local
-commits onto the new trunk independently — producing a *second*, different
-rebase of the same content, which then needs a force-push (and can conflict
-with what's already on the remote).
+### Why not bare `st rs` / bare `st get`
 
-Use `st sync`/`st rs` to keep trunk current and clean up merged branches; use
-`st get <branch>` to pull down branch-level history another machine already
-rewrote.
+With **no `--get`**, `st sync`/`st rs` only fetches **trunk**, then restacks
+your local branches onto their local parents using your *local* commits. It
+does not re-fetch the SHAs your feature branches already have on the remote.
+Likewise, bare `st get` (no branch argument) is equivalent to bare `st sync`.
+If your feature branches were rebased and pushed from another machine, either
+form will rebase your stale local commits onto the new trunk independently —
+producing a *second*, different rebase of the same content, which then needs
+a force-push (and can conflict with what's already on the remote).
 
 ## Typical flow
 
@@ -53,12 +56,8 @@ rewrote.
 st refresh          # or: st submit / st restack + push
 
 # On the other machine
-st get <top-branch-of-your-stack>
+st rs --get --restack
 ```
-
-If you only remember the bottom branch name, that's fine too — `st get`
-resolves the trunk-to-target chain and syncs local upstack branches by
-default (`--downstack` opts out).
 
 ## Related
 

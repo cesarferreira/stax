@@ -24,6 +24,8 @@ pub struct SyncOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub restacked_branches: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reconciled_branches: Vec<ReconciledBranchJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub imported_branches_updated: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checkout_change: Option<CheckoutChangeJson>,
@@ -70,6 +72,12 @@ pub struct DeletedBranchJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tip: Option<String>,
     pub metadata_deleted: bool,
+}
+
+#[derive(Serialize)]
+pub struct ReconciledBranchJson {
+    pub branch: String,
+    pub action: String,
 }
 
 #[derive(Serialize)]
@@ -259,6 +267,15 @@ pub(super) fn build(
         })
         .collect();
 
+    let reconciled_branches = stats
+        .reconciled_branches
+        .iter()
+        .map(|r| ReconciledBranchJson {
+            branch: r.branch.clone(),
+            action: r.action.to_string(),
+        })
+        .collect();
+
     let checkout_change = stats.checkout_change.as_ref().map(|c| CheckoutChangeJson {
         from: c.from.clone(),
         to: c.to.clone(),
@@ -284,6 +301,7 @@ pub(super) fn build(
         protected_branches: stats.protected_branches.clone(),
         partially_merged,
         restacked_branches: stats.restacked_branches.clone(),
+        reconciled_branches,
         imported_branches_updated: stats.imported_branches_updated.clone(),
         checkout_change,
         stash,
@@ -346,6 +364,7 @@ pub(super) fn build_plan(
         protected_branches: vec![],
         partially_merged: plan_data.partially_merged,
         restacked_branches: vec![],
+        reconciled_branches: vec![],
         imported_branches_updated: vec![],
         checkout_change: None,
         stash: StashJson {
