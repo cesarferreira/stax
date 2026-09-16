@@ -60,6 +60,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
+| `st rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward or rebase the local branch onto it — use after another machine rebased and force-pushed your stack |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
 | `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json` |

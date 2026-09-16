@@ -508,6 +508,9 @@ pub(crate) enum Commands {
         /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
         #[arg(long, conflicts_with = "continue")]
         json: bool,
+        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        #[arg(long)]
+        get: bool,
     },
 
     /// List and optionally clean up local branches (merged, upstream-gone, stale)

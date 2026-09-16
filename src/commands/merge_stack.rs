@@ -1240,6 +1240,7 @@ fn run_post_merge_sync(quiet: bool) {
         false, // json
         &[],
         false,
+        false, // get
     ) && !quiet
     {
         println!();

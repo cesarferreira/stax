@@ -401,6 +401,53 @@ fn get_force_resets_divergent_local_branch() {
 }
 
 #[test]
+fn get_force_refuses_on_dirty_current_branch() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+
+    repo.git(&["checkout", "-b", "dirty-force-feature", "main"])
+        .assert_success();
+    repo.create_file("tracked.txt", "original content\n");
+    repo.commit("Add tracked file");
+    repo.git(&["push", "-u", "origin", "dirty-force-feature"])
+        .assert_success();
+
+    let remote_sha = update_remote_branch_in_clone(
+        &repo,
+        "dirty-force-feature",
+        "other-machine.txt",
+        "other machine content\n",
+    );
+    let local_sha_before = repo.get_commit_sha("dirty-force-feature");
+    assert_ne!(local_sha_before, remote_sha);
+
+    repo.create_file("staged-new.txt", "staged content\n");
+    repo.git(&["add", "staged-new.txt"]).assert_success();
+    repo.create_file("tracked.txt", "modified content\n");
+
+    let out = repo.run_stax(&["get", "dirty-force-feature", "--force"]);
+    assert!(
+        !out.status.success(),
+        "get --force must refuse to reset a dirty checked-out branch"
+    );
+
+    assert_eq!(
+        repo.get_commit_sha("dirty-force-feature"),
+        local_sha_before,
+        "local branch must not be reset while the working tree is dirty"
+    );
+    assert!(
+        repo.path().join("staged-new.txt").exists(),
+        "staged new file must survive the refused force-get"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join("tracked.txt")).expect("read tracked.txt"),
+        "modified content\n",
+        "unstaged modification must survive the refused force-get"
+    );
+}
+
+#[test]
 fn get_existing_branch_syncs_local_upstack_by_default() {
     let repo = TestRepo::new_with_remote();
     let branches = repo.create_stack(&["review-base", "review-child"]);
