@@ -448,6 +448,48 @@ fn get_force_refuses_on_dirty_current_branch() {
 }
 
 #[test]
+fn get_force_resets_current_branch_with_only_untracked_changes() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+
+    repo.git(&["checkout", "-b", "untracked-force-feature", "main"])
+        .assert_success();
+    repo.create_file("tracked.txt", "original content\n");
+    repo.commit("Add tracked file");
+    repo.git(&["push", "-u", "origin", "untracked-force-feature"])
+        .assert_success();
+
+    let remote_sha = update_remote_branch_in_clone(
+        &repo,
+        "untracked-force-feature",
+        "other-machine.txt",
+        "other machine content\n",
+    );
+    let local_sha_before = repo.get_commit_sha("untracked-force-feature");
+    assert_ne!(local_sha_before, remote_sha);
+
+    // Only an untracked scratch file — `git reset --hard` never touches this,
+    // so it must not block a force-update of the current branch.
+    repo.create_file("scratch.txt", "not tracked, not staged\n");
+
+    let out = repo.run_stax(&["get", "untracked-force-feature", "--force", "--no-checkout"]);
+    assert!(
+        out.status.success(),
+        "get --force must not be blocked by untracked-only changes: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        repo.get_commit_sha("untracked-force-feature"),
+        remote_sha,
+        "branch must be hard-reset to the remote tip"
+    );
+    assert!(
+        repo.path().join("scratch.txt").exists(),
+        "untracked file must survive the force-get"
+    );
+}
+
+#[test]
 fn get_existing_branch_syncs_local_upstack_by_default() {
     let repo = TestRepo::new_with_remote();
     let branches = repo.create_stack(&["review-base", "review-child"]);
