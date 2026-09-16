@@ -373,6 +373,18 @@ impl GitRepo {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
+    /// Like `is_dirty_at`, but ignores untracked files. Use this before an
+    /// operation (like `git reset --hard`) that only destroys tracked
+    /// changes, so an unrelated untracked scratch file doesn't block it.
+    pub(crate) fn has_tracked_changes_at(&self, cwd: &Path) -> Result<bool> {
+        let output = self.run_git(cwd, &["status", "--porcelain", "--untracked-files=no"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git status failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
     pub(crate) fn head_oid_in(&self, cwd: &Path) -> Result<String> {
         let output = self.run_git(cwd, &["rev-parse", "HEAD"])?;
         if !output.status.success() {

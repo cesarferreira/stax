@@ -1,7 +1,6 @@
 use crate::commands::checkout;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
-use crate::errors::DirtyWorkingTree;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
@@ -231,9 +230,12 @@ fn sync_branch(
 
     if force
         && current_branch(workdir).as_deref() == Some(branch.as_str())
-        && repo.is_dirty_at(workdir)?
+        && repo.has_tracked_changes_at(workdir)?
     {
-        return Err(DirtyWorkingTree.into());
+        anyhow::bail!(
+            "Cannot force-update '{}': it is the current branch and has uncommitted changes. Commit or stash your changes first.",
+            branch
+        );
     }
 
     println!(
