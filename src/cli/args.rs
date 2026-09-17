@@ -607,6 +607,9 @@ pub(crate) enum Commands {
         /// Delete local branches whose PRs were merged (off by default, unlike `stax sync`)
         #[arg(long)]
         delete_merged: bool,
+        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        #[arg(long)]
+        get: bool,
     },
 
     /// Checkout a branch in the stack

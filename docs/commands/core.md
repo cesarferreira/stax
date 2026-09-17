@@ -73,6 +73,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; requires a clean tree unless `--auto-stash-pop` is set, and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
+| `st refresh --get` | Also reconcile each branch of the current stack against its own remote ref before restacking (see [multi-machine](../workflows/multi-machine.md)); add `--force` to let the remote win outright |
 
 ## Branch housekeeping
 

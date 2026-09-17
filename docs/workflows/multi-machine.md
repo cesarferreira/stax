@@ -14,7 +14,7 @@ remote tip. Don't `git pull` a stacked branch in this state — if it was rebase
 elsewhere, the local and remote histories have diverged and a plain pull will
 either conflict or silently create a merge commit.
 
-## The fix: `st rs --get --restack`
+## The fix: `st rs --get --restack` (or `st refresh --get`)
 
 ```bash
 st rs --get --restack
@@ -32,6 +32,16 @@ st rs --get --restack
 One command converges your whole current stack with whatever another machine
 already pushed, then restacks — instead of re-deriving a second, divergent
 rebase locally.
+
+`st refresh --get` runs the same reconciliation as part of the full refresh
+flow (sync trunk → reconcile each stack branch against its own remote →
+restack → push and update PRs). `st refresh --get --force` is equivalent to
+`st rs --get --restack --force`, except that refresh does not delete merged
+branches unless you also pass `--delete-merged`. Note that with
+`--all-stacks`, `--get` still only reconciles the branches of the *current*
+stack; other stacks are restacked from their local commits. If you're checked
+out on trunk itself, there is no current stack to reconcile, so `--get` is a
+silent no-op — check out a stack branch first.
 
 `st get <branch>` remains useful for a single named branch, or for a branch
 that isn't checked out locally yet at all (it creates the local tracking
@@ -56,7 +66,7 @@ a force-push (and can conflict with what's already on the remote).
 st refresh          # or: st submit / st restack + push
 
 # On the other machine
-st rs --get --restack
+st rs --get --restack     # or: st refresh --get   (also pushes + updates PRs)
 ```
 
 ## Related

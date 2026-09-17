@@ -314,3 +314,119 @@ fn sync_without_get_leaves_branch_untouched() {
         "plain sync (without --get) must not reconcile the branch against its remote ref"
     );
 }
+
+#[test]
+fn refresh_get_reconciles_diverged_branch() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+
+    repo.run_stax(&["bc", "feature-refresh-get"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "local content");
+    repo.commit("Local feature commit");
+    repo.git(&["push", "-u", "origin", &branch]);
+
+    let remote_sha =
+        update_remote_branch_in_clone(&repo, &branch, "other-machine.txt", "other machine content");
+
+    repo.create_file("local-only.txt", "still local");
+    repo.commit("Another local commit");
+    let local_sha_before = repo.head_sha();
+    assert_ne!(local_sha_before, remote_sha, "test setup must diverge");
+
+    let out = repo.run_stax(&["refresh", "--get", "--no-submit"]);
+    assert!(
+        out.status.success(),
+        "refresh --get failed: {}",
+        TestRepo::stderr(&out)
+    );
+
+    let local_sha_after = repo.head_sha();
+    assert_ne!(
+        local_sha_before, local_sha_after,
+        "refresh --get must reconcile the branch tip"
+    );
+
+    let contains_remote = repo
+        .git(&["merge-base", "--is-ancestor", &remote_sha, &branch])
+        .status
+        .success();
+    assert!(
+        contains_remote,
+        "local branch must contain the remote commit after `refresh --get`"
+    );
+    assert!(
+        repo.path().join("other-machine.txt").exists(),
+        "remote content must be present after reconciliation"
+    );
+    assert!(
+        repo.path().join("local-only.txt").exists(),
+        "local-only work must survive reconciliation without --force"
+    );
+}
+
+#[test]
+fn refresh_get_force_resets_diverged_branch() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+
+    repo.run_stax(&["bc", "feature-refresh-get-force"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "local content");
+    repo.commit("Local feature commit");
+    repo.git(&["push", "-u", "origin", &branch]);
+
+    let remote_sha =
+        update_remote_branch_in_clone(&repo, &branch, "other-machine.txt", "other machine content");
+
+    repo.create_file("local-only.txt", "still local");
+    repo.commit("Another local commit");
+
+    let out = repo.run_stax(&["refresh", "--get", "--force", "--no-submit", "--yes"]);
+    assert!(
+        out.status.success(),
+        "refresh --get --force failed: {}",
+        TestRepo::stderr(&out)
+    );
+
+    assert_eq!(
+        repo.get_commit_sha(&branch),
+        remote_sha,
+        "refresh --get --force must hard-reset the local branch to the remote tip"
+    );
+    assert!(
+        !repo.path().join("local-only.txt").exists(),
+        "local-only commit must be discarded by a force reset"
+    );
+}
+
+#[test]
+fn refresh_without_get_leaves_branch_untouched() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+
+    repo.run_stax(&["bc", "feature-refresh-no-get"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "local content");
+    repo.commit("Local feature commit");
+    repo.git(&["push", "-u", "origin", &branch]);
+
+    update_remote_branch_in_clone(&repo, &branch, "other-machine.txt", "other machine content");
+
+    repo.create_file("local-only.txt", "still local");
+    repo.commit("Another local commit");
+    let local_sha_before = repo.head_sha();
+
+    let out = repo.run_stax(&["refresh", "--no-submit", "--force", "--yes"]);
+    assert!(
+        out.status.success(),
+        "refresh failed: {}",
+        TestRepo::stderr(&out)
+    );
+
+    let local_sha_after = repo.head_sha();
+    assert_eq!(
+        local_sha_before, local_sha_after,
+        "refresh without --get must not reconcile the branch against its remote ref"
+    );
+}

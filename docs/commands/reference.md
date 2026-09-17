@@ -46,6 +46,7 @@ st --trace status --json >/dev/null
 | `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
 | `st refresh --all-stacks` | | Refresh every stack in the repo (fetch/trunk sync once, then restack + submit each stack); stops at the first conflict |
+| `st refresh --get` | | Reconcile each current-stack branch against its own remote ref before restacking (cross-machine convergence); `--force` resets to the remote tip |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
 | `st cascade` | | Restack the stack and submit updates, without fetching trunk (offline-friendly) |
 | `st diff` | | Show per-branch diffs vs parent |
