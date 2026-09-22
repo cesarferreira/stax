@@ -377,6 +377,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
 | `st stats` | Single-screen, local-only snapshot of stacking health (stack shape, PR mix, restack/parent/dirty health, worktree lanes, hygiene, next action); `--current` scopes to the current stack, `--json` for machine output, `--ci` adds an opt-in CI roll-up |
 | `st refresh` / `st r` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (pass `--delete-merged` to opt into `sync`-style cleanup) |
+| `st refresh --get` | Before restacking, reconcile each branch in the current stack against its remote ref; use this after another machine rebased and force-pushed the stack ([multi-machine workflow](docs/workflows/multi-machine.md)) |
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
 | `st refresh --verbose` | Include detailed sync/restack/submit timing |
