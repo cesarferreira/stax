@@ -383,9 +383,11 @@ stax stats --json                   # Machine-readable RepoStats document
 stax stats --ci                     # Add an opt-in CI roll-up (network call); omitted (non-fatal) without forge auth — always exits 0
 
 stax refresh|r                      # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
+stax refresh --get                  # Before restacking, reconcile each branch in the current stack against its remote ref; use after another machine rebased/force-pushed the stack (add --force to let the remote win)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
+# With --all-stacks, --get still reconciles only the current stack; other stacks restack from local commits.
 stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
