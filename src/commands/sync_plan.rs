@@ -3,7 +3,8 @@ use crate::commands::sync::{
     count_commits_between, diff_line_stats_between, find_merged_branches,
     find_partially_merged_notes, find_upstream_gone_branches, imported_branches_for_cleanup,
     init_forge_client, is_ancestor, local_branch_exists, plan_blocking_worktree_cleanup,
-    print_cleanup_candidates, resolve_fallback_parent_skipping_doomed, resolve_ref_oid,
+    print_cleanup_candidates, print_retained_closed_prs, resolve_fallback_parent_skipping_doomed,
+    resolve_ref_oid, retained_closed_prs,
 };
 use crate::config::Config;
 use crate::engine::branch_detect::has_unique_commits_since_any_base;
@@ -520,6 +521,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     // Accumulator for JSON plan output (populated always; consumed only when json=true).
     let mut plan_data = crate::commands::sync_json::SyncPlanData {
         merged_candidates: Vec::new(),
+        closed_prs: Vec::new(),
         partially_merged: Vec::new(),
         upstream_gone_protected: Vec::new(),
         upstream_gone_deletable: Vec::new(),
@@ -548,6 +550,10 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     }
 
     if !delete_merged {
+        plan_data.closed_prs = retained_closed_prs(&stack, &[]);
+        if !quiet {
+            print_retained_closed_prs(&stack, &plan_data.closed_prs);
+        }
         if !quiet {
             println!(
                 "  {}",
@@ -563,6 +569,11 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             &remote_branch_set,
             false,
         )?;
+        let merged_names: Vec<String> = merged.iter().map(|info| info.branch.clone()).collect();
+        plan_data.closed_prs = retained_closed_prs(&stack, &merged_names);
+        if !quiet {
+            print_retained_closed_prs(&stack, &plan_data.closed_prs);
+        }
         let exempt_imported = imported_branches_for_cleanup(&repo, &stack)?;
         let partially_merged_notes = find_partially_merged_notes(
             &repo,
@@ -698,6 +709,9 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             let mut deletable: Vec<String> = Vec::new();
 
             for branch in &gone {
+                if plan_data.closed_prs.contains(branch) {
+                    continue;
+                }
                 if branch == &trunk {
                     continue;
                 }

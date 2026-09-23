@@ -513,7 +513,7 @@ pub(crate) enum Commands {
         get: bool,
     },
 
-    /// List and optionally clean up local branches (merged, upstream-gone, stale)
+    /// List and optionally clean up local branches (merged, closed PR, upstream-gone, stale)
     Sweep {
         /// Delete merged and upstream-gone branches (safe to remove)
         #[arg(short, long)]
@@ -521,6 +521,9 @@ pub(crate) enum Commands {
         /// When deleting, also include stale branches (use with --delete)
         #[arg(long, requires = "delete")]
         include_stale: bool,
+        /// When deleting, also include closed but unmerged PR branches (use with --delete)
+        #[arg(long, requires = "delete")]
+        include_closed: bool,
         /// Skip confirmation prompts (use with --delete)
         #[arg(short, long, requires = "delete")]
         force: bool,

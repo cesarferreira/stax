@@ -57,9 +57,9 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 
 | Command | What it does |
 |---|---|
-| `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
+| `st rs` | Pull trunk, clean merged branches, report closed PR branches without deleting them, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
-| `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
+| `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone, except known closed-but-unmerged PRs |
 | `st rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward or rebase the local branch onto it — use after another machine rebased and force-pushed your stack |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
@@ -79,8 +79,9 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 
 | Command | What it does |
 |---|---|
-| `st sweep` | Classify all local branches: merged, upstream-gone, stale, active (read-only) |
-| `st sweep --delete` | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
+| `st sweep` | Classify all local branches: merged, closed-pr, upstream-gone, stale, active (read-only) |
+| `st sweep --delete` | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation; keep closed PRs |
+| `st sweep --delete --include-closed` | Explicitly discard branches with closed, unmerged PRs after confirmation |
 | `st sweep --delete --include-stale` | Also delete stale branches (older than threshold) |
 | `st sweep --delete --force` | Skip confirmation prompt |
 | `st sweep --stale-days 60` | Override stale threshold (default 30, or `branch.stale_days` in config) |

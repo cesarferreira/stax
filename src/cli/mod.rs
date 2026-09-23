@@ -455,10 +455,18 @@ pub fn run() -> Result<()> {
         Commands::Sweep {
             delete,
             include_stale,
+            include_closed,
             force,
             stale_days,
             json,
-        } => commands::sweep::run(delete, include_stale, force, stale_days, json),
+        } => commands::sweep::run(
+            delete,
+            include_stale,
+            include_closed,
+            force,
+            stale_days,
+            json,
+        ),
         Commands::Restack {
             all,
             stop_here,
