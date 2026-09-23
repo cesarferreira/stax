@@ -24,17 +24,18 @@ st --trace status --json >/dev/null
 | `st stack unlink [<stack-number>]` | | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
-| `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
+| `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), report closed-but-unmerged PR branches without deleting them, reparent children |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
-| `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone, except known closed-but-unmerged PRs |
 | `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
 | `st sync --stash` | `rs --stash` | Stash the current working tree before sync starts without prompting; works with `--quiet` and `--json`; does NOT auto-confirm branch deletions; conflicts with `--no-stash` at parse time |
 | `st sync --no-stash` | `rs --no-stash` | Fail if the working tree is dirty; overrides `--force`; conflicts with `--stash` at parse time |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
 | `st sync --dry-run --json` | | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`, `schema_version: 1`, `dry_run: true`) instead of human text |
 | `st sync --json` | | Emit the sync result as a single JSON document (`kind: "sync"`, `schema_version: 1`); implies non-interactive; failures emit JSON + non-zero exit; conflicts with `--continue` |
-| `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
-| `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
+| `st sweep` | | Classify all local branches as merged / closed-pr / upstream-gone / stale / active (read-only by default) |
+| `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation; retain closed PR branches |
+| `st sweep --delete --include-closed` | | Also delete closed-but-unmerged PR branches, with confirmation |
 | `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
@@ -380,6 +381,7 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 | `skipped_branches[].name` | `string` | Branch name |
 | `skipped_branches[].reason` | `string` | Why deletion was skipped (e.g. `"not confirmed"`) |
 | `protected_branches[]` | `array` | Absent when empty; upstream-gone branches skipped due to unique local commits |
+| `closed_prs[]` | `array` | Absent when empty; tracked closed-but-unmerged PR branch names retained by sync (also present in `sync_plan`) |
 | `partially_merged[]` | `array` | Absent when empty; branches with a signal of merging but with uncommitted local commits |
 | `partially_merged[].name` | `string` | Branch name |
 | `partially_merged[].reason` | `string` | `pr_merged` · `pr_closed` · `history_merged` |

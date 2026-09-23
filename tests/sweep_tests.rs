@@ -530,6 +530,65 @@ fn sweep_delete_removes_branch_with_merged_pr_metadata() {
     );
 }
 
+#[test]
+fn sweep_closed_pr_requires_explicit_opt_in() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+    repo.run_stax(&["bc", "abandoned-pr"]).assert_success();
+    repo.create_file("abandoned.txt", "unmerged work");
+    repo.commit("Unmerged work");
+    repo.git(&["push", "-u", "origin", "abandoned-pr"]);
+    write_branch_pr_metadata_with_state(&repo, "abandoned-pr", "main", 44, "CLOSED");
+    repo.run_stax(&["t"]).assert_success();
+
+    let output = repo.run_stax(&["sweep", "--json"]);
+    output.assert_success();
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("valid sweep JSON");
+    let branch = rows["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "abandoned-pr")
+        .expect("closed branch should be visible");
+    assert_eq!(branch["status"], "closed-pr");
+
+    repo.run_stax(&["sweep", "--delete", "--force"])
+        .assert_success();
+    assert!(repo.list_branches().contains(&"abandoned-pr".to_string()));
+
+    repo.run_stax(&["sweep", "--delete", "--include-closed", "--force"])
+        .assert_success();
+    assert!(!repo.list_branches().contains(&"abandoned-pr".to_string()));
+}
+
+#[test]
+fn sweep_closed_pr_with_deleted_remote_is_not_merged_or_auto_deleted() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+    repo.run_stax(&["bc", "closed-gone-pr"]).assert_success();
+    repo.create_file("closed-gone.txt", "unmerged work");
+    repo.commit("Unmerged work");
+    repo.git(&["push", "-u", "origin", "closed-gone-pr"]);
+    write_branch_pr_metadata_with_state(&repo, "closed-gone-pr", "main", 45, "CLOSED");
+    repo.run_stax(&["t"]).assert_success();
+    repo.git(&["push", "origin", "--delete", "closed-gone-pr"]);
+
+    let output = repo.run_stax(&["sweep", "--json"]);
+    output.assert_success();
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("valid sweep JSON");
+    let branch = rows["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "closed-gone-pr")
+        .expect("closed branch should be visible");
+    assert_eq!(branch["status"], "closed-pr");
+
+    repo.run_stax(&["sweep", "--delete", "--force"])
+        .assert_success();
+    assert!(repo.list_branches().contains(&"closed-gone-pr".to_string()));
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — opt-in deletion
 // ---------------------------------------------------------------------------

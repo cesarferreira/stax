@@ -20,6 +20,8 @@ pub struct SyncOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protected_branches: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub closed_prs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub partially_merged: Vec<PartiallyMergedJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub restacked_branches: Vec<String>,
@@ -148,6 +150,7 @@ pub struct PredictedConflictJson {
 /// Passed from `sync_plan::run()` to `build_plan()`.
 pub(super) struct SyncPlanData {
     pub merged_candidates: Vec<MergedCandidateJson>,
+    pub closed_prs: Vec<String>,
     pub partially_merged: Vec<PartiallyMergedJson>,
     pub upstream_gone_protected: Vec<String>,
     pub upstream_gone_deletable: Vec<UpstreamGoneDeleteJson>,
@@ -299,6 +302,7 @@ pub(super) fn build(
         deleted_branches,
         skipped_branches,
         protected_branches: stats.protected_branches.clone(),
+        closed_prs: stats.closed_prs.clone(),
         partially_merged,
         restacked_branches: stats.restacked_branches.clone(),
         reconciled_branches,
@@ -362,6 +366,7 @@ pub(super) fn build_plan(
         deleted_branches: vec![],
         skipped_branches: vec![],
         protected_branches: vec![],
+        closed_prs: plan_data.closed_prs,
         partially_merged: plan_data.partially_merged,
         restacked_branches: vec![],
         reconciled_branches: vec![],
@@ -622,6 +627,7 @@ mod tests {
         use crate::commands::sync_plan::TrunkPlan;
 
         let plan_data = SyncPlanData {
+            closed_prs: vec![],
             merged_candidates: vec![
                 MergedCandidateJson {
                     name: "feat-a".to_string(),
@@ -723,6 +729,7 @@ mod tests {
 
         let plan_data = SyncPlanData {
             merged_candidates: vec![],
+            closed_prs: vec![],
             partially_merged: vec![],
             upstream_gone_protected: vec![],
             upstream_gone_deletable: vec![],

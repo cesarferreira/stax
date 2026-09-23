@@ -36,6 +36,7 @@ pub(super) struct SyncStats {
     pub(super) restacked_branches: Vec<String>,
     pub(super) imported_branches_updated: Vec<String>,
     pub(super) partially_merged: Vec<PartialMergeRecord>,
+    pub(super) closed_prs: Vec<String>,
     pub(super) protected_branches: Vec<String>,
     pub(super) trunk_not_updated: Option<TrunkNotUpdated>,
     pub(super) cleanup_skips: Vec<CleanupSkip>,
@@ -1025,10 +1026,14 @@ impl SyncContext {
             merged_branch_names = merged.into_iter().map(|m| m.branch).collect();
         }
 
+        let retained_closed = retained_closed_prs(&self.stack, &merged_branch_names);
         let mut upstream_gone_deletable: Vec<String> = Vec::new();
         if self.delete_upstream_gone {
             let detected = find_upstream_gone_branches(&self.workdir, &self.stack.trunk)?;
             for branch in detected {
+                if retained_closed.contains(&branch) {
+                    continue;
+                }
                 if has_unique_commits_since_any_base(
                     &self.workdir,
                     &branch,
@@ -1088,6 +1093,7 @@ impl SyncContext {
                 Some(&self.stack),
             );
         }
+        print_retained_closed_prs(&self.stack, &retained_closed);
         if !restack_candidates.is_empty() {
             let word = if restack_candidates.len() == 1 {
                 "branch"
@@ -1352,6 +1358,12 @@ impl SyncContext {
                     )?;
                     (merged, partially_merged_notes)
                 };
+            let merged_branch_names: Vec<String> =
+                merged.iter().map(|info| info.branch.clone()).collect();
+            self.stats.closed_prs = retained_closed_prs(&self.stack, &merged_branch_names);
+            if !self.quiet {
+                print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
+            }
             self.step_timings.push((
                 "detect merged branches".to_string(),
                 detect_merged_started_at.elapsed(),
@@ -1365,9 +1377,6 @@ impl SyncContext {
             let forge_client = init_forge_client(&repo, &self.config);
 
             if !merged.is_empty() {
-                let merged_branch_names: Vec<String> =
-                    merged.iter().map(|m| m.branch.clone()).collect();
-
                 if !self.quiet {
                     print_cleanup_candidates("merged", &merged_branch_names);
                 }
@@ -1905,6 +1914,10 @@ impl SyncContext {
             }
             Ok(repo)
         } else {
+            self.stats.closed_prs = retained_closed_prs(&self.stack, &[]);
+            if !self.quiet {
+                print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
+            }
             Ok(repo)
         }
     }
@@ -1925,6 +1938,9 @@ impl SyncContext {
             let mut gone: Vec<String> = Vec::with_capacity(detected_gone.len());
             let mut protected_gone: Vec<String> = Vec::new();
             for branch in detected_gone {
+                if self.stats.closed_prs.contains(&branch) {
+                    continue;
+                }
                 if has_unique_commits_since_any_base(
                     &self.workdir,
                     &branch,
@@ -3551,6 +3567,41 @@ fn merge_planned_merged_detection(
     by_branch.into_values().collect()
 }
 
+pub(super) fn retained_closed_prs(stack: &Stack, merged: &[String]) -> Vec<String> {
+    let mut closed: Vec<String> = stack
+        .branches
+        .iter()
+        .filter(|(branch, info)| {
+            *branch != &stack.trunk
+                && !merged.contains(*branch)
+                && matches!(
+                    info.pr_state.as_deref(),
+                    Some(state) if state.eq_ignore_ascii_case("closed")
+                )
+        })
+        .map(|(branch, _)| branch.clone())
+        .collect();
+    closed.sort();
+    closed
+}
+
+pub(super) fn print_retained_closed_prs(stack: &Stack, closed: &[String]) {
+    for branch in closed {
+        let number = stack
+            .branches
+            .get(branch)
+            .and_then(|info| info.pr_number)
+            .map(|number| format!(" (PR #{number})"))
+            .unwrap_or_default();
+        println!(
+            "    {} {}{} — closed without merge; retained (use stax sweep --delete --include-closed to discard)",
+            "↷".yellow(),
+            branch.cyan(),
+            number
+        );
+    }
+}
+
 pub(super) fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
@@ -3678,8 +3729,14 @@ pub(super) fn find_merged_branches(
             continue;
         }
 
-        // Check if remote branch was deleted (strong signal it was merged)
-        if !remote_branches.contains(branch.as_str()) {
+        // A deleted remote head does not prove integration when the PR was
+        // explicitly closed without merging.
+        if !remote_branches.contains(branch.as_str())
+            && !matches!(
+                info.pr_state.as_deref(),
+                Some(state) if state.eq_ignore_ascii_case("closed")
+            )
+        {
             // Remote branch doesn't exist and had a PR - likely merged and deleted
             merged.push(MergedBranchInfo {
                 branch: branch.clone(),

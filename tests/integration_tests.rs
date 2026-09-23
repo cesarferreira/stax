@@ -5582,6 +5582,36 @@ fn test_sync_does_not_treat_closed_unmerged_pr_as_merged() {
         branches.iter().any(|b| b == &branch_name),
         "Expected closed-but-unmerged PR branch to remain after sync"
     );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains(&branch_name) && stdout.contains("closed without merge"),
+        "Expected sync to report the retained closed PR branch: {}",
+        stdout
+    );
+
+    // Removing the remote head does not turn a closed, unmerged PR into a merge.
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+    let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    assert!(
+        repo.list_branches().contains(&branch_name),
+        "Closed, unmerged work must survive even when its upstream disappears"
+    );
+    let output = repo.run_stax(&["sync", "--json", "--force"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid sync JSON");
+    assert_eq!(result["closed_prs"], serde_json::json!([branch_name]));
+    let output = repo.run_stax(&["sync", "--json", "--force", "--no-delete"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid sync JSON");
+    assert_eq!(result["closed_prs"], serde_json::json!([branch_name]));
+    let output = repo.run_stax(&["sync", "--dry-run", "--json", "--no-delete"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid sync plan JSON");
+    assert_eq!(result["closed_prs"], serde_json::json!([branch_name]));
 }
 
 #[test]

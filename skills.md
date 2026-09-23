@@ -28,8 +28,8 @@ stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
 stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
-stax sync|rs                   # Sync trunk + clean merged branches
-stax sweep                     # Classify + optionally delete merged/gone/stale branches
+stax sync|rs                   # Sync trunk + clean merged branches; report closed PRs without deleting
+stax sweep                     # Classify merged/closed-pr/gone/stale/active; --delete --include-closed opts into discarding closed PR branches
 stax stats                     # Single-screen local stacking health snapshot (--current, --json, --ci)
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates (no trunk fetch; offline-friendly)
@@ -339,7 +339,7 @@ stax merge-when-ready              # Backward-compatible alias
 # For merge --queue, timeout is a hard polling deadline: cap the final sleep to
 # the remaining budget and never poll the forge at or after the deadline.
 
-stax rs                            # Sync trunk + clean merged branches
+stax rs                            # Sync trunk + clean merged; report closed-but-unmerged PR branches without deleting
 # In st web, Sync is confirmed and uses the active repository (not server cwd):
 # fetch + trunk update + merged-local cleanup; clean tree required, no stash/restack.
 # Refresh remains read-only. The stack pane auto-fits long names; drag/Arrow-resize
@@ -352,6 +352,7 @@ stax sync --json --force           # Same as --json but also auto-confirms branc
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
+# A deleted remote head does not make a known CLOSED PR merged. Closed branches stay local; stax sweep --delete --include-closed discards them explicitly.
 # Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches and tags with --prune (slower; default is trunk-only fetch + ls-remote)
@@ -370,8 +371,9 @@ stax sync --get                    # Before restacking, fetch each branch of the
 # --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; error message names --stash; stax sync --json --stash succeeds on a dirty tree (stashes before sync, restores after); --json conflicts with --continue.
 # trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 
-stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
-stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation
+stax sweep                         # Classify ALL local branches (merged/closed-pr/gone/stale/active) — read-only
+stax sweep --delete                # Delete merged/tracked-merged PRs + safe upstream-gone branches; closed PRs stay
+stax sweep --delete --include-closed # Also discard closed-but-unmerged PR branches (confirmed)
 stax sweep --delete --include-stale  # Also delete stale branches
 stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
