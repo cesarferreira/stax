@@ -140,6 +140,36 @@ fn sync_get_json_reports_reconciled_branches() {
 }
 
 #[test]
+fn sync_get_json_reports_branch_without_remote() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+
+    repo.run_stax(&["bc", "feature-get-no-remote"]);
+    let branch = repo.current_branch();
+
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --json failed: {}",
+        TestRepo::stderr(&out)
+    );
+
+    let stdout = TestRepo::stdout(&out);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}\n---\n{stdout}"));
+    assert!(
+        parsed["skipped_branches"]
+            .as_array()
+            .is_some_and(|skipped| {
+                skipped.iter().any(|entry| {
+                    entry["name"] == branch.as_str() && entry["reason"] == "no remote branch"
+                })
+            }),
+        "branch without a remote missing from skipped_branches: {parsed}"
+    );
+}
+
+#[test]
 fn sync_get_dry_run_previews_without_mutating() {
     let repo = TestRepo::new_with_remote();
     repo.git(&["push", "-u", "origin", "main"]);
@@ -188,16 +218,24 @@ fn sync_get_skips_frozen_branch() {
 
     update_remote_branch_in_clone(&repo, child, "other-machine.txt", "other machine content");
 
-    let out = repo.run_stax(&["sync", "--get"]);
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
     assert!(
         out.status.success(),
-        "sync --get failed: {}",
+        "sync --get --json failed: {}",
         TestRepo::stderr(&out)
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = TestRepo::stdout(&out);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}\n---\n{stdout}"));
     assert!(
-        stdout.contains("Skipping frozen"),
-        "expected 'Skipping frozen' message; got: {stdout}"
+        parsed["skipped_branches"]
+            .as_array()
+            .is_some_and(|skipped| {
+                skipped
+                    .iter()
+                    .any(|entry| entry["name"] == child.as_str() && entry["reason"] == "frozen")
+            }),
+        "frozen branch {child} missing from skipped_branches: {parsed}"
     );
 
     assert_eq!(
@@ -230,16 +268,25 @@ fn sync_get_skips_branch_checked_out_in_other_worktree() {
     update_remote_branch_in_clone(&repo, parent, "other-machine.txt", "other machine content");
 
     repo.run_stax(&["checkout", child]).assert_success();
-    let out = repo.run_stax(&["sync", "--get"]);
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
     assert!(
         out.status.success(),
-        "sync --get failed: {}",
+        "sync --get --json failed: {}",
         TestRepo::stderr(&out)
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = TestRepo::stdout(&out);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}\n---\n{stdout}"));
     assert!(
-        stdout.contains("checked out in another worktree"),
-        "expected worktree-skip message; got: {stdout}"
+        parsed["skipped_branches"]
+            .as_array()
+            .is_some_and(|skipped| {
+                skipped.iter().any(|entry| {
+                    entry["name"] == parent.as_str()
+                        && entry["reason"] == "checked out in another worktree"
+                })
+            }),
+        "worktree branch {parent} missing from skipped_branches: {parsed}"
     );
 
     assert_eq!(

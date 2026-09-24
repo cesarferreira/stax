@@ -253,6 +253,7 @@ pub(super) fn build(
     let skipped_branches = stats
         .cleanup_skips
         .iter()
+        .chain(stats.get_skips.iter())
         .map(|s| SkippedBranchJson {
             name: s.branch.clone(),
             reason: s.reason.clone(),

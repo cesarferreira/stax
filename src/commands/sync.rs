@@ -43,7 +43,7 @@ pub(super) struct SyncStats {
     pub(super) checkout_change: Option<CheckoutChange>,
     pub(super) stash: StashOutcome,
     pub(super) reconciled_branches: Vec<ReconciledBranchRecord>,
-    pub(super) get_skipped_worktree_branches: Vec<String>,
+    pub(super) get_skips: Vec<CleanupSkip>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,15 +111,14 @@ impl SyncStats {
         });
     }
 
-    fn record_get_worktree_skip(&mut self, branch: &str) {
-        if self
-            .get_skipped_worktree_branches
-            .iter()
-            .any(|skipped| skipped == branch)
-        {
+    fn record_get_skip(&mut self, branch: &str, reason: &'static str) {
+        if self.get_skips.iter().any(|skip| skip.branch == branch) {
             return;
         }
-        self.get_skipped_worktree_branches.push(branch.to_string());
+        self.get_skips.push(CleanupSkip {
+            branch: branch.to_string(),
+            reason: reason.to_string(),
+        });
     }
 }
 
@@ -2249,6 +2248,7 @@ impl SyncContext {
             let frozen = BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false);
             if frozen {
                 frozen_branches.push(branch.clone());
+                self.stats.record_get_skip(branch, "frozen");
             } else {
                 candidate_branches.push(branch.clone());
             }
@@ -2276,7 +2276,8 @@ impl SyncContext {
                 other_path != current_path
             });
             if other_worktree.is_some() {
-                self.stats.record_get_worktree_skip(&branch);
+                self.stats
+                    .record_get_skip(&branch, "checked out in another worktree");
             } else {
                 branches.push(branch);
             }
@@ -2331,7 +2332,10 @@ impl SyncContext {
             };
 
             let (message, action) = match outcome {
-                crate::commands::get::ReconcileOutcome::NoRemote => (None, None),
+                crate::commands::get::ReconcileOutcome::NoRemote => {
+                    self.stats.record_get_skip(branch, "no remote branch");
+                    (None, None)
+                }
                 crate::commands::get::ReconcileOutcome::UpToDate => (None, None),
                 crate::commands::get::ReconcileOutcome::Created => (
                     Some(format!(
@@ -4780,10 +4784,10 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
         ));
     }
 
-    for branch in &stats.get_skipped_worktree_branches {
+    for skip in &stats.get_skips {
         lines.push(format!(
-            "⚠ Skipped {} for --get reconciliation (checked out in another worktree)",
-            branch
+            "⚠ Skipped {} for --get reconciliation ({})",
+            skip.branch, skip.reason
         ));
     }
 
