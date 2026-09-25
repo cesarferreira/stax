@@ -1,8 +1,8 @@
 use super::operation::report_operation;
 use super::{
-    BranchDetails, BranchDiff, BranchSummary, DiffLine, DiffLineKind, DiffStatLine, OperationError,
-    OperationErrorDetails, OperationErrorKind, OperationReporter, OperationRequest,
-    OperationResult, OperationSideEffects, RepositorySnapshot,
+    BranchDetails, BranchDiff, BranchNameContext, BranchSummary, DiffLine, DiffLineKind,
+    DiffStatLine, OperationError, OperationErrorDetails, OperationErrorKind, OperationReporter,
+    OperationRequest, OperationResult, OperationSideEffects, RepositorySnapshot,
 };
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
 use crate::config::Config;
@@ -290,6 +290,28 @@ impl RepositorySession {
                 self.repository_root.display()
             )
         })
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(super) fn literal_branch_name_context(
+        &self,
+        request: &OperationRequest,
+    ) -> Result<BranchNameContext, OperationError> {
+        let config = Config::load_for_repo(self.repository_root()).map_err(|error| {
+            OperationError::from_source(
+                request.clone(),
+                OperationErrorKind::InvalidInput,
+                OperationErrorDetails::None,
+                "Could not load the branch naming configuration",
+                "Fix the stax configuration and retry",
+                &error,
+                None,
+                OperationSideEffects::None,
+            )
+        })?;
+        let mut context = BranchNameContext::literal();
+        context.lowercase = config.branch.lowercase;
+        Ok(context)
     }
 
     #[allow(clippy::result_large_err)]
