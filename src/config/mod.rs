@@ -36,6 +36,8 @@ pub struct Config {
     #[serde(default)]
     pub restack: RestackConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub skills: SkillsConfig,
     #[serde(default)]
     pub board: BoardConfig,
@@ -103,6 +105,24 @@ impl Default for RestackConfig {
         Self {
             preflight_auto_repair: true,
             preflight_warn: true,
+        }
+    }
+}
+
+/// User-configurable sync behaviour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Ask before deleting merged or upstream-gone branches during an
+    /// interactive sync (default: true). Branches checked out in a linked
+    /// worktree still prompt.
+    #[serde(default = "default_true")]
+    pub confirm_delete: bool,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            confirm_delete: true,
         }
     }
 }

@@ -53,6 +53,9 @@
 # preflight_auto_repair = true # use merge-base when stored parent boundary would replay too much
 # preflight_warn = true        # print a notice when that automatic repair happens
 
+[sync]
+# confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
+
 [skills]
 # harnesses = ["claude", "codex"] # which agent harnesses get skill files
 #   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).

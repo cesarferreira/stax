@@ -746,6 +746,7 @@ fn test_default_config() {
     assert!(config.auth.use_gh_cli);
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
+    assert!(config.sync.confirm_delete);
 }
 
 #[test]
@@ -758,6 +759,23 @@ fn test_default_toml_serializes() {
     assert!(s.contains(r#""auto" | "off" | "link""#));
     assert!(s.contains(r#""comment" | "body" | "both" | "off""#));
     assert!(s.contains("[worktree.hooks]"));
+    assert!(s.contains("[sync]"));
+    assert!(s.contains("# confirm_delete = true"));
+}
+
+#[test]
+fn sync_confirm_delete_config_parses() {
+    let config: Config = toml::from_str("[sync]\nconfirm_delete = false\n").unwrap();
+    assert!(!config.sync.confirm_delete);
+
+    let config: Config = toml::from_str("[sync]\n").unwrap();
+    assert!(config.sync.confirm_delete);
+}
+
+#[test]
+fn sync_confirm_delete_config_rejects_non_bool() {
+    let result = toml::from_str::<Config>("[sync]\nconfirm_delete = \"never\"\n");
+    assert!(result.is_err());
 }
 
 #[test]
