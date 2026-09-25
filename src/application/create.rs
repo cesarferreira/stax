@@ -3,10 +3,9 @@
 use super::branch_name::BranchNameResult;
 use super::operation::report_operation;
 use super::{
-    BranchNameContext, BranchNameError, OperationError, OperationErrorDetails, OperationErrorKind,
-    OperationEvent, OperationOutcome, OperationProgress, OperationReceipt, OperationReporter,
-    OperationRequest, OperationResult, OperationSideEffects, OperationStage, RepositorySession,
-    format_branch_name,
+    BranchNameError, OperationError, OperationErrorDetails, OperationErrorKind, OperationEvent,
+    OperationOutcome, OperationProgress, OperationReceipt, OperationReporter, OperationRequest,
+    OperationResult, OperationSideEffects, OperationStage, RepositorySession, format_branch_name,
 };
 use crate::application::repository::MutationTargets;
 use crate::engine::BranchMetadata;
@@ -55,7 +54,8 @@ impl RepositorySession {
         parent: &str,
         reporter: &mut dyn OperationReporter,
     ) -> OperationResult {
-        let result = format_branch_name(name, &BranchNameContext::literal())
+        let context = self.literal_branch_name_context(request)?;
+        let result = format_branch_name(name, &context)
             .map_err(|error| map_branch_name_error(request, error))?;
         self.with_mutation(
             request,

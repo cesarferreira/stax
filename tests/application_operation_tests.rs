@@ -226,6 +226,28 @@ fn rename_updates_ref_metadata_children_and_returns_undoable_receipt() {
 }
 
 #[test]
+fn create_and_rename_preserve_case_when_repository_config_disables_lowercasing() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    std::fs::write(
+        repo.path().join("stax.toml"),
+        "[branch]\nlowercase = false\n",
+    )
+    .expect("write repository stax config");
+
+    let session = RepositorySession::open(repo.path()).unwrap();
+    session
+        .create_empty_branch("CamelCase", "main", &mut NoopOperationReporter)
+        .expect("create should honor branch.lowercase = false");
+    assert_eq!(repo.current_branch(), "CamelCase");
+
+    session
+        .rename_branch("CamelCase", "RenamedCase", &mut NoopOperationReporter)
+        .expect("rename should honor branch.lowercase = false");
+    assert_eq!(repo.current_branch(), "RenamedCase");
+}
+
+#[test]
 fn rename_rejects_the_trunk_branch_without_changing_refs() {
     let repo = TestRepo::new();
     repo.set_trunk("main");
