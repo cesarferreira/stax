@@ -59,6 +59,13 @@ const SKILL_LOCATIONS: &[SkillLocation] = &[
         detect_relative_path: ".pi",
         has_frontmatter: true,
     },
+    SkillLocation {
+        id: "hermes",
+        name: "Hermes",
+        relative_path: ".hermes/skills/stax/SKILL.md",
+        detect_relative_path: ".hermes",
+        has_frontmatter: true,
+    },
 ];
 
 /// Which harnesses receive skill installs/updates.
@@ -945,6 +952,17 @@ mod tests {
             .expect("pi skill location should be registered");
         assert_eq!(pi.relative_path, ".pi/agent/skills/stax/SKILL.md");
         assert!(pi.has_frontmatter);
+    }
+
+    #[test]
+    fn test_skill_locations_include_hermes() {
+        let hermes = SKILL_LOCATIONS
+            .iter()
+            .find(|loc| loc.id == "hermes")
+            .expect("hermes skill location should be registered");
+        assert_eq!(hermes.name, "Hermes");
+        assert_eq!(hermes.relative_path, ".hermes/skills/stax/SKILL.md");
+        assert!(hermes.has_frontmatter);
     }
 
     #[test]

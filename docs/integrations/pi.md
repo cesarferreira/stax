@@ -47,5 +47,5 @@ manually with `--agent-arg` if your pi setup supports one.
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [Hermes](hermes.md) · [OpenCode](opencode.md)
 - [PR templates + AI](pr-templates-and-ai.md)

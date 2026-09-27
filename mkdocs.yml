@@ -85,6 +85,7 @@ nav:
       - Claude Code: integrations/claude-code.md
       - Codex: integrations/codex.md
       - Gemini CLI: integrations/gemini-cli.md
+      - Hermes: integrations/hermes.md
       - OpenCode: integrations/opencode.md
       - tmux: integrations/tmux.md
   - Compatibility:

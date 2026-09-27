@@ -65,7 +65,7 @@ fn default_board_mine_only() -> bool {
 /// Which agent harnesses receive stax skill files.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillsConfig {
-    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`).
+    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`, `hermes`).
     /// Unset = auto (detected harnesses plus any that already have a skill file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harnesses: Option<Vec<String>>,
@@ -294,7 +294,7 @@ pub struct AiFeatureConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
-    /// AI agent to use: "claude", "codex", "gemini", "opencode", or "pi" (default: auto-detect)
+    /// AI agent to use: "claude", "codex", "gemini", "opencode", "pi", or "hermes" (default: auto-detect)
     #[serde(default)]
     pub agent: Option<String>,
     /// Model to use with the AI agent (default: agent's own default)

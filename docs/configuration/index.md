@@ -104,10 +104,10 @@ single_stack = "on"    # "on" | "off"
 
 [skills]
 # harnesses = ["claude", "codex"] # agent harnesses that receive skill files
-#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+#   valid ids: claude, codex, cursor, hermes, opencode, pi. Unset = auto (detected + already installed).
 
 [ai]
-# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" | "hermes" — global default
 # model = "claude-opus-5"
 
 # Per-feature overrides — optional, fall back to [ai] above
