@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.114.0] - 2026-10-05
+
+### 🚀 Features
+
+- *(sync)* Add --get flag to reconcile stack branches against remote ([#883](https://github.com/cesarferreira/stax/issues/883))
+- *(refresh)* Add --get flag to reconcile stack branches against remote
+- *(sync)* Add confirm_delete config to skip merged-branch prompts ([#901](https://github.com/cesarferreira/stax/issues/901))
+- Add Hermes agent integration ([#905](https://github.com/cesarferreira/stax/issues/905))
+
+### 🐛 Bug Fixes
+
+- *(get)* Scope --force dirty-tree guard to tracked changes with a clearer error ([#884](https://github.com/cesarferreira/stax/issues/884))
+- *(sync)* Retain and report closed unmerged PR branches ([#898](https://github.com/cesarferreira/stax/issues/898))
+- *(sync)* Report --get skips in JSON ([#899](https://github.com/cesarferreira/stax/issues/899))
+
+### 💼 Other
+
+- Removed beads
 ## [0.113.1] - 2026-09-15
 
 ### 🐛 Bug Fixes
@@ -13,6 +31,10 @@ All notable changes to this project will be documented in this file.
 - Bd init: initialize beads issue tracking
 - Bd integration
 - Added multi machine docs
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.113.0] - 2026-09-09
 
 ### 🚀 Features
