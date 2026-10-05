@@ -58,7 +58,7 @@
 
 [skills]
 # harnesses = ["claude", "codex"] # which agent harnesses get skill files
-#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+#   valid ids: claude, codex, cursor, hermes, opencode, pi. Unset = auto (detected + already installed).
 
 [board]
 # mine_only = true # `st board` starts filtered to PRs/issues you authored; toggle with `a` (persisted here)

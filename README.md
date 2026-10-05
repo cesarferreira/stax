@@ -476,6 +476,7 @@ AI and editor integration guides:
 - [Claude Code](docs/integrations/claude-code.md)
 - [Codex](docs/integrations/codex.md)
 - [Gemini CLI](docs/integrations/gemini-cli.md)
+- [Hermes](docs/integrations/hermes.md)
 - [OpenCode](docs/integrations/opencode.md)
 - [pi](docs/integrations/pi.md)
 - [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)

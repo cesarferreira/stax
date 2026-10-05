@@ -201,7 +201,7 @@ async fn skills_update_continues_after_harness_failure_and_exits_nonzero() {
         ".codex/skills/stax should remain a regular file"
     );
 
-    // All four later harnesses must have been written successfully.
+    // All five later harnesses must have been written successfully.
     assert!(
         home.join(".config/opencode/skills/stax/SKILL.md").exists(),
         "opencode skill missing"
@@ -213,6 +213,10 @@ async fn skills_update_continues_after_harness_failure_and_exits_nonzero() {
     assert!(
         home.join(".cursor/skills/stax/SKILL.md").exists(),
         "cursor skill missing"
+    );
+    assert!(
+        home.join(".hermes/skills/stax/SKILL.md").exists(),
+        "hermes skill missing"
     );
     assert!(
         home.join(".pi/agent/skills/stax/SKILL.md").exists(),

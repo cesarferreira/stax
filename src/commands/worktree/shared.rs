@@ -895,6 +895,7 @@ pub fn yolo_flag_for_agent(agent: &str) -> Option<&'static str> {
         "claude" => Some("--dangerously-skip-permissions"),
         "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
         "gemini" => Some("--yolo"),
+        "hermes" => Some("--yolo"),
         // "opencode" and "pi" intentionally unsupported; see function-level
         // docstring.
         _ => None,
@@ -912,6 +913,7 @@ pub fn build_agent_launch_spec_with_options(
     let model = model.filter(|value| !value.trim().is_empty());
 
     let mut args = Vec::new();
+    let mut positional_args = passthrough_args;
     match agent {
         "claude" | "codex" | "opencode" | "pi" => {
             if let Some(ref model) = model {
@@ -921,6 +923,20 @@ pub fn build_agent_launch_spec_with_options(
         "gemini" => {
             if let Some(ref model) = model {
                 args.extend(["-m".to_string(), model.clone()]);
+            }
+        }
+        // Hermes has no bare positional-prompt mode: a bare word would be parsed
+        // as a subcommand. `-z/--oneshot` is the documented script/pipe entry
+        // point and takes the prompt as its value, so the prompt (the first
+        // passthrough arg) is moved into `-z` and the remainder stays positional.
+        "hermes" => {
+            if let Some(ref model) = model {
+                args.extend(["-m".to_string(), model.clone()]);
+            }
+            if let Some((prompt, rest)) = positional_args.split_first() {
+                args.push("-z".to_string());
+                args.push(prompt.clone());
+                positional_args = rest.to_vec();
             }
         }
         _ => bail!("Unsupported AI agent: {}", agent),
@@ -942,7 +958,7 @@ pub fn build_agent_launch_spec_with_options(
     // that treat trailing positional args as the prompt still work.
     args.extend(extra_agent_args.iter().cloned());
 
-    args.extend(passthrough_args);
+    args.extend(positional_args);
 
     let display = if let Some(model) = model {
         format!("{} ({})", agent, model)
@@ -1610,11 +1626,58 @@ mod tests {
             Some("--dangerously-bypass-approvals-and-sandbox")
         );
         assert_eq!(yolo_flag_for_agent("gemini"), Some("--yolo"));
+        assert_eq!(yolo_flag_for_agent("hermes"), Some("--yolo"));
         // opencode and pi are intentionally unsupported for --yolo right now
         // (see yolo_flag_for_agent docstring).
         assert_eq!(yolo_flag_for_agent("opencode"), None);
         assert_eq!(yolo_flag_for_agent("pi"), None);
         assert_eq!(yolo_flag_for_agent("unknown"), None);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_hermes_moves_prompt_into_oneshot_flag() {
+        let launch = build_agent_launch_spec_with_options(
+            "hermes",
+            Some("anthropic/claude-sonnet-4.6".to_string()),
+            vec!["trace the flaky test".to_string()],
+            false,
+            &[],
+        )
+        .expect("hermes launch");
+
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "hermes");
+                // A bare positional arg would be parsed by hermes as a
+                // subcommand, so the prompt must be carried by -z/--oneshot.
+                assert_eq!(
+                    args,
+                    vec![
+                        "-m".to_string(),
+                        "anthropic/claude-sonnet-4.6".to_string(),
+                        "-z".to_string(),
+                        "trace the flaky test".to_string(),
+                    ]
+                );
+                assert_eq!(display, "hermes (anthropic/claude-sonnet-4.6)");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
+    }
+
+    #[test]
+    fn build_agent_launch_spec_hermes_without_prompt_has_no_oneshot_flag() {
+        let launch = build_agent_launch_spec_with_options("hermes", None, vec![], false, &[])
+            .expect("hermes launch without prompt");
+
+        match launch {
+            LaunchSpec::Process { args, .. } => assert_eq!(args, Vec::<String>::new()),
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
     }
 
     #[test]

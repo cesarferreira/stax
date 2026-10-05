@@ -163,6 +163,7 @@ st generate --pr-body --agent codex --model gpt-5.6-terra
 st generate --pr-body --agent claude --model claude-haiku-4-5
 st generate --pr-body --agent gemini --model gemini-3.8-flash
 st generate --pr-body --agent opencode
+st generate --pr-body --agent hermes
 st generate --pr-body --edit
 st generate --pr-body --template feature
 st gen --pr-title --agent claude

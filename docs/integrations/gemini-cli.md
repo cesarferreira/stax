@@ -33,5 +33,5 @@ st gen --commit-msg --agent gemini
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [OpenCode](opencode.md) · [pi](pi.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [Hermes](hermes.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)

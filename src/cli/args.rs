@@ -1380,7 +1380,7 @@ pub(crate) enum Commands {
         /// Install AI agent skills without prompting
         #[arg(long, conflicts_with_all = ["skip_skills", "print", "refresh"])]
         install_skills: bool,
-        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,opencode,pi)
+        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,hermes,opencode,pi)
         #[arg(
             long,
             value_name = "LIST",

@@ -35,7 +35,7 @@ fn models_file() -> &'static ModelsFile {
     })
 }
 
-const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "pi"];
+const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "pi", "hermes"];
 
 #[derive(Clone, Copy, Debug)]
 enum GenerateTarget {
@@ -724,6 +724,7 @@ fn auto_detect_agent(available: &[String]) -> Result<String> {
          - gemini (https://github.com/google-gemini/gemini-cli)\n  \
          - opencode (https://opencode.ai)\n  \
          - pi (https://pi.dev)\n  \
+         - hermes (https://hermes-agent.nousresearch.com)\n  \
          Or set manually in ~/.config/stax/config.toml:\n    \
          [ai]\n    \
          agent = \"claude\"",
@@ -1371,6 +1372,17 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
                 args.extend(["--model".into(), m.into()]);
             }
         }
+        // `hermes -z` one-shot mode prints only the final response text, but it
+        // takes the prompt as an argument (there is no stdin-prompt mode), so
+        // the prompt is passed on argv instead of being written to stdin.
+        "hermes" => {
+            args.push("-z".into());
+            args.push(prompt.to_string());
+            write_prompt_to_stdin = false;
+            if let Some(m) = model {
+                args.extend(["-m".into(), m.into()]);
+            }
+        }
         _ => bail!("Unsupported agent: {}", agent),
     }
 
@@ -1481,6 +1493,11 @@ mod tests {
     #[test]
     fn validate_agent_name_accepts_pi() {
         assert!(validate_agent_name("pi").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_accepts_hermes() {
+        assert!(validate_agent_name("hermes").is_ok());
     }
 
     #[test]
