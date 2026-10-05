@@ -4,7 +4,7 @@
 
 **Goal:** Accelerate stax feature development and bug fixing via a git-native worktree → plan → implement → review → verify → (optional) benchmark → commit → draft-PR pipeline with a bounded repair loop.
 
-**Trigger:** For any code change to the stax CLI (new commands, flags, bugfixes, refactors, behavior changes), run the `/stax-dev` prompt. It orchestrates the `planner`, `codex`, `claude-reviewer`, `verifier`, `benchmarker`, and `release-manager` agents (`.pi/agents/`) via the `subagent` tool. Direct usage/architecture questions don't need the pipeline. Each task runs in its own worktree on a stacked branch; commit + draft PR are automatic when the scoped draft gate is green; **merging to main is never automatic** and promoting a draft to ready-for-review is HITL-gated.
+**Trigger:** For any code change to the stax CLI (new commands, flags, bugfixes, refactors, behavior changes), run the `/stax-dev` prompt. It orchestrates the project-local `stax-planner`, `stax-implementer`, `stax-reviewer`, `stax-verifier`, `stax-benchmarker`, and `stax-release-manager` definitions under `.claude/agents/`. The former `.pi/agents/` definitions were intentionally moved to personal dotfiles and are not the project harness. Direct usage/architecture questions don't need the pipeline. Each task runs in its own worktree on a stacked branch; commit + current-branch-only draft PR submission (`stax branch submit --draft --ai --yes`) is automatic when the applicable gate is green; **merging to main is never automatic** and promoting a draft to ready-for-review is HITL-gated.
 
 **Change History:**
 | Date | Change | Target | Reason |
@@ -13,6 +13,7 @@
 | 2026-07-25 | Git-native evolution: added `benchmarker` (optional perf gate) + `stax-benchmark` skill; worktree-per-task + stacked branch; auto commit-on-green + auto draft PR; hard "never merge to main" rule | benchmarker.md, stax-benchmark/, release-manager.md, codex.md, stax-release/, stax-dev.md | Adopt git-native workflow constraints; keep verifier as mandatory correctness gate |
 | 2026-07-28 | Added `fallbackModels: claude-bridge/claude-sonnet-4-6` to the four `cursor/composer-2.5` agents so a provider outage (quota/auth/timeout) auto-routes instead of stalling the run; codex also falls back to `openai-codex/gpt-5.6-terra`. Extended benchmarker skip rule to cover pure delegation/deletion diffs with no new local hot-path work | codex.md, verifier.md, benchmarker.md, release-manager.md | Cursor was down + OpenAI-Codex usage-limited mid-run (stax-dev-03), forcing manual model overrides; benchmarker also burned time trying to bench a no-local-compute change |
 | 2026-08-26 | Split verification into a fast scoped draft gate and a full CI/ready-for-review gate | AGENTS.md, verifier.md, stax-verify/, stax-dev.md | Avoid repeating the process-heavy full integration suite in every isolated worktree while retaining full validation before review or merge |
+| 2026-08-27 | Reconciled the project-local harness with its documented git-native pipeline: added independent review, optional benchmark, bounded repair artifacts, and release ownership with current-branch-only draft submission | `.claude/agents/`, `.claude/skills/stax-dev/`, `skills.md`, AGENTS.md | Restore the missing commit/draft-PR path and keep full-stack submit, undraft, and merge outside automation |
 
 ## Verification Tiers
 
