@@ -102,6 +102,10 @@ single_stack = "on"    # "on" | "off"
                                # boundary would replay a much larger range
 # preflight_warn = true        # print a notice when that automatic repair happens
 
+[sync]
+# confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
+                        # (branches checked out in a linked worktree still prompt)
+
 [skills]
 # harnesses = ["claude", "codex"] # agent harnesses that receive skill files
 #   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).

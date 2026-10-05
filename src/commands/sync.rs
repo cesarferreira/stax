@@ -388,6 +388,11 @@ impl SyncContext {
         }
         let current_after_deletions = current.clone();
         let effective_quiet = quiet || json;
+        let delete_confirm_strategy = if config.sync.confirm_delete || effective_quiet {
+            DeleteConfirmStrategy::PerBranch
+        } else {
+            DeleteConfirmStrategy::BulkNonBlocking
+        };
         Ok((
             Self {
                 workdir,
@@ -428,7 +433,7 @@ impl SyncContext {
                 stats: SyncStats::default(),
                 tx: None,
                 trunk_planned: false,
-                delete_confirm_strategy: DeleteConfirmStrategy::PerBranch,
+                delete_confirm_strategy,
                 planned_merged_detection: None,
                 get,
             },
@@ -1049,12 +1054,12 @@ impl SyncContext {
             restack_candidates = self.planned_restack_branches(repo)?;
         }
 
-        let has_deletion_candidates =
-            !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
+        let confirm_deletions = self.delete_confirm_strategy == DeleteConfirmStrategy::PerBranch
+            && (!merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty());
 
         // A trunk fast-forward is what `stax sync` is *for* — don't ask about it on its own.
         // Only branch deletions and history-rewriting restacks are worth a prompt.
-        let needs_confirm = has_deletion_candidates || !restack_candidates.is_empty();
+        let needs_confirm = confirm_deletions || !restack_candidates.is_empty();
 
         if !needs_confirm {
             return Ok(SyncFlow::Continue);
@@ -1110,7 +1115,7 @@ impl SyncContext {
             println!();
         }
 
-        let selected = if has_deletion_candidates {
+        let selected = if confirm_deletions {
             let options = [
                 "Continue — delete all listed branches",
                 "Choose action for each branch",
@@ -1134,7 +1139,7 @@ impl SyncContext {
                 .interact()?
         };
 
-        if has_deletion_candidates {
+        if confirm_deletions {
             match selected {
                 0 => {
                     self.delete_confirm_strategy = DeleteConfirmStrategy::BulkNonBlocking;
