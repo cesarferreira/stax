@@ -672,6 +672,11 @@ automatically uses the merge-base boundary for that rebase. This is the common
 cause of “conflicts on files I never edited” after `git merge main` into a
 branch or late tracking.
 
+The preflight also detects commits that were squash-merged into the parent: when
+the first N commits of a branch already landed on the parent as one squash
+commit, stax rebases only the commits after them (a plain rebase would replay
+the merged ones and conflict). `stax validate` does not check for this.
+
 Silence the notice with `[restack] preflight_warn = false` or `--quiet`.
 Disable the automatic correction with `[restack] preflight_auto_repair = false`
 only when debugging old boundary behaviour.

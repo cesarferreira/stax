@@ -267,6 +267,10 @@ one-line notice. Silence the notice with `[restack] preflight_warn = false` or
 `--quiet`; disable the automatic correction with
 `[restack] preflight_auto_repair = false`.
 
+The same preflight also detects **squash-merged parents**: if the first commits
+of a branch already landed on the parent as one squash commit, stax rebases only
+the commits after them instead of replaying the merged ones and conflicting.
+
 ### Undo / redo
 
 `restack`, `submit`, `sync`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
