@@ -162,6 +162,8 @@ mod sync_fetch_tests;
 mod sync_get_tests;
 #[path = "sync_json_tests.rs"]
 mod sync_json_tests;
+#[path = "sync_next_branch_tests.rs"]
+mod sync_next_branch_tests;
 #[path = "sync_stash_tests.rs"]
 mod sync_stash_tests;
 #[path = "sync_undo_tests.rs"]
