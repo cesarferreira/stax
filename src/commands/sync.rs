@@ -305,6 +305,9 @@ struct SyncContext {
     stack: Stack,
     current: String,
     current_after_deletions: String,
+    /// Branches this run detected as merged, including ones the user kept. Never a
+    /// "next branch" to continue on.
+    merged_this_run: HashSet<String>,
     restack: bool,
     full: bool,
     delete_merged: bool,
@@ -402,6 +405,7 @@ impl SyncContext {
                 stack,
                 current,
                 current_after_deletions,
+                merged_this_run: HashSet::new(),
                 restack,
                 full,
                 delete_merged,
@@ -1364,6 +1368,8 @@ impl SyncContext {
                 };
             let merged_branch_names: Vec<String> =
                 merged.iter().map(|info| info.branch.clone()).collect();
+            self.merged_this_run
+                .extend(merged_branch_names.iter().cloned());
             self.stats.closed_prs = retained_closed_prs(&self.stack, &merged_branch_names);
             if !self.quiet {
                 print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
@@ -2230,7 +2236,9 @@ impl SyncContext {
             return;
         };
         let Some(next) = next_branch_after_deletion(&self.stack, &self.current, &|candidate| {
-            local_branch_exists(&self.workdir, candidate) && !is_merged_pr(&live_stack, candidate)
+            local_branch_exists(&self.workdir, candidate)
+                && !self.merged_this_run.contains(candidate)
+                && !is_merged_pr(&live_stack, candidate)
         }) else {
             return;
         };

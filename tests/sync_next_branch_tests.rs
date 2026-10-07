@@ -221,3 +221,127 @@ fn undo_after_landing_on_the_child_restores_the_deleted_branch_and_parentage() {
     let after = repo.current_branch();
     assert!(!repo.has_rebase_in_progress(), "left on {after}");
 }
+
+/// The upstream-gone cleanup pass (not the merged pass) deletes the current branch.
+/// `--no-delete` switches the merged pass off, so only `--delete-upstream-gone` runs.
+#[test]
+fn upstream_gone_cleanup_also_continues_on_the_child() {
+    let repo = TestRepo::new_with_remote();
+    let branches = repo.create_stack(&["nx12-bottom", "nx12-child"]);
+    push_all(&repo, &branches);
+
+    // Land the bottom branch on trunk without a merge commit and publish it, so it
+    // has no unique work (the local-only-work guard) and its remote branch can go.
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["merge", "--ff-only", &branches[0]])
+        .assert_success();
+    repo.git(&["push", "origin", "main"]).assert_success();
+    repo.git(&["push", "origin", "--delete", &branches[0]])
+        .assert_success();
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    let output = repo.run_stax(&["sync", "--force", "--no-delete", "--delete-upstream-gone"]);
+    output.assert_success();
+    output.assert_stdout_contains("upstream-gone");
+
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert_eq!(repo.current_branch(), branches[1]);
+    assert_eq!(repo.get_current_parent().as_deref(), Some("main"));
+}
+
+/// The gone pass must not drop the user on a branch it is leaving: with no children
+/// the user stays on trunk.
+#[test]
+fn upstream_gone_cleanup_without_children_stays_on_trunk() {
+    let repo = TestRepo::new_with_remote();
+    let branches = repo.create_stack(&["nx13-only"]);
+    push_all(&repo, &branches);
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["merge", "--ff-only", &branches[0]])
+        .assert_success();
+    repo.git(&["push", "origin", "main"]).assert_success();
+    repo.git(&["push", "origin", "--delete", &branches[0]])
+        .assert_success();
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    repo.run_stax(&["sync", "--force", "--no-delete", "--delete-upstream-gone"])
+        .assert_success();
+
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert_eq!(repo.current_branch(), "main");
+}
+
+/// `refresh` must continue with the rest of the stack: after landing on the child it
+/// pushes the restacked child. (`--no-pr` keeps this offline; the push is the part of
+/// the submit phase that depends on being on the child instead of trunk.)
+#[test]
+fn refresh_pushes_the_restacked_child_after_the_bottom_branch_is_deleted() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    let branches = squash_merged_bottom(&repo, "nx14");
+    let remote_child_before =
+        TestRepo::stdout(&repo.git(&["rev-parse", &format!("origin/{}", branches[1])]));
+
+    repo.run_stax(&["refresh", "--no-pr", "--force", "--yes", "--delete-merged"])
+        .assert_success();
+
+    assert_eq!(repo.current_branch(), branches[1]);
+    let local = TestRepo::stdout(&repo.git(&["rev-parse", &branches[1]]));
+    let remote = TestRepo::stdout(&repo.git(&["ls-remote", "origin", &branches[1]]));
+    assert!(
+        remote.starts_with(local.trim()),
+        "remote child should have been pushed at the restacked tip {local}; ls-remote: {remote}"
+    );
+    assert_ne!(
+        local.trim(),
+        remote_child_before.trim(),
+        "the child was restacked, so its tip must have changed"
+    );
+}
+
+/// Bottom and middle are merged; the user keeps the middle branch at the prompt. The
+/// run must continue on the top branch, not on the merged middle branch it left alone.
+#[test]
+fn declined_merged_middle_branch_is_not_chosen_as_the_next_branch() {
+    let repo = TestRepo::new_with_remote();
+    let branches = repo.create_stack(&["nx15-bottom", "nx15-middle", "nx15-top"]);
+    push_all(&repo, &branches);
+    repo.merge_branch_on_remote(&branches[1]);
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["pull", "origin", "main"]).assert_success();
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    let home = repo.clean_home();
+    // Per-branch mode; accept the first prompt (the current bottom branch), decline the
+    // second. dialoguer answers y/n immediately, so no newline: a stray one would accept
+    // the next prompt's default.
+    let out = run_stax_in_script_with_env(
+        &repo.path(),
+        &["sync"],
+        &format!(
+            "wait_for_tui_text \"How should sync proceed?\"; printf '\\033[B\\n'; \
+             wait_for_tui_text \"Delete '{bottom}'\"; printf 'y'; \
+             wait_for_tui_text \"Delete '{middle}'\"; printf 'n'",
+            bottom = branches[0],
+            middle = branches[1],
+        ),
+        &[("HOME", &home)],
+    );
+    assert!(out.status.success(), "stderr: {}", TestRepo::stderr(&out));
+
+    let remaining = repo.list_branches();
+    let transcript = format!(
+        "branches={remaining:?} current={} stdout:\n{}",
+        repo.current_branch(),
+        TestRepo::stdout(&out)
+    );
+    assert!(
+        !remaining.contains(&branches[0]),
+        "bottom deleted; {transcript}"
+    );
+    assert!(
+        remaining.contains(&branches[1]),
+        "declined middle kept; {transcript}"
+    );
+    assert_eq!(repo.current_branch(), branches[2], "{transcript}");
+}
