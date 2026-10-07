@@ -1,7 +1,7 @@
 //! After cleanup deletes the branch the user was on, sync/refresh should continue on
 //! the next branch of that stack instead of dropping the user on trunk.
 
-use crate::common::{OutputAssertions, TestRepo};
+use crate::common::{OutputAssertions, TestRepo, run_stax_in_script_with_env};
 
 fn push_all(repo: &TestRepo, branches: &[String]) {
     for branch in branches {
@@ -149,4 +149,75 @@ fn sync_json_reports_the_child_as_the_checkout_target() {
         serde_json::from_str(&TestRepo::stdout(&output)).expect("valid JSON");
     assert_eq!(parsed["checkout_change"]["to"], branches[1].as_str());
     assert_eq!(repo.current_branch(), branches[1]);
+}
+
+#[test]
+fn sync_stashes_dirty_work_and_restores_it_on_the_child() {
+    let repo = TestRepo::new_with_remote();
+    let branches = squash_merged_bottom(&repo, "nx9");
+    repo.create_file("wip.txt", "work in progress");
+
+    repo.run_stax(&["sync", "--stash", "--force"])
+        .assert_success();
+
+    assert_eq!(repo.current_branch(), branches[1]);
+    assert!(
+        repo.path().join("wip.txt").exists(),
+        "dirty work is restored"
+    );
+    let stashes = TestRepo::stdout(&repo.git(&["stash", "list"]));
+    assert!(stashes.trim().is_empty(), "no stash left behind: {stashes}");
+}
+
+#[test]
+fn sync_prompt_names_the_child_and_declining_keeps_everything_in_place() {
+    let repo = TestRepo::new_with_remote();
+    let branches = squash_merged_bottom(&repo, "nx10");
+    // The sync plan only appears once local trunk has the merge (as in sync_confirm_tests).
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["pull", "origin", "main"]).assert_success();
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    let home = repo.clean_home();
+    // Per-branch mode, read the prompt, then decline the delete.
+    let out = run_stax_in_script_with_env(
+        &repo.path(),
+        &["sync"],
+        "wait_for_tui_text \"How should sync proceed?\"; printf '\\033[B\\n'; wait_for_tui_text \"Delete '\"; printf 'n\\n'",
+        &[("HOME", &home)],
+    );
+    assert!(out.status.success(), "stderr: {}", TestRepo::stderr(&out));
+
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains(&format!("and checkout '{}'", branches[1])),
+        "the prompt should name the child it will check out; stdout: {stdout}"
+    );
+    // Declined: the bottom branch survives and the user is not moved.
+    assert!(repo.list_branches().contains(&branches[0]));
+    assert_eq!(repo.current_branch(), branches[0]);
+}
+
+#[test]
+fn undo_after_landing_on_the_child_restores_the_deleted_branch_and_parentage() {
+    let repo = TestRepo::new_with_remote();
+    let branches = squash_merged_bottom(&repo, "nx11");
+    let bottom_tip = repo.get_commit_sha(&branches[0]);
+
+    repo.run_stax(&["sync", "--force"]).assert_success();
+    assert_eq!(repo.current_branch(), branches[1]);
+
+    repo.run_stax(&["undo", "--yes"]).assert_success();
+
+    assert!(repo.list_branches().contains(&branches[0]));
+    assert_eq!(repo.get_commit_sha(&branches[0]), bottom_tip);
+    repo.git(&["checkout", &branches[1]]).assert_success();
+    assert_eq!(
+        repo.get_current_parent().as_deref(),
+        Some(branches[0].as_str()),
+        "undo must put the child back under its original parent"
+    );
+    // Report where undo leaves the user so a regression is visible.
+    let after = repo.current_branch();
+    assert!(!repo.has_rebase_in_progress(), "left on {after}");
 }

@@ -5607,4 +5607,90 @@ mod tests {
                 .any(|e| e.branch == "branch-b@meta")
         );
     }
+    fn stack_of(edges: &[(&str, &[&str])], merged: &[&str]) -> Stack {
+        let mut branches = HashMap::new();
+        for (name, children) in edges {
+            branches.insert(
+                name.to_string(),
+                crate::engine::stack::StackBranch {
+                    name: name.to_string(),
+                    parent: None,
+                    parent_revision: None,
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: merged.contains(name).then(|| "MERGED".to_string()),
+                    pr_is_draft: None,
+                },
+            );
+        }
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn next_branch_after_deletion_prefers_first_child_by_name() {
+        let stack = stack_of(
+            &[("a", &["zeta", "alpha"]), ("zeta", &[]), ("alpha", &[])],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|_| true),
+            Some("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_walks_through_ineligible_branches() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["c"]), ("c", &[])], &[]);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "c"),
+            Some("c".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_is_breadth_first_across_forks() {
+        // The shallow sibling wins over a deeper branch under an earlier-named fork.
+        let stack = stack_of(
+            &[
+                ("a", &["b1", "b2"]),
+                ("b1", &["c"]),
+                ("b2", &[]),
+                ("c", &[]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "b2" || name == "c"),
+            Some("b2".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_returns_none_without_eligible_descendants() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &[])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+        assert_eq!(next_branch_after_deletion(&stack, "b", &|_| true), None);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "unknown", &|_| true),
+            None
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_survives_a_cycle_in_the_snapshot() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["a"])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+    }
+
+    #[test]
+    fn is_merged_pr_matches_state_case_insensitively() {
+        let stack = stack_of(&[("a", &[]), ("b", &[])], &["a"]);
+        assert!(is_merged_pr(&stack, "a"));
+        assert!(!is_merged_pr(&stack, "b"));
+        assert!(!is_merged_pr(&stack, "missing"));
+    }
 }
