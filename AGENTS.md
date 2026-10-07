@@ -1,69 +1,41 @@
 # AGENTS.md
 
-stax is a Rust CLI (edition 2024, MSRV in `Cargo.toml`) for stacked Git branches and PRs. Metadata is compatible with freephite.
+stax: Rust CLI for stacked Git branches and PRs. Branch metadata lives in git refs (`refs/branch-metadata/<branch>`, trunk in `refs/stax/trunk`), compatible with freephite. Everything else is discoverable from `src/`; this file only covers what isn't.
 
 ## Commands
 
 ```bash
-cargo build                         # debug build
-cargo run -- <command>              # run stax
-cargo nextest run <filter>          # scoped tests; module prefix works, e.g. status_tests::
-cargo nextest run --lib --bins      # unit tests only
-make lint-fast                      # fmt check + clippy (lib/bins); use while iterating
-make lint                           # full lint, same as CI
-make test                           # full suite; run before PR or after touching shared code
+cargo nextest run <filter>   # scoped tests; a module prefix works, e.g. status_tests::
+make lint-fast               # fmt check + clippy; run while iterating
+make lint                    # full lint, same as CI; run before a PR
+make test                    # full suite; see rules below
 ```
 
-Never run the full suite with `cargo test`: it is slow and flaky here (process-heavy, exhausts file handles). Use `make test`.
+- Never run the full suite with `cargo test` (process-heavy, exhausts file handles). Use `make test`.
+- Run `make test` before a PR only if you touched `src/engine/`, `src/git/repo.rs`, `src/ops/`, build/test infra, or other cross-cutting code. Otherwise scoped nextest + `make lint-fast` is enough; CI runs the full gate.
+- On macOS `make test` needs Docker. If the daemon is down, ask the user to start it instead of falling back to `make test-native`.
+- Use the Make lint targets, not ad hoc `cargo clippy`, so flags match CI.
+- State in the PR description whether evidence is a scoped run, a full local run, or CI.
 
-- `make test` uses Docker on macOS. If the daemon is down, ask the user to start it. Do not silently fall back to `make test-native`.
-- Use `make lint` rather than ad hoc `cargo clippy` so local and CI flags match.
-- Run `make test` when a change touches `engine/`, `git/repo.rs`, `ops/`, build/test infra, or other cross-cutting behavior. Otherwise scoped nextest runs plus `make lint-fast` are enough for a draft PR; CI runs the full gate.
-- Say in the PR description which evidence you have: scoped run, local full gate, or CI.
+## Rules that aren't obvious from the code
 
-## Architecture
+- `src/application/` is presentation-neutral: no `println!`, stdin/stdout, `commands/`, `tui/`, or UI crates (`dialoguer`, `ratatui`, `console`). `make lint` enforces it. Put UI in `commands/` or `tui/`.
+- Commands that must work outside a repo (`setup`, `auth`, `config`, `doctor`, `web`) are dispatched before `ensure_initialized()` in `src/cli/mod.rs`. Add new repo-less commands there, or they trigger `init`.
+- Rebasing descendants (`restack`, `merge`, `sync --restack`) must preserve `parent_branch_revision` and use `git rebase --onto <new> <old>`. A plain `git rebase <trunk>` replays squash-merged history.
+- When merging stacks, rebase and retarget children before deleting the base branch, or GitHub auto-closes their PRs.
+- Walk the branch graph iteratively with cycle detection. Metadata can be corrupted, so never recurse over it.
+- Stack colors come from `src/commands/stack_palette.rs`; don't add per-command palettes.
+- Send progress and prompts to stderr so `--json` and piped stdout stay clean.
+- A new config option needs an entry in `src/config/default_config.toml`.
 
-- `src/cli/` - clap definitions (`args.rs`) and dispatch (`mod.rs`). Commands that must work outside a repo (`setup`, `auth`, `config`, `doctor`, `web`) are handled before `ensure_initialized()`; otherwise they trigger `init` and break onboarding.
-- `src/commands/` - one file per command; `worktree/` holds `stax wt` and `stax lane`.
-- `src/application/` - presentation-neutral operations shared by the CLI, TUI, and web. It must not use terminal I/O, `println!`, `commands/`, `tui/`, or UI crates (`dialoguer`, `ratatui`, `console`, ...). `scripts/application-boundary-lint.py` enforces this in `make lint`.
-- `src/engine/` - `Stack::load()` builds the branch tree from metadata; `BranchMetadata::needs_restack()` compares the stored parent revision to the parent's HEAD.
-- `src/git/` - `repo.rs` (libgit2 `GitRepo` wrapper, worktree helpers) and `refs.rs` (metadata refs).
-- `src/forge/` and `src/github/` - GitHub, GitLab, and Gitea clients behind `ForgeClient`.
-- `src/ops/` - transactions and receipts that back undo/redo.
-- `src/tui/`, `src/web/` - the interactive dashboard and the web workspace.
-- `src/config/mod.rs` - `~/.config/stax/config.toml`. A new option needs an entry in `default_config.toml`.
+`learnings.md` has more lessons on TUI/picker rendering, shell integration, worktree removal, and CI timing. Read the relevant part before touching those areas.
 
-Metadata lives in refs, not files: `refs/branch-metadata/<branch>` (JSON: `parentBranchName`, `parentBranchRevision`, `prInfo`), trunk in `refs/stax/trunk`.
+## Tests
 
-Token priority: `STAX_GITHUB_TOKEN` > `GITHUB_TOKEN` > `~/.config/stax/.credentials`.
-
-## Testing
-
-- Every non-trivial change needs tests for the happy path, the error path, and edge cases.
-- Prefer integration tests that run the real `stax` binary in a temp repo. Use unit tests for pure logic. A new command or flag needs at least one end-to-end test.
-- All integration tests compile into ONE binary, `tests/all_tests.rs` (`autotests = false`). A new `tests/<name>_tests.rs` must be registered there with `#[path = "<name>_tests.rs"] mod <name>_tests;` and reach helpers via `use crate::common;`. `cargo test --test <name>` does not work; filter by module path.
-- Tests must be hermetic: no GitHub tokens, no user `STAX_*` env, null `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`. Never call `env::set_var`/`remove_var` in tests; configure the child command instead (lint enforces this).
+- Cover the happy path, the error path, and edge cases. Prefer integration tests that run the real `stax` binary in a temp repo; a new command or flag needs at least one.
+- All integration tests compile into ONE binary, `tests/all_tests.rs`. Register a new `tests/<name>_tests.rs` there with `#[path = "<name>_tests.rs"] mod <name>_tests;` and import helpers with `use crate::common;`. `cargo test --test <name>` won't work; filter by module path.
+- Tests must be hermetic: no GitHub tokens, no user `STAX_*` env, null `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`. Never call `env::set_var`/`remove_var`; configure the child command (lint enforces this).
 
 ## Docs
 
-A user-visible change (command, flag, rename, default) must update, in the same PR:
-
-- `README.md` if a first-time user would see it
-- the relevant page under `docs/`; keep one canonical page per command and have workflow pages link to it
-- `skills.md`, which AI agents consume; stale entries cause failures
-
-If none apply, say why in the PR description. Verify command/flag docs against `stax --help`.
-
-## Gotchas
-
-`learnings.md` has the accumulated lessons (TUI/picker rendering, shell integration, worktree removal, restack provenance, test hermeticity). Read the relevant section before changing those areas. The rules that bite most often:
-
-- Descendant rebases (`restack`, `merge`, `sync --restack`) must keep `parent_branch_revision` and use provenance-aware `git rebase --onto`. A plain `git rebase <trunk>` replays already-squashed history.
-- When merging stacks, retarget and rebase children before deleting a base branch, or GitHub auto-closes their PRs.
-- Stack lane colors come from `src/commands/stack_palette.rs`. Do not duplicate palettes.
-- Progress and prompts go to stderr, so `--json` and piped stdout stay clean.
-- Graph traversal over metadata must be iterative and cycle-safe, since metadata can be corrupted.
-
-## Claude Code
-
-For any code change (new command, bug fix, refactor), use the `stax-dev` skill (`.claude/skills/stax-dev`), which runs a planner, implementer, and verifier pipeline. Plain usage or architecture questions don't need it.
+A user-visible change (command, flag, rename, default) must update in the same PR: `README.md` if a new user would see it, the page under `docs/` (one canonical page per command), and `skills.md` (AI agents consume it, so stale entries cause failures). If none apply, say why in the PR description. Check flags against `stax --help`.
