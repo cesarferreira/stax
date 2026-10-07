@@ -9,6 +9,17 @@ use std::time::{Duration, Instant};
 
 use super::command;
 
+/// The leading commits of a branch that already landed on its parent as one commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SquashMergedPrefix {
+    /// Newest branch commit contained in the squash; the rebase boundary to use.
+    pub tip: String,
+    /// Number of branch commits (counted from the merge-base) the squash covers.
+    pub commit_count: usize,
+    /// The parent commit that contains their combined changes.
+    pub trunk_commit: String,
+}
+
 pub struct GitRepo {
     repo: Repository,
 }
@@ -1349,6 +1360,19 @@ impl GitRepo {
     }
 
     fn run_patch_id_from_input(&self, cwd: &Path, input: &[u8]) -> Result<Vec<String>> {
+        Ok(self
+            .run_patch_id_pairs_from_input(cwd, input)?
+            .into_iter()
+            .map(|(patch_id, _)| patch_id)
+            .collect())
+    }
+
+    /// Run `git patch-id --stable` and return `(patch_id, commit_id)` pairs.
+    fn run_patch_id_pairs_from_input(
+        &self,
+        cwd: &Path,
+        input: &[u8],
+    ) -> Result<Vec<(String, String)>> {
         let mut patch_id = Command::new("git")
             .args(["patch-id", "--stable"])
             .current_dir(cwd)
@@ -1387,14 +1411,25 @@ impl GitRepo {
 
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .filter_map(|line| line.split_whitespace().next())
-            .map(ToString::to_string)
+            .filter_map(|line| {
+                let mut columns = line.split_whitespace();
+                let patch_id = columns.next()?;
+                let commit_id = columns.next().unwrap_or_default();
+                Some((patch_id.to_string(), commit_id.to_string()))
+            })
             .collect())
     }
 
     /// Max commits in `merge_base..trunk` for patch-id merged-branch detection; beyond this we
     /// skip the expensive `git log -p` path (see `is_branch_merged_equivalent_to_trunk`).
     pub(crate) const PATCH_ID_TRUNK_COMMIT_CAP: usize = 200;
+
+    /// Max branch commits examined by `find_squash_merged_prefix`.
+    pub(crate) const SQUASH_PREFIX_BRANCH_COMMIT_CAP: usize = 100;
+
+    /// Max changed files passed as a pathspec to narrow the trunk commits searched by
+    /// `find_squash_merged_prefix`; above this the filter is skipped.
+    pub(crate) const SQUASH_PREFIX_PATHSPEC_CAP: usize = 500;
 
     pub(crate) fn rev_list_count(&self, cwd: &Path, range: &str) -> Result<usize> {
         let output = self.run_git(cwd, &["rev-list", "--count", range])?;
@@ -1422,6 +1457,129 @@ impl GitRepo {
         Ok(self
             .run_patch_id_from_input(cwd, &output.stdout)?
             .into_iter()
+            .collect())
+    }
+
+    /// Find the longest prefix of `branch`'s own commits that already landed on
+    /// `parent` as a single squash (or cherry-pick) commit.
+    ///
+    /// A squash commit has the *cumulative* diff of the PR's commits, so no
+    /// single branch commit shares its patch-id and git cannot drop them while
+    /// rebasing. Instead, for each branch commit `C_i` (newest first) this compares
+    /// the patch-id of `merge-base..C_i` with the patch-ids of the commits that
+    /// `parent` gained since the merge-base. The first match is returned, so the
+    /// caller can rebase only the commits after `C_i`.
+    ///
+    /// Returns `Ok(None)` when nothing matches or when the search would be too
+    /// expensive (see [`Self::PATCH_ID_TRUNK_COMMIT_CAP`] and
+    /// [`Self::SQUASH_PREFIX_BRANCH_COMMIT_CAP`]). Diffs use `-U0` so unrelated
+    /// edits near the squashed hunks on trunk do not change the patch-id.
+    pub(crate) fn find_squash_merged_prefix(
+        &self,
+        branch: &str,
+        parent: &str,
+    ) -> Result<Option<SquashMergedPrefix>> {
+        let cwd = self.workdir()?;
+        let merge_base = self.merge_base(parent, branch)?;
+
+        let parent_range = format!("{merge_base}..{parent}");
+        let parent_count = self.rev_list_count(cwd, &parent_range)?;
+        if parent_count == 0 || parent_count > Self::PATCH_ID_TRUNK_COMMIT_CAP {
+            return Ok(None);
+        }
+
+        let branch_range = format!("{merge_base}..{branch}");
+        let branch_commits = self.git_stdout_lines(
+            cwd,
+            &["rev-list", "--topo-order", "--reverse", &branch_range],
+        )?;
+        if branch_commits.is_empty() || branch_commits.len() > Self::SQUASH_PREFIX_BRANCH_COMMIT_CAP
+        {
+            return Ok(None);
+        }
+
+        // Only trunk commits touching a file the branch touches can be the squash.
+        let changed_files = self.git_stdout_lines(
+            cwd,
+            &["diff", "--name-only", "--no-renames", &merge_base, branch],
+        )?;
+        let mut rev_list_args = vec!["rev-list", "--no-merges", parent_range.as_str()];
+        if !changed_files.is_empty() && changed_files.len() <= Self::SQUASH_PREFIX_PATHSPEC_CAP {
+            rev_list_args.push("--");
+            rev_list_args.extend(changed_files.iter().map(String::as_str));
+        }
+        let candidates = self.git_stdout_lines(cwd, &rev_list_args)?;
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+
+        let mut log_args = vec![
+            "log",
+            "--format=%H",
+            "-p",
+            "-U0",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-color",
+            "--no-walk=unsorted",
+        ];
+        log_args.extend(candidates.iter().map(String::as_str));
+        let log = self.run_git(cwd, &log_args)?;
+        if !log.status.success() {
+            return Ok(None);
+        }
+        let trunk_patch_ids: HashMap<String, String> = self
+            .run_patch_id_pairs_from_input(cwd, &log.stdout)?
+            .into_iter()
+            .collect();
+        if trunk_patch_ids.is_empty() {
+            return Ok(None);
+        }
+
+        for (index, tip) in branch_commits.iter().enumerate().rev() {
+            let diff = self.run_git(
+                cwd,
+                &[
+                    "diff",
+                    "-U0",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-color",
+                    &merge_base,
+                    tip,
+                ],
+            )?;
+            if !diff.status.success() {
+                continue;
+            }
+            let patch_ids = self.run_patch_id_pairs_from_input(cwd, &diff.stdout)?;
+            let Some((patch_id, _)) = patch_ids.first() else {
+                continue;
+            };
+            if let Some(trunk_commit) = trunk_patch_ids.get(patch_id) {
+                return Ok(Some(SquashMergedPrefix {
+                    tip: tip.clone(),
+                    commit_count: index + 1,
+                    trunk_commit: trunk_commit.clone(),
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Run git and return non-empty stdout lines; a non-zero exit is an error.
+    fn git_stdout_lines(&self, cwd: &Path, args: &[&str]) -> Result<Vec<String>> {
+        let output = self.run_git(cwd, args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git {} failed: {}", args.join(" "), stderr);
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
             .collect())
     }
 

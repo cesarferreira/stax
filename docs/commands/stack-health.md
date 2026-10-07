@@ -111,9 +111,27 @@ was run on the branch instead of restack — both can produce conflicts on files
 you never edited. The repair happens automatically; after a successful restack,
 metadata is refreshed to the current parent tip as usual.
 
+### Squash-merged parents
+
+A squash merge turns the PR's commits into one new commit with a different SHA.
+If a branch still carries the original commits, git cannot tell they are already
+on the parent, so a plain restack replays them and conflicts on the files the
+squash touched. Preflight catches this: it compares the patch-id of the branch's
+cumulative diff (`merge-base..<commit>`, newest commit first) with the commits the
+parent gained since the merge-base. On a match, stax rebases from that commit and
+prints:
+
+```text
+  preflight: 'feature-x' has 14 commit(s) already merged into 'main' as 5eca245385e9; rebasing only the commits after them
+```
+
+This runs for branches whose parent gained at most 200 commits and that have at
+most 100 commits of their own; larger ranges fall back to the stored boundary.
+It is not done by `st validate`, which only checks metadata structure.
+
 Silence the notice with `[restack] preflight_warn = false` in
 `~/.config/stax/config.toml` or with `--quiet`. Disable the automatic correction
-with `[restack] preflight_auto_repair = false`.
+(both repairs above) with `[restack] preflight_auto_repair = false`.
 
 ## `st run <cmd>` (alias: `st test <cmd>`)
 

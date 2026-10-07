@@ -99,7 +99,8 @@ single_stack = "on"    # "on" | "off"
 
 [restack]
 # preflight_auto_repair = true # automatically use merge-base when stored parent
-                               # boundary would replay a much larger range
+                               # boundary would replay a much larger range, or skip
+                               # leading commits already squash-merged into the parent
 # preflight_warn = true        # print a notice when that automatic repair happens
 
 [sync]

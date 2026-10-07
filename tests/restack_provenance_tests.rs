@@ -834,6 +834,146 @@ fn test_restack_preflight_silent_on_clean_linear_branch() {
 }
 
 // =============================================================================
+// Preflight: leading commits already squash-merged into the parent
+// =============================================================================
+
+/// Build a branch whose first two commits both edit `shared.txt`, squash those
+/// two commits into `main`, then advance `main` again. The branch keeps a third,
+/// still-unmerged commit. Returns the branch name.
+fn build_squash_merged_prefix_fixture(repo: &TestRepo) -> String {
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "squashed-feature"]);
+    repo.create_file("shared.txt", "v1\n");
+    repo.commit("feature commit 1");
+    repo.create_file("shared.txt", "v2\n");
+    repo.commit("feature commit 2");
+    repo.create_file("extra.txt", "still unmerged\n");
+    repo.commit("feature commit 3");
+
+    // GitHub-style squash merge of the first two commits.
+    repo.git(&["checkout", "main"]);
+    assert_git_success(
+        repo,
+        &["merge", "--squash", "squashed-feature~1"],
+        "squash merge prefix",
+    );
+    repo.commit("Squash merge of feature commits 1 and 2 (#1)");
+    repo.create_file("unrelated.txt", "trunk moved on\n");
+    repo.commit("unrelated trunk commit");
+
+    write_branch_metadata_raw(repo, "squashed-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "squashed-feature"]);
+
+    "squashed-feature".to_string()
+}
+
+/// The first N commits of a branch were squash-merged: restack must rebase only
+/// the commits after them instead of replaying the merged ones and conflicting.
+#[test]
+fn test_restack_preflight_skips_squash_merged_prefix() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let branch = build_squash_merged_prefix_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stdout.contains("already merged into 'main'")
+            || stderr.contains("already merged into 'main'"),
+        "expected a preflight notice about the squash-merged commits; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, &format!("main..{branch}")),
+        1,
+        "only the unmerged third commit should remain above main"
+    );
+    let shared = output_text(repo.git(&["show", &format!("{branch}:shared.txt")]));
+    assert_eq!(shared, "v2", "squashed content from main must be kept");
+    let extra = output_text(repo.git(&["show", &format!("{branch}:extra.txt")]));
+    assert_eq!(extra, "still unmerged", "unmerged commit must be preserved");
+}
+
+/// With `preflight_auto_repair = false` the same fixture conflicts, which proves
+/// the squash detection (not the fixture) is what makes the restack succeed.
+#[test]
+fn test_restack_squash_merged_prefix_conflicts_when_auto_repair_disabled() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    std::fs::write(
+        config_dir.path().join("config.toml"),
+        "[restack]\npreflight_auto_repair = false\n",
+    )
+    .expect("write config");
+
+    build_squash_merged_prefix_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_failure();
+    assert!(
+        repo.has_rebase_in_progress(),
+        "replaying squash-merged commits should conflict without the repair"
+    );
+
+    repo.abort_rebase();
+}
+
+/// Trunk commits that are not a squash of the branch's commits must not make
+/// stax skip anything: every unmerged commit is still replayed.
+#[test]
+fn test_restack_preflight_does_not_skip_unmatched_commits() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let fork_point = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "-b", "unmatched-feature"]);
+    repo.create_file("feat1.txt", "one\n");
+    repo.commit("unmatched 1");
+    repo.create_file("feat2.txt", "two\n");
+    repo.commit("unmatched 2");
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("other.txt", "trunk\n");
+    repo.commit("unrelated trunk commit");
+
+    write_branch_metadata_raw(&repo, "unmatched-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "unmatched-feature"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("already merged") && !stderr.contains("already merged"),
+        "no commits are merged, so no squash notice is expected; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, "main..unmatched-feature"),
+        2,
+        "both unmerged commits must be replayed"
+    );
+}
+
+// =============================================================================
 // Genuine conflict is still reported correctly (no regression)
 // =============================================================================
 
