@@ -23,7 +23,7 @@ pub(crate) fn path_with_fake_gh(fake_dir: &Path) -> String {
     format!("{}:{old_path}", fake_dir.display())
 }
 
-fn write_config(home: &str, api_base_url: &str) {
+pub(crate) fn write_config(home: &str, api_base_url: &str) {
     let config_dir = Path::new(home).join(".config").join("stax");
     fs::create_dir_all(&config_dir).expect("create stax config dir");
     fs::write(
@@ -41,7 +41,12 @@ fn git_stdout(repo: &TestRepo, args: &[&str]) -> String {
     TestRepo::stdout(&output).trim().to_string()
 }
 
-fn write_branch_pr_metadata(repo: &TestRepo, branch: &str, parent: &str, pr_number: u64) {
+pub(crate) fn write_branch_pr_metadata(
+    repo: &TestRepo,
+    branch: &str,
+    parent: &str,
+    pr_number: u64,
+) {
     let parent_revision = git_stdout(repo, &["rev-parse", parent]);
     let json = serde_json::json!({
         "parentBranchName": parent,
@@ -84,7 +89,12 @@ fn write_branch_pr_metadata(repo: &TestRepo, branch: &str, parent: &str, pr_numb
     .assert_success();
 }
 
-async fn mock_existing_pr(mock_server: &MockServer, number: u64, branch: &str, base: &str) {
+pub(crate) async fn mock_existing_pr(
+    mock_server: &MockServer,
+    number: u64,
+    branch: &str,
+    base: &str,
+) {
     let body = serde_json::json!({
         "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{number}"),
         "id": number,

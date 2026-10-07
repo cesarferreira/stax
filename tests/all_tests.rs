@@ -106,6 +106,8 @@ mod prev_watch_tmux_tests;
 mod ready_tests;
 #[path = "refresh_all_stacks_tests.rs"]
 mod refresh_all_stacks_tests;
+#[path = "refresh_forge_tests.rs"]
+mod refresh_forge_tests;
 #[path = "refresh_visual_tests.rs"]
 mod refresh_visual_tests;
 #[path = "reorder_tests.rs"]
@@ -162,6 +164,8 @@ mod sync_fetch_tests;
 mod sync_get_tests;
 #[path = "sync_json_tests.rs"]
 mod sync_json_tests;
+#[path = "sync_next_branch_tests.rs"]
+mod sync_next_branch_tests;
 #[path = "sync_stash_tests.rs"]
 mod sync_stash_tests;
 #[path = "sync_undo_tests.rs"]

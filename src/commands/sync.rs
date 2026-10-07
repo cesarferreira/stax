@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -305,6 +305,9 @@ struct SyncContext {
     stack: Stack,
     current: String,
     current_after_deletions: String,
+    /// Branches this run detected as merged, including ones the user kept. Never a
+    /// "next branch" to continue on.
+    merged_this_run: HashSet<String>,
     restack: bool,
     full: bool,
     delete_merged: bool,
@@ -402,6 +405,7 @@ impl SyncContext {
                 stack,
                 current,
                 current_after_deletions,
+                merged_this_run: HashSet::new(),
                 restack,
                 full,
                 delete_merged,
@@ -1364,6 +1368,8 @@ impl SyncContext {
                 };
             let merged_branch_names: Vec<String> =
                 merged.iter().map(|info| info.branch.clone()).collect();
+            self.merged_this_run
+                .extend(merged_branch_names.iter().cloned());
             self.stats.closed_prs = retained_closed_prs(&self.stack, &merged_branch_names);
             if !self.quiet {
                 print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
@@ -1410,15 +1416,25 @@ impl SyncContext {
                     // confirmed set, so if the user declines some branches the effective
                     // parent may be closer in the chain than what the prompt suggests.
                     let prompt_parent = if is_current_branch {
-                        Some(
-                            resolve_fallback_parent_skipping_doomed(
-                                &self.workdir,
-                                &self.stack,
-                                branch,
-                                &merged_branch_names,
+                        // Sync continues on the next branch of the stack when there is
+                        // one (see `checkout_next_branch_after_deletion`), else on the
+                        // surviving parent.
+                        next_branch_after_deletion(&self.stack, branch, &|candidate| {
+                            !merged_branch_names.iter().any(|name| name == candidate)
+                                && local_branch_exists(&self.workdir, candidate)
+                                && !is_merged_pr(&self.stack, candidate)
+                        })
+                        .or_else(|| {
+                            Some(
+                                resolve_fallback_parent_skipping_doomed(
+                                    &self.workdir,
+                                    &self.stack,
+                                    branch,
+                                    &merged_branch_names,
+                                )
+                                .0,
                             )
-                            .0,
-                        )
+                        })
                     } else {
                         None
                     };
@@ -2203,6 +2219,52 @@ impl SyncContext {
             }
         }
         Ok(())
+    }
+
+    /// When cleanup deleted the branch the user was on, continue on the next branch of
+    /// that stack (the first unmerged descendant, in `st next` order) instead of leaving
+    /// them on trunk. Runs after the deferred trunk update, which needs trunk checked out.
+    /// A failed checkout (e.g. the branch lives in another worktree) is not an error:
+    /// the user simply stays where cleanup left them.
+    fn checkout_next_branch_after_deletion(&mut self, repo: &GitRepo) {
+        if !self.stack.branches.contains_key(&self.current)
+            || local_branch_exists(&self.workdir, &self.current)
+        {
+            return;
+        }
+        let Ok(live_stack) = Stack::load(repo) else {
+            return;
+        };
+        let Some(next) = next_branch_after_deletion(&self.stack, &self.current, &|candidate| {
+            local_branch_exists(&self.workdir, candidate)
+                && !self.merged_this_run.contains(candidate)
+                && !is_merged_pr(&live_stack, candidate)
+        }) else {
+            return;
+        };
+        if next == self.current_after_deletions {
+            return;
+        }
+
+        match checkout_branch_for_cleanup(repo, &self.workdir, &next) {
+            Ok(()) => {
+                self.current_after_deletions = next.clone();
+                if !self.quiet {
+                    println!("  {} checked out {}", "→".cyan(), next.cyan());
+                }
+            }
+            Err(error) => {
+                if !self.quiet {
+                    println!(
+                        "  {} couldn't check out {} ({}); staying on {}",
+                        "⚠".yellow(),
+                        next.yellow(),
+                        error,
+                        self.current_after_deletions.cyan()
+                    );
+                }
+            }
+        }
     }
 
     // If we deferred trunk update (refspec fetch failed while not on trunk) and we're
@@ -3120,6 +3182,8 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
     ctx.retry_deferred_trunk_update(&repo)?;
 
     ctx.ensure_trunk_ready_for_restack(&repo)?;
+
+    ctx.checkout_next_branch_after_deletion(&repo);
 
     ctx.get_phase(&repo)?;
 
@@ -4518,6 +4582,47 @@ pub(super) fn resolve_fallback_parent_skipping_doomed(
 /// Used by both the merged-branch and upstream-gone cleanup paths.
 /// Return the names of children that will be reparented when `branch` is deleted.
 /// Excludes any child whose name appears in `skipped_deletions` (i.e. also being deleted).
+/// First branch above `deleted` worth continuing on, found breadth-first through the
+/// stack snapshot taken before cleanup. Children are visited in name order, so the
+/// choice is deterministic on forks and matches `st next`. Branches that fail
+/// `eligible` (deleted, merged) are walked through, not returned.
+fn next_branch_after_deletion(
+    stack_snapshot: &Stack,
+    deleted: &str,
+    eligible: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    let enqueue_children = |branch: &str, queue: &mut VecDeque<String>| {
+        let mut children = stack_snapshot
+            .branches
+            .get(branch)
+            .map(|info| info.children.clone())
+            .unwrap_or_default();
+        children.sort();
+        queue.extend(children);
+    };
+    enqueue_children(deleted, &mut queue);
+    while let Some(candidate) = queue.pop_front() {
+        if !seen.insert(candidate.clone()) {
+            continue;
+        }
+        if eligible(&candidate) {
+            return Some(candidate);
+        }
+        enqueue_children(&candidate, &mut queue);
+    }
+    None
+}
+
+fn is_merged_pr(stack: &Stack, branch: &str) -> bool {
+    stack
+        .branches
+        .get(branch)
+        .and_then(|info| info.pr_state.as_deref())
+        .is_some_and(|state| state.eq_ignore_ascii_case("merged"))
+}
+
 fn children_to_reparent(
     stack_snapshot: &Stack,
     branch: &str,
@@ -5509,5 +5614,91 @@ mod tests {
                 .iter()
                 .any(|e| e.branch == "branch-b@meta")
         );
+    }
+    fn stack_of(edges: &[(&str, &[&str])], merged: &[&str]) -> Stack {
+        let mut branches = HashMap::new();
+        for (name, children) in edges {
+            branches.insert(
+                name.to_string(),
+                crate::engine::stack::StackBranch {
+                    name: name.to_string(),
+                    parent: None,
+                    parent_revision: None,
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: merged.contains(name).then(|| "MERGED".to_string()),
+                    pr_is_draft: None,
+                },
+            );
+        }
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn next_branch_after_deletion_prefers_first_child_by_name() {
+        let stack = stack_of(
+            &[("a", &["zeta", "alpha"]), ("zeta", &[]), ("alpha", &[])],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|_| true),
+            Some("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_walks_through_ineligible_branches() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["c"]), ("c", &[])], &[]);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "c"),
+            Some("c".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_is_breadth_first_across_forks() {
+        // The shallow sibling wins over a deeper branch under an earlier-named fork.
+        let stack = stack_of(
+            &[
+                ("a", &["b1", "b2"]),
+                ("b1", &["c"]),
+                ("b2", &[]),
+                ("c", &[]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "b2" || name == "c"),
+            Some("b2".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_returns_none_without_eligible_descendants() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &[])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+        assert_eq!(next_branch_after_deletion(&stack, "b", &|_| true), None);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "unknown", &|_| true),
+            None
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_survives_a_cycle_in_the_snapshot() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["a"])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+    }
+
+    #[test]
+    fn is_merged_pr_matches_state_case_insensitively() {
+        let stack = stack_of(&[("a", &[]), ("b", &[])], &["a"]);
+        assert!(is_merged_pr(&stack, "a"));
+        assert!(!is_merged_pr(&stack, "b"));
+        assert!(!is_merged_pr(&stack, "missing"));
     }
 }
