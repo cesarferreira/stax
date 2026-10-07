@@ -1519,6 +1519,7 @@ impl GitRepo {
             "-p",
             "-U0",
             "--no-renames",
+            "--binary",
             "--no-ext-diff",
             "--no-color",
             "--no-walk=unsorted",
@@ -1543,6 +1544,7 @@ impl GitRepo {
                     "diff",
                     "-U0",
                     "--no-renames",
+                    "--binary",
                     "--no-ext-diff",
                     "--no-color",
                     &merge_base,
@@ -1556,7 +1558,9 @@ impl GitRepo {
             let Some((patch_id, _)) = patch_ids.first() else {
                 continue;
             };
-            if let Some(trunk_commit) = trunk_patch_ids.get(patch_id) {
+            if let Some(trunk_commit) = trunk_patch_ids.get(patch_id)
+                && self.merging_adds_nothing(cwd, &merge_base, parent, tip)
+            {
                 return Ok(Some(SquashMergedPrefix {
                     tip: tip.clone(),
                     commit_count: index + 1,
@@ -1566,6 +1570,44 @@ impl GitRepo {
         }
 
         Ok(None)
+    }
+
+    /// True when merging `tip` into `parent` (3-way, from `merge_base`) is clean and
+    /// leaves `parent`'s tree unchanged, i.e. every change in `merge_base..tip` is
+    /// already present in `parent`.
+    ///
+    /// Patch-ids ignore line numbers and, with `-U0`, context, so the same text added
+    /// at a different place in a file would match. This check rules that out: a
+    /// misplaced copy of the change would show up as a difference in the merged tree.
+    fn merging_adds_nothing(&self, cwd: &Path, merge_base: &str, parent: &str, tip: &str) -> bool {
+        let Ok(output) = self.run_git(
+            cwd,
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                "--merge-base",
+                merge_base,
+                parent,
+                tip,
+            ],
+        ) else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let merged_tree = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .unwrap_or_default();
+        let Ok(parent_tree) =
+            self.git_stdout_lines(cwd, &["rev-parse", &format!("{parent}^{{tree}}")])
+        else {
+            return false;
+        };
+        !merged_tree.is_empty() && parent_tree.first() == Some(&merged_tree)
     }
 
     /// Run git and return non-empty stdout lines; a non-zero exit is an error.
