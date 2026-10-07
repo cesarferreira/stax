@@ -106,6 +106,8 @@ mod prev_watch_tmux_tests;
 mod ready_tests;
 #[path = "refresh_all_stacks_tests.rs"]
 mod refresh_all_stacks_tests;
+#[path = "refresh_forge_tests.rs"]
+mod refresh_forge_tests;
 #[path = "refresh_visual_tests.rs"]
 mod refresh_visual_tests;
 #[path = "reorder_tests.rs"]
