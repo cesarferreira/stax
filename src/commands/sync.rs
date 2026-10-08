@@ -3637,7 +3637,9 @@ fn merge_planned_merged_detection(
     for info in planned {
         by_branch.entry(info.branch.clone()).or_insert(info);
     }
-    by_branch.into_values().collect()
+    let mut merged: Vec<MergedBranchInfo> = by_branch.into_values().collect();
+    merged.sort_by(|a, b| a.branch.cmp(&b.branch));
+    merged
 }
 
 pub(super) fn retained_closed_prs(stack: &Stack, merged: &[String]) -> Vec<String> {
@@ -3857,6 +3859,7 @@ pub(super) fn find_merged_branches(
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
     if skip_patch_id_provenance {
+        merged.sort_by(|a, b| a.branch.cmp(&b.branch));
         return Ok(merged);
     }
 
@@ -3963,6 +3966,8 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    // The passes above iterate `HashMap`s; sort so prompts and output are stable.
+    merged.sort_by(|a, b| a.branch.cmp(&b.branch));
     Ok(merged)
 }
 
@@ -5462,6 +5467,19 @@ mod tests {
     fn stash_policy_from_flags_no_stash_takes_precedence() {
         // clap enforces conflicts_with, but belt-and-suspenders: Never when no_stash=true
         assert_eq!(StashPolicy::from_flags(false, true), StashPolicy::Never);
+    }
+
+    #[test]
+    fn merge_planned_merged_detection_orders_by_branch_name() {
+        let info = |name: &str| MergedBranchInfo {
+            branch: name.to_string(),
+            merge_type: MergeType::SquashMerge,
+        };
+        let planned = vec![info("m"), info("a"), info("z")];
+        let fresh = vec![info("q"), info("b")];
+        let merged = super::merge_planned_merged_detection(planned, fresh);
+        let names: Vec<&str> = merged.iter().map(|m| m.branch.as_str()).collect();
+        assert_eq!(names, ["a", "b", "m", "q", "z"]);
     }
 
     #[test]

@@ -218,7 +218,41 @@ wait_for_tui_text() {{
     for (key, val) in env {
         cmd.env(key, val);
     }
-    cmd.output().expect("Failed to run stax inside script")
+    run_with_watchdog(cmd, SCRIPT_RUN_TIMEOUT)
+}
+
+/// Upper bound for one scripted TUI run. A prompt the input script never answered
+/// (for example because it timed out waiting for text) leaves stax blocked forever,
+/// which would otherwise hang the whole suite until the CI job limit.
+const SCRIPT_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Run `cmd` to completion, killing its whole process group if it outlives `timeout`.
+fn run_with_watchdog(mut cmd: Command, timeout: std::time::Duration) -> Output {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let child = cmd.spawn().expect("Failed to run stax inside script");
+    let group = child.id();
+
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if done_rx.recv_timeout(timeout).is_err() {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{group}")])
+                .status();
+        }
+    });
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for stax inside script");
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+    output
 }
 
 fn hermetic_git_command() -> Command {
@@ -945,6 +979,17 @@ mod tests {
 
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("timed out waiting for TUI text"));
+    }
+
+    #[test]
+    fn watchdog_kills_a_run_that_outlives_its_timeout() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 60"]);
+        let started = std::time::Instant::now();
+        let output = run_with_watchdog(cmd, std::time::Duration::from_millis(300));
+
+        assert!(!output.status.success());
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
 
     #[test]
