@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.114.0] - 2026-10-05
+## [0.115.0] - 2026-10-09
 
 ### 🚀 Features
 
@@ -10,16 +10,25 @@ All notable changes to this project will be documented in this file.
 - *(refresh)* Add --get flag to reconcile stack branches against remote
 - *(sync)* Add confirm_delete config to skip merged-branch prompts ([#901](https://github.com/cesarferreira/stax/issues/901))
 - Add Hermes agent integration ([#905](https://github.com/cesarferreira/stax/issues/905))
+- *(sync)* Continue on the next branch when cleanup deletes the current one ([#917](https://github.com/cesarferreira/stax/issues/917))
 
 ### 🐛 Bug Fixes
 
 - *(get)* Scope --force dirty-tree guard to tracked changes with a clearer error ([#884](https://github.com/cesarferreira/stax/issues/884))
 - *(sync)* Retain and report closed unmerged PR branches ([#898](https://github.com/cesarferreira/stax/issues/898))
 - *(sync)* Report --get skips in JSON ([#899](https://github.com/cesarferreira/stax/issues/899))
+- *(restack)* Skip leading commits already squash-merged into the parent ([#916](https://github.com/cesarferreira/stax/issues/916))
+- Fixed tests
 
 ### 💼 Other
 
 - Removed beads
+- Removed bd
+- Updated agents.md
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.113.1] - 2026-09-15
 
 ### 🐛 Bug Fixes
@@ -2214,13 +2223,46 @@ All notable changes to this project will be documented in this file.
 - Now when stax rs deletes a merged branch, it will:
 ## [0.3.0] - 2025-12-27
 
+### 💼 Other
+
+- Clearer message when deleting merged branches
+- Updated comments on PRs
+- Rename branch command
+- New-readme
+- Re-added screenshot
+- Updated readme
+- Added tests to rename
+- Tui
+- Reorder panes
+- Edit works properly
+- Details view
+- Updated SS
+- Remote comparisons
+- Stack reorder
+- Reordering preview
+- Updated readme
+- Updated readme
+- Added screenshots
+## [0.2.1] - 2025-12-27
+
+### 🐛 Bug Fixes
+
+- Fix release
+- Fixed pipeline
+
+### 💼 Other
+
+- Improved test accuracy
+- Workflow trigger
+- Added locked openssl for cross compilation
+- Bumped octocrab
+## [0.2.0] - 2025-12-26
+
 ### 🐛 Bug Fixes
 
 - Fix tracking
 - Fixing bco
 - Fix for icon in remote branches
-- Fix release
-- Fixed pipeline
 
 ### 💼 Other
 
@@ -2306,28 +2348,6 @@ All notable changes to this project will be documented in this file.
 - Improved bco
 - Tags publish
 - Bumped version
-- Improved test accuracy
-- Workflow trigger
-- Added locked openssl for cross compilation
-- Bumped octocrab
-- Clearer message when deleting merged branches
-- Updated comments on PRs
-- Rename branch command
-- New-readme
-- Re-added screenshot
-- Updated readme
-- Added tests to rename
-- Tui
-- Reorder panes
-- Edit works properly
-- Details view
-- Updated SS
-- Remote comparisons
-- Stack reorder
-- Reordering preview
-- Updated readme
-- Updated readme
-- Added screenshots
 
 ### 📚 Documentation
 
