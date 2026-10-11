@@ -64,7 +64,7 @@
 # mine_only = true # `st board` starts filtered to PRs/issues you authored; toggle with `a` (persisted here)
 
 [ai]
-# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" | "hermes" — global default
 # model = "claude-opus-5"
 
 # Per-feature overrides — optional, fall back to [ai] above

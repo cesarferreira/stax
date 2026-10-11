@@ -229,6 +229,35 @@ fn docs_cover_numbered_remote_and_active_local_stack_unlink() {
     }
 }
 
+#[test]
+fn docs_and_default_config_list_hermes_as_a_supported_ai_agent() {
+    let references = [
+        (
+            "src/config/default_config.toml",
+            include_str!("../src/config/default_config.toml"),
+        ),
+        (
+            "docs/workflows/agent-worktrees.md",
+            include_str!("../docs/workflows/agent-worktrees.md"),
+        ),
+        (
+            "docs/worktrees/index.md",
+            include_str!("../docs/worktrees/index.md"),
+        ),
+        (
+            "docs/integrations/pr-templates-and-ai.md",
+            include_str!("../docs/integrations/pr-templates-and-ai.md"),
+        ),
+    ];
+
+    for (path, content) in references {
+        assert!(
+            content.contains("`hermes`") || content.contains("\"hermes\""),
+            "{path} should list Hermes as a supported AI agent"
+        );
+    }
+}
+
 // =============================================================================
 // Sync Command Tests
 // =============================================================================

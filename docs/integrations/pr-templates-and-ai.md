@@ -138,7 +138,7 @@ st generate --pr-body --no-prompt
 | `--template <name>` | Use a specific PR template |
 | `--no-template` | Skip PR template |
 
-Supported agents: `claude`, `codex`, `gemini`, `opencode`, `pi`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`, `pi`, `hermes`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults. Hermes resolves provider-qualified model IDs (for example, `anthropic/claude-sonnet-4.6`) through its own configuration and credentials.
 
 To forget the saved AI pairing and re-prompt:
 

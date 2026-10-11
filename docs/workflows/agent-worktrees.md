@@ -86,13 +86,14 @@ tmux attach -t <lane-name>
 
 ## Agent selection
 
-Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`, `pi`.
+Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`, `pi`, `hermes`.
 
 ```bash
 st lane api-tests   --agent gemini
 st lane api-tests   --agent opencode --model opencode/gpt-5.6-terra
 st lane review-pass --agent codex "address the open PR comments"
 st lane deep-dive   --agent pi --model anthropic/claude-opus-5
+st lane deep-dive   --agent hermes --model anthropic/claude-sonnet-4.6
 ```
 
 - `--model` requires `--agent`
