@@ -1,18 +1,19 @@
 use crate::application::{
     NoopOperationReporter, OperationError, OperationErrorDetails, OperationErrorKind,
-    OperationOutcome, OperationReceipt, OperationWarning, RepositorySession,
-    RestackExecutionOptions, RestackScope,
+    OperationEvent, OperationOutcome, OperationReceipt, OperationReporter, OperationResult,
+    OperationStage, OperationWarning, RepositorySession, RestackExecutionOptions, RestackScope,
 };
 use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::engine::{BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::git::GitRepo;
-use crate::progress::LiveTimer;
+use crate::progress::{LiveDetail, LiveTimer};
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::collections::HashSet;
 use std::io::IsTerminal;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitAfterRestack {
@@ -136,7 +137,7 @@ pub(crate) fn run_stack_containing(
         restore_branch: None,
         completed_from_receipt: HashSet::new(),
     };
-    let receipt = match session.restack_with_options(options, &mut NoopOperationReporter) {
+    let receipt = match execute_restack(&session, options, quiet) {
         Ok(receipt) => receipt,
         Err(error) if error.kind == OperationErrorKind::RebaseConflict => {
             render_restack_error(repo, &error, quiet);
@@ -191,7 +192,7 @@ fn run_adapter(
         restore_branch,
         completed_from_receipt,
     };
-    let receipt = match session.restack_with_options(options, &mut NoopOperationReporter) {
+    let receipt = match execute_restack(&session, options, quiet) {
         Ok(receipt) => receipt,
         Err(error) if error.kind == OperationErrorKind::RebaseConflict => {
             render_restack_error(repo, &error, false);
@@ -209,6 +210,106 @@ fn run_adapter(
     }
 
     Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn execute_restack(
+    session: &RepositorySession,
+    options: RestackExecutionOptions,
+    quiet: bool,
+) -> OperationResult {
+    if quiet {
+        return session.restack_with_options(options, &mut NoopOperationReporter);
+    }
+
+    let detail_slot = Arc::new(Mutex::new(None));
+    let mut spinner = RestackSpinner::new(Arc::clone(&detail_slot));
+    let slot = Arc::clone(&detail_slot);
+    let report = move |message: &str| {
+        let detail = slot.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        if let Some(detail) = detail {
+            detail.set(message);
+        }
+    };
+    session.restack_with_options_reporting(options, &mut spinner, Some(&report))
+}
+
+/// Draws one live `Restack <branch>` row, with the rebase phase underneath it.
+struct RestackSpinner {
+    timer: Option<LiveTimer>,
+    detail_slot: Arc<Mutex<Option<LiveDetail>>>,
+}
+
+impl RestackSpinner {
+    fn new(detail_slot: Arc<Mutex<Option<LiveDetail>>>) -> Self {
+        Self {
+            timer: None,
+            detail_slot,
+        }
+    }
+
+    fn start(&mut self, label: &str) {
+        self.finish_timed();
+        let timer = LiveTimer::new(label);
+        *self
+            .detail_slot
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(timer.detail_handle());
+        self.timer = Some(timer);
+    }
+
+    fn finish_timed(&mut self) {
+        self.clear_detail();
+        if let Some(timer) = self.timer.take() {
+            timer.finish_timed();
+        }
+    }
+
+    fn finish_warn(&mut self, suffix: &str) {
+        self.clear_detail();
+        if let Some(timer) = self.timer.take() {
+            timer.finish_warn(suffix);
+        }
+    }
+
+    fn finish_err(&mut self, suffix: &str) {
+        self.clear_detail();
+        if let Some(timer) = self.timer.take() {
+            timer.finish_err(suffix);
+        }
+    }
+
+    fn clear_detail(&self) {
+        *self
+            .detail_slot
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = None;
+    }
+}
+
+impl Drop for RestackSpinner {
+    fn drop(&mut self) {
+        self.clear_detail();
+        self.timer.take();
+    }
+}
+
+impl OperationReporter for RestackSpinner {
+    fn report(&mut self, event: OperationEvent) {
+        match event {
+            OperationEvent::Progress(progress) if progress.stage == OperationStage::Restacking => {
+                if let Some(branch) = progress.branch.as_deref() {
+                    self.start(&format!("Restack {branch}"));
+                }
+            }
+            OperationEvent::Completed(_) => self.finish_timed(),
+            OperationEvent::Failed(error) if error.kind == OperationErrorKind::RebaseConflict => {
+                self.finish_warn("conflict");
+            }
+            OperationEvent::Failed(_) => self.finish_err("failed"),
+            OperationEvent::Started(_) | OperationEvent::Progress(_) => {}
+        }
+    }
 }
 
 fn restack_scope(all: bool, stop_here: bool, current: &str) -> RestackScope {
