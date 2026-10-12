@@ -2608,6 +2608,7 @@ impl SyncContext {
 
                     let restack_timer =
                         LiveTimer::maybe_new(!self.quiet, &format!("Restack {}", branch));
+                    let detail = restack_timer.as_ref().map(LiveTimer::detail_handle);
 
                     let rebase_upstream = crate::engine::restack_preflight::choose_rebase_upstream(
                         repo,
@@ -2618,16 +2619,30 @@ impl SyncContext {
                         self.quiet,
                     );
 
-                    let rebase = repo.rebase_branch_onto_with_provenance_timing(
-                        branch,
-                        &parent_branch_name,
-                        &rebase_upstream,
-                        self.auto_stash_pop,
-                        true,
-                    )?;
+                    let rebase = if let Some(detail) = &detail {
+                        repo.rebase_branch_onto_with_provenance_timing_reporting(
+                            branch,
+                            &parent_branch_name,
+                            &rebase_upstream,
+                            self.auto_stash_pop,
+                            true,
+                            Some(&|message| detail.set(message)),
+                        )?
+                    } else {
+                        repo.rebase_branch_onto_with_provenance_timing(
+                            branch,
+                            &parent_branch_name,
+                            &rebase_upstream,
+                            self.auto_stash_pop,
+                            true,
+                        )?
+                    };
 
                     match rebase.result {
                         RebaseResult::Success => {
+                            if let Some(detail) = &detail {
+                                detail.set("Updating branch metadata");
+                            }
                             let metadata_update_started_at = Instant::now();
                             let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
                             let existing_metadata = BranchMetadata::read(repo.inner(), branch)?;

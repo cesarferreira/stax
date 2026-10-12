@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::command;
@@ -1168,8 +1170,13 @@ impl GitRepo {
         Ok(output.status.success())
     }
 
-    fn rebase_with_args_in_path(&self, cwd: &Path, args: &[&str]) -> Result<RebaseResult> {
-        let output = self.run_git(cwd, args)?;
+    fn rebase_with_args_in_path(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseResult> {
+        let output = self.run_rebase_reporting_progress(cwd, args, progress)?;
         if output.status.success() {
             return Ok(RebaseResult::Success);
         }
@@ -1187,8 +1194,48 @@ impl GitRepo {
         );
     }
 
-    fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto])
+    /// Run `git rebase` and, when a listener is attached, poll Git's on-disk
+    /// rebase state so the caller can show the commit currently being applied.
+    fn run_rebase_reporting_progress(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<Output> {
+        let Some(progress) = progress else {
+            return self.run_git(cwd, args);
+        };
+        let git_dir = self.git_dir_in_path(cwd).ok();
+        let stop = AtomicBool::new(false);
+        thread::scope(|scope| {
+            if let Some(git_dir) = git_dir.as_deref() {
+                scope.spawn(|| {
+                    let mut last = String::new();
+                    while !stop.load(Ordering::Relaxed) {
+                        if let Some(detail) = super::rebase_progress::rebase_detail_line(git_dir)
+                            && detail != last
+                            && !stop.load(Ordering::Relaxed)
+                        {
+                            progress(&detail);
+                            last = detail;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                });
+            }
+            let output = self.run_git(cwd, args);
+            stop.store(true, Ordering::Relaxed);
+            output
+        })
+    }
+
+    fn rebase_in_path(
+        &self,
+        cwd: &Path,
+        onto: &str,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseResult> {
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto], progress)
     }
 
     fn rebase_onto_upstream_in_path(
@@ -1196,8 +1243,13 @@ impl GitRepo {
         cwd: &Path,
         onto: &str,
         upstream: &str,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
     ) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", "--onto", onto, upstream])
+        self.rebase_with_args_in_path(
+            cwd,
+            &["rebase", "--empty=drop", "--onto", onto, upstream],
+            progress,
+        )
     }
 
     fn reset_hard_in_path(&self, cwd: &Path, target: &str) -> Result<()> {
@@ -1683,13 +1735,41 @@ impl GitRepo {
         auto_stash_pop: bool,
         check_squash_merge: bool,
     ) -> Result<RebaseOutcome> {
+        self.rebase_branch_onto_with_provenance_timing_reporting(
+            branch,
+            onto,
+            fallback_upstream,
+            auto_stash_pop,
+            check_squash_merge,
+            None,
+        )
+    }
+
+    /// Like [`rebase_branch_onto_with_provenance_timing`], and reports each slow
+    /// phase through `progress` when the caller is drawing a live status line.
+    pub(crate) fn rebase_branch_onto_with_provenance_timing_reporting(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+        auto_stash_pop: bool,
+        check_squash_merge: bool,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseOutcome> {
+        let report = |detail: &str| {
+            if let Some(progress) = progress {
+                progress(detail);
+            }
+        };
         let mut timings = RebaseTimings::default();
 
+        report("Preparing worktree");
         let prepare_started_at = Instant::now();
         let (_current_workdir, target_workdir) = self.prepare_branch_rebase_context(branch)?;
         timings.prepare_context = prepare_started_at.elapsed();
 
         let mut stashed = false;
+        report("Checking for local changes");
         let dirty_check_started_at = Instant::now();
         let target_is_dirty = self.is_dirty_at(&target_workdir)?;
         timings.dirty_check = dirty_check_started_at.elapsed();
@@ -1702,38 +1782,43 @@ Use --auto-stash-pop or stash/commit changes first.",
                     target_workdir.display()
                 );
             }
+            report("Stashing local changes");
             let auto_stash_push_started_at = Instant::now();
             stashed = self.stash_push_at(&target_workdir)?;
             timings.auto_stash_push = auto_stash_push_started_at.elapsed();
         }
 
         let git_rebase_started_at = Instant::now();
-        if check_squash_merge
-            && self
+        if check_squash_merge {
+            report("Checking if this branch is already merged");
+            if self
                 .branch_is_integrated_into(onto, branch)
                 .unwrap_or(false)
-        {
-            self.reset_hard_in_path(&target_workdir, onto)
-                .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;
-            timings.git_rebase = git_rebase_started_at.elapsed();
+            {
+                report(&format!("Moving onto {onto}; changes are already there"));
+                self.reset_hard_in_path(&target_workdir, onto)
+                    .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;
+                timings.git_rebase = git_rebase_started_at.elapsed();
 
-            if stashed {
-                let auto_stash_pop_started_at = Instant::now();
-                self.stash_pop_at(&target_workdir).with_context(|| {
-                    format!(
-                        "Moved '{}' to '{}' successfully, but failed to auto-pop stash in '{}'",
-                        branch,
-                        onto,
-                        target_workdir.display()
-                    )
-                })?;
-                timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
+                if stashed {
+                    report("Restoring stashed changes");
+                    let auto_stash_pop_started_at = Instant::now();
+                    self.stash_pop_at(&target_workdir).with_context(|| {
+                        format!(
+                            "Moved '{}' to '{}' successfully, but failed to auto-pop stash in '{}'",
+                            branch,
+                            onto,
+                            target_workdir.display()
+                        )
+                    })?;
+                    timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
+                }
+
+                return Ok(RebaseOutcome {
+                    result: RebaseResult::Success,
+                    timings,
+                });
             }
-
-            return Ok(RebaseOutcome {
-                result: RebaseResult::Success,
-                timings,
-            });
         }
 
         // Always prefer `git rebase --onto <onto> <upstream> <branch>` when the
@@ -1742,8 +1827,9 @@ Use --auto-stash-pop or stash/commit changes first.",
         // thousands of trunk commits when the stored revision is no longer a
         // reachable ancestor (e.g. after squash-merges or metadata drift).
         // Only fall back to plain `git rebase <onto>` when no upstream is provided.
+        report(&format!("Rebasing onto {onto}"));
         let rebase_result = if !fallback_upstream.trim().is_empty() {
-            self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream)
+            self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream, progress)
                 .with_context(|| {
                     format!(
                         "Failed to rebase '{}' onto '{}' with upstream '{}' in '{}'",
@@ -1754,14 +1840,15 @@ Use --auto-stash-pop or stash/commit changes first.",
                     )
                 })
         } else {
-            self.rebase_in_path(&target_workdir, onto).with_context(|| {
-                format!(
-                    "Failed to rebase '{}' onto '{}' in '{}'",
-                    branch,
-                    onto,
-                    target_workdir.display()
-                )
-            })
+            self.rebase_in_path(&target_workdir, onto, progress)
+                .with_context(|| {
+                    format!(
+                        "Failed to rebase '{}' onto '{}' in '{}'",
+                        branch,
+                        onto,
+                        target_workdir.display()
+                    )
+                })
         };
         timings.git_rebase = git_rebase_started_at.elapsed();
 
@@ -1779,6 +1866,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         };
 
         if stashed && result == RebaseResult::Success {
+            report("Restoring stashed changes");
             let auto_stash_pop_started_at = Instant::now();
             self.stash_pop_at(&target_workdir).with_context(|| {
                 format!(
@@ -3292,5 +3380,55 @@ mod tests {
             .branches_with_configured_upstream()
             .expect("no branch config should not be an error");
         assert!(configured.is_empty());
+    }
+
+    #[test]
+    fn rebase_progress_reports_phases_before_replaying_commits() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["checkout", "-b", "feature"]);
+        fs::write(path.join("feature.txt"), "feature\n").expect("write feature");
+        run_git(path, &["add", "feature.txt"]);
+        run_git(path, &["commit", "-m", "Fix Kotlin compiler warnings"]);
+        run_git(path, &["checkout", "main"]);
+        fs::write(path.join("README.md"), "trunk\n").expect("move trunk");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Move trunk"]);
+
+        let upstream = run_git_capture(path, &["rev-parse", "main~1"]);
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let seen = std::sync::Mutex::new(Vec::new());
+        repo.rebase_branch_onto_with_provenance_timing_reporting(
+            "feature",
+            "main",
+            upstream.trim(),
+            false,
+            true,
+            Some(&|message| {
+                seen.lock().expect("progress log").push(message.to_string());
+            }),
+        )
+        .expect("rebase feature onto main");
+
+        let seen = seen.lock().expect("progress log");
+        assert!(
+            seen.iter().any(|message| message == "Preparing worktree"),
+            "phases: {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|message| message == "Checking if this branch is already merged"),
+            "phases: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|message| message == "Rebasing onto main"),
+            "phases: {seen:?}"
+        );
     }
 }
