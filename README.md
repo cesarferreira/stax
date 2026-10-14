@@ -216,7 +216,7 @@ st stack link            # manually re-link the current stack
 st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.1.0 as out of date (v0.1.0 adds `gh stack merge`, see below), and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.2.1 as out of date (v0.1.0 added `gh stack merge`, see below; v0.2.1 fixes custom SSH host aliases), and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
@@ -232,6 +232,7 @@ st merge --stack          # GitHub/GitLab: preserve lower PR/MR merged state thr
 st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
+st merge --ignore-failed-ci  # merge despite a red CI rollup (e.g. only optional checks failed)
 ```
 
 On GitHub, if the current stack is a confirmed-enabled native GitHub Stack and
@@ -255,7 +256,7 @@ When a rebase stops on a conflict, `st resolve` sends only the conflicted text f
 
 ```bash
 st resolve
-st resolve --agent codex --model gpt-5.3-codex
+st resolve --agent codex --model gpt-5.6-terra
 ```
 
 Before each rebase, stax also runs a **preflight repair** that compares the
@@ -265,6 +266,10 @@ automatically uses the merge-base boundary for that rebase and prints a
 one-line notice. Silence the notice with `[restack] preflight_warn = false` or
 `--quiet`; disable the automatic correction with
 `[restack] preflight_auto_repair = false`.
+
+The same preflight also detects **squash-merged parents**: if the first commits
+of a branch already landed on the parent as one squash commit, stax rebases only
+the commits after them instead of replaying the merged ones and conflicting.
 
 ### Undo / redo
 
@@ -348,6 +353,8 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 |---|---|
 | `st` | Launch interactive TUI |
 | `st web [path]` | Start a localhost web workspace in the browser |
+| Web stack pane | Automatically fits branch names and topology; drag or use Arrow keys to resize. Manual width persists per repository in browser localStorage; double-click resets automatic sizing. |
+| Web Sync | Confirmed browser action: fetches, updates trunk, and cleans merged local branches; requires a clean tree and never stashes or restacks. Refresh only reloads the current snapshot. |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |
@@ -355,6 +362,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
+| `st branch track --all` | Adopt every untracked non-trunk local branch into stacks using its nearest cycle-safe strict local ancestor |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
 | `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
@@ -363,14 +371,17 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
 | `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
 | `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
-| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
+| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`, `--ignore-failed-ci`) |
 | `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
+| `st board` / `st home` | Interactive repository dashboard (GitHub only) — PULL REQUESTS / ISSUES tabs with a detail pane, inline diff/comments, label editing, draft toggle, and API-only merge (`--limit`, `--tab`, `--interval`, `--plain` for static tables) |
 | `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack; GitHub statuses and check runs are fetched across all pages before roll-up |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
-| `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
-| `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
-| `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
+| `st rs` / `st rs --restack` | Sync trunk, clean merged branches, report closed-but-unmerged PR branches without deleting them, optionally rebase |
+| `st sweep` | Classify local branches (merged/closed-pr/gone/stale/active); `--delete` cleans merged and safe upstream-gone branches, while `--delete --include-closed` explicitly discards closed PR branches |
+| `st stats` | Single-screen, local-only snapshot of stacking health (stack shape, PR mix, restack/parent/dirty health, worktree lanes, hygiene, next action); `--current` scopes to the current stack, `--json` for machine output, `--ci` adds an opt-in CI roll-up |
+| `st refresh` / `st r` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (pass `--delete-merged` to opt into `sync`-style cleanup) |
+| `st refresh --get` | Before restacking, reconcile each branch in the current stack against its remote ref; use this after another machine rebased and force-pushed the stack ([multi-machine workflow](docs/workflows/multi-machine.md)) |
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
 | `st refresh --verbose` | Include detailed sync/restack/submit timing |
@@ -470,6 +481,7 @@ AI and editor integration guides:
 - [Claude Code](docs/integrations/claude-code.md)
 - [Codex](docs/integrations/codex.md)
 - [Gemini CLI](docs/integrations/gemini-cli.md)
+- [Hermes](docs/integrations/hermes.md)
 - [OpenCode](docs/integrations/opencode.md)
 - [pi](docs/integrations/pi.md)
 - [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)

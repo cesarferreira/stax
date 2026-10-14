@@ -17,9 +17,16 @@
 //! stored boundary is stale and replaying from it would re-apply commits that
 //! are already merged. In that case restack rebases from the merge-base (a
 //! no-op) rather than the stale stored boundary.
+//!
+//! A third signal covers *squash merges*. When the leading commits of a branch
+//! already landed on the parent as one squash commit, their cumulative diff
+//! matches a parent commit even though no single branch commit does, so git
+//! replays them and conflicts on files the branch no longer needs to change.
+//! In that case restack rebases from the last squashed commit instead.
 
 use crate::config::Config;
 use crate::git::GitRepo;
+use crate::git::repo::SquashMergedPrefix;
 use anyhow::Result;
 
 /// Minimum stored-range size before we even consider warning. Tiny drifts on
@@ -52,6 +59,9 @@ pub struct RestackPreflight {
     pub parent_tip: Option<String>,
     pub stored_to_branch: Option<usize>,
     pub merge_base_to_branch: Option<usize>,
+    /// Leading branch commits already on `parent` as one squash commit, when the
+    /// stored boundary would still replay them.
+    pub(crate) squash_merged_prefix: Option<SquashMergedPrefix>,
 }
 
 pub struct RebaseBoundaryDecision {
@@ -97,6 +107,18 @@ impl RestackPreflight {
 
         let parent_tip = repo.branch_commit(parent).ok();
 
+        // Skip prefixes the stored boundary already excludes.
+        let squash_merged_prefix = repo
+            .find_squash_merged_prefix(branch, parent)
+            .ok()
+            .flatten()
+            .filter(|prefix| {
+                stored_revision.trim().is_empty()
+                    || !repo
+                        .is_ancestor(&prefix.tip, stored_revision)
+                        .unwrap_or(false)
+            });
+
         Ok(Self {
             branch: branch.to_string(),
             parent: parent.to_string(),
@@ -105,6 +127,7 @@ impl RestackPreflight {
             parent_tip,
             stored_to_branch,
             merge_base_to_branch,
+            squash_merged_prefix,
         })
     }
 
@@ -146,6 +169,9 @@ impl RestackPreflight {
     /// Whether this report has a merge-base boundary that can be used instead
     /// of the stored boundary.
     pub fn corrected_upstream(&self) -> Option<&str> {
+        if let Some(prefix) = &self.squash_merged_prefix {
+            return Some(&prefix.tip);
+        }
         if !self.is_suspicious() && !self.already_rebased_externally() {
             return None;
         }
@@ -178,7 +204,15 @@ pub fn choose_rebase_upstream(
     if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision)
         && let Some(upstream) = report.corrected_upstream()
     {
-        let reason = if report.is_suspicious() {
+        let reason = if let Some(prefix) = &report.squash_merged_prefix {
+            format!(
+                "'{}' has {} commit(s) already merged into '{}' as {}; rebasing only the commits after them",
+                report.branch,
+                prefix.commit_count,
+                report.parent,
+                &prefix.trunk_commit[..prefix.trunk_commit.len().min(12)]
+            )
+        } else if report.is_suspicious() {
             format!(
                 "'{}' stored boundary from '{}' would replay {} commit(s); using merge-base boundary ({} commit(s))",
                 report.branch,
@@ -225,6 +259,7 @@ mod tests {
             parent_tip: None,
             stored_to_branch: stored,
             merge_base_to_branch: mb,
+            squash_merged_prefix: None,
         }
     }
 
@@ -242,7 +277,29 @@ mod tests {
             parent_tip: parent_tip.map(|s| s.into()),
             stored_to_branch: None,
             merge_base_to_branch: None,
+            squash_merged_prefix: None,
         }
+    }
+
+    fn squash_pf(tip: &str) -> RestackPreflight {
+        RestackPreflight {
+            squash_merged_prefix: Some(SquashMergedPrefix {
+                tip: tip.into(),
+                commit_count: 3,
+                trunk_commit: "0123456789abcdef".into(),
+            }),
+            ..pf(Some(3), Some(3))
+        }
+    }
+
+    #[test]
+    fn squash_merged_prefix_wins_over_other_boundaries() {
+        assert_eq!(squash_pf("c3").corrected_upstream(), Some("c3"));
+        let both = RestackPreflight {
+            squash_merged_prefix: squash_pf("c3").squash_merged_prefix,
+            ..pf(Some(60), Some(2))
+        };
+        assert_eq!(both.corrected_upstream(), Some("c3"));
     }
 
     #[test]

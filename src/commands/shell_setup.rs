@@ -602,11 +602,17 @@ fn maybe_install_skills(options: &SetupOptions) -> Result<()> {
     }
 
     println!();
-    skills::run_update_with(
+    if let Err(err) = skills::run_update_with(
         false,
         &HarnessSelection::Only(ids),
         skills::SkillsUpdateOrigin::Setup,
-    )
+    ) {
+        eprintln!(
+            "{}",
+            format!("Warning: some agent skill files could not be written: {err:#}").yellow()
+        );
+    }
+    Ok(())
 }
 
 fn maybe_setup_auth(options: &SetupOptions) -> Result<()> {
@@ -719,6 +725,7 @@ fn harness_detect_path(id: &str) -> &'static str {
         "claude" => ".claude/skills/stax/SKILL.md",
         "cursor" => ".cursor/skills/stax/SKILL.md",
         "pi" => ".pi/agent/skills/stax/SKILL.md",
+        "hermes" => ".hermes/skills/stax/SKILL.md",
         _ => "",
     }
 }

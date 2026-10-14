@@ -1243,8 +1243,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
             // Use selected template content if available
             let template_content = selected_template.as_ref().map(|t| t.content.as_str());
-            let default_body =
-                build_default_pr_body(template_content, &plan.branch, &commit_messages);
+            let default_body = build_default_pr_body(
+                template_content,
+                &plan.branch,
+                &commit_messages,
+                config.submit.commit_messages_in_body,
+            );
 
             if !quiet {
                 println!("  {}", plan.branch.cyan());
@@ -3902,12 +3906,13 @@ fn build_default_pr_body(
     template: Option<&str>,
     branch: &str,
     commit_messages: &[String],
+    commit_messages_in_body: bool,
 ) -> String {
     let commits_text = render_commit_list(commit_messages);
 
     let mut body = if let Some(template) = template {
         template.to_string()
-    } else if commits_text.is_empty() {
+    } else if commits_text.is_empty() || !commit_messages_in_body {
         String::new()
     } else {
         format!("## Summary\n\n{}", commits_text)

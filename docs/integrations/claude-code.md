@@ -18,7 +18,7 @@ Enables workflow assistance for stacked branch creation, submit flows, and relat
 st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent claude
-st generate --pr-body --agent claude --model claude-opus-4-8
+st generate --pr-body --agent claude --model claude-opus-5
 st gen --pr-title --agent claude
 st gen --commit-msg --agent claude
 ```
@@ -27,5 +27,5 @@ When `claude` is selected, stax tries Anthropic's live Models API first (using `
 
 ## Related
 
-- [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md) · [pi](pi.md)
+- [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [Hermes](hermes.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)

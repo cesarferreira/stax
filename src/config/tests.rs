@@ -746,6 +746,7 @@ fn test_default_config() {
     assert!(config.auth.use_gh_cli);
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
+    assert!(config.sync.confirm_delete);
 }
 
 #[test]
@@ -758,6 +759,23 @@ fn test_default_toml_serializes() {
     assert!(s.contains(r#""auto" | "off" | "link""#));
     assert!(s.contains(r#""comment" | "body" | "both" | "off""#));
     assert!(s.contains("[worktree.hooks]"));
+    assert!(s.contains("[sync]"));
+    assert!(s.contains("# confirm_delete = true"));
+}
+
+#[test]
+fn sync_confirm_delete_config_parses() {
+    let config: Config = toml::from_str("[sync]\nconfirm_delete = false\n").unwrap();
+    assert!(!config.sync.confirm_delete);
+
+    let config: Config = toml::from_str("[sync]\n").unwrap();
+    assert!(config.sync.confirm_delete);
+}
+
+#[test]
+fn sync_confirm_delete_config_rejects_non_bool() {
+    let result = toml::from_str::<Config>("[sync]\nconfirm_delete = \"never\"\n");
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1321,6 +1339,29 @@ fn test_format_branch_name_consecutive_replacements_collapsed() {
     let config = Config::default();
     // Multiple spaces should become single dash
     assert_eq!(config.format_branch_name("my   feature"), "my-feature");
+}
+
+#[test]
+fn test_format_branch_name_lowercases_by_default() {
+    let mut config = Config::default();
+    config.branch.format = Some("{user}/{message}".to_string());
+    config.branch.user = Some("Cesar".to_string());
+    assert_eq!(
+        config.format_branch_name("Bump Fastlane Version"),
+        "cesar/bump-fastlane-version"
+    );
+}
+
+#[test]
+fn test_format_branch_name_lowercase_can_be_disabled() {
+    let mut config = Config::default();
+    config.branch.lowercase = false;
+    config.branch.format = Some("{user}/{message}".to_string());
+    config.branch.user = Some("Cesar".to_string());
+    assert_eq!(
+        config.format_branch_name("Bump Fastlane Version"),
+        "Cesar/Bump-Fastlane-Version"
+    );
 }
 
 #[test]
@@ -2059,7 +2100,7 @@ fn test_format_template_sanitizes_user() {
     config.branch.user = Some("John Doe".to_string());
 
     let result = config.format_branch_name("feature");
-    assert_eq!(result, "John-Doe/feature");
+    assert_eq!(result, "john-doe/feature");
 }
 
 #[test]
@@ -2247,4 +2288,99 @@ replacement = "-"
     assert_eq!(config.branch.date_format, "%m-%d");
     // Legacy behavior should still work
     assert_eq!(config.format_branch_name("feature"), "cesar/feature");
+}
+
+// ---------------------------------------------------------------------------
+// `stax user` setters
+// ---------------------------------------------------------------------------
+
+fn with_isolated_config_dir<F: FnOnce()>(f: F) {
+    let _guard = env_lock();
+
+    let orig_stax = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.path()) };
+
+    f();
+
+    restore_env_var("STAX_CONFIG_DIR", orig_stax);
+}
+
+#[test]
+fn test_set_branch_prefix() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_prefix(Some("cesar/".to_string())).unwrap();
+        assert_eq!(
+            Config::load_global().unwrap().branch.prefix,
+            Some("cesar/".to_string())
+        );
+
+        Config::set_branch_prefix(None).unwrap();
+        assert!(Config::load_global().unwrap().branch.prefix.is_none());
+    });
+}
+
+#[test]
+fn test_set_branch_date() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_date(true).unwrap();
+        assert!(Config::load_global().unwrap().branch.date);
+
+        Config::set_branch_date(false).unwrap();
+        assert!(!Config::load_global().unwrap().branch.date);
+    });
+}
+
+#[test]
+fn test_set_branch_replacement() {
+    with_isolated_config_dir(|| {
+        Config::set_branch_replacement("_".to_string()).unwrap();
+        assert_eq!(Config::load_global().unwrap().branch.replacement, "_");
+    });
+}
+
+#[test]
+fn test_set_editor() {
+    with_isolated_config_dir(|| {
+        Config::set_editor(Some("vim".to_string())).unwrap();
+        assert_eq!(
+            Config::load_global().unwrap().editor,
+            Some("vim".to_string())
+        );
+
+        Config::set_editor(None).unwrap();
+        assert!(Config::load_global().unwrap().editor.is_none());
+    });
+}
+
+#[test]
+fn test_set_tips() {
+    with_isolated_config_dir(|| {
+        Config::set_tips(false).unwrap();
+        assert!(!Config::load_global().unwrap().ui.tips);
+
+        Config::set_tips(true).unwrap();
+        assert!(Config::load_global().unwrap().ui.tips);
+    });
+}
+
+#[test]
+fn test_set_submit_commit_messages_in_body() {
+    with_isolated_config_dir(|| {
+        Config::set_submit_commit_messages_in_body(false).unwrap();
+        assert!(
+            !Config::load_global()
+                .unwrap()
+                .submit
+                .commit_messages_in_body
+        );
+
+        Config::set_submit_commit_messages_in_body(true).unwrap();
+        assert!(
+            Config::load_global()
+                .unwrap()
+                .submit
+                .commit_messages_in_body
+        );
+    });
 }

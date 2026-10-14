@@ -2,11 +2,194 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.116.0] - 2026-10-13
+
+### 🚀 Features
+
+- *(sync)* Show what a restack is doing under the spinner ([#921](https://github.com/cesarferreira/stax/issues/921))
+
+### 📚 Documentation
+
+- *(ai)* Complete Hermes agent references ([#919](https://github.com/cesarferreira/stax/issues/919))
+## [0.115.0] - 2026-10-09
+
+### 🚀 Features
+
+- *(sync)* Continue on the next branch when cleanup deletes the current one ([#917](https://github.com/cesarferreira/stax/issues/917))
+
+### 🐛 Bug Fixes
+
+- *(restack)* Skip leading commits already squash-merged into the parent ([#916](https://github.com/cesarferreira/stax/issues/916))
+- Fixed tests
+
+### 💼 Other
+
+- Removed bd
+- Updated agents.md
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.114.0] - 2026-10-05
+
+### 🚀 Features
+
+- *(sync)* Add --get flag to reconcile stack branches against remote ([#883](https://github.com/cesarferreira/stax/issues/883))
+- *(refresh)* Add --get flag to reconcile stack branches against remote
+- *(sync)* Add confirm_delete config to skip merged-branch prompts ([#901](https://github.com/cesarferreira/stax/issues/901))
+- Add Hermes agent integration ([#905](https://github.com/cesarferreira/stax/issues/905))
+
+### 🐛 Bug Fixes
+
+- *(get)* Scope --force dirty-tree guard to tracked changes with a clearer error ([#884](https://github.com/cesarferreira/stax/issues/884))
+- *(sync)* Retain and report closed unmerged PR branches ([#898](https://github.com/cesarferreira/stax/issues/898))
+- *(sync)* Report --get skips in JSON ([#899](https://github.com/cesarferreira/stax/issues/899))
+
+### 💼 Other
+
+- Removed beads
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.113.1] - 2026-09-15
+
+### 🐛 Bug Fixes
+
+- Lowercase generated branch names ([#876](https://github.com/cesarferreira/stax/issues/876))
+
+### 💼 Other
+
+- Bd init: initialize beads issue tracking
+- Bd integration
+- Added multi machine docs
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.113.0] - 2026-09-09
+
+### 🚀 Features
+
+- *(ai)* Refresh LLM picker model IDs to current catalogs ([#875](https://github.com/cesarferreira/stax/issues/875))
+
+### 🐛 Bug Fixes
+
+- *(skills)* Repair broken symlinks and keep per-harness failures non-fatal ([#868](https://github.com/cesarferreira/stax/issues/868))
+- *(board)* Commit label state after mutation succeeds ([#850](https://github.com/cesarferreira/stax/issues/850))
+
+### 💼 Other
+
+- Bump libraries ([#874](https://github.com/cesarferreira/stax/issues/874))
+
+### 🧪 Testing
+
+- *(refresh)* Cover all-stacks delete merged ([#863](https://github.com/cesarferreira/stax/issues/863))
+- *(merge)* Cover ignore failed CI merge modes ([#859](https://github.com/cesarferreira/stax/issues/859))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.112.0] - 2026-09-07
+
+### 🚀 Features
+
+- *(stats)* Add local stacking health snapshot ([#866](https://github.com/cesarferreira/stax/issues/866))
+
+### 🐛 Bug Fixes
+
+- *(sweep)* Stop parsing the worktree marker into branch names ([#861](https://github.com/cesarferreira/stax/issues/861))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+- Release
+## [0.110.0] - 2026-09-02
+
+### 🚀 Features
+
+- *(merge)* Add --ignore-failed-ci to override a red CI rollup ([#855](https://github.com/cesarferreira/stax/issues/855))
+- *(refresh)* Add opt-in --delete-merged flag ([#858](https://github.com/cesarferreira/stax/issues/858))
+
+### 🐛 Bug Fixes
+
+- *(github)* Route GitHub API calls through the configured HTTP proxy ([#852](https://github.com/cesarferreira/stax/issues/852))
+- *(continue)* Reparent orphaned branches onto trunk when recorded parent is gone ([#856](https://github.com/cesarferreira/stax/issues/856))
+
+### 🚜 Refactor
+
+- *(github)* Make the reqwest transport the only GitHub transport (stacked on #852) ([#853](https://github.com/cesarferreira/stax/issues/853))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+- Release
+## [0.109.0] - 2026-08-31
+
+### 🚀 Features
+
+- *(board)* Add stax board dashboard for PRs and issues ([#831](https://github.com/cesarferreira/stax/issues/831))
+- *(user)* Add `stax user` command for personal preferences ([#849](https://github.com/cesarferreira/stax/issues/849))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Include tags when fetching with --full ([#832](https://github.com/cesarferreira/stax/issues/832))
+- *(sync)* Persist ancestry-verified parentBranchRevision after squash-merge cleanup ([#834](https://github.com/cesarferreira/stax/issues/834))
+- *(ops)* Track metadata-ref before/after OIDs at 3 more parentBranchRevision write sites ([#838](https://github.com/cesarferreira/stax/issues/838))
+- *(create)* Wrap stax create in a Transaction, closing the last of #830's write sites ([#840](https://github.com/cesarferreira/stax/issues/840))
+- *(detach)* Track metadata refs so undo actually reverses detach ([#842](https://github.com/cesarferreira/stax/issues/842))
+- *(edit)* Track metadata ref for undo, and fix a real cp bug in the rebase editor ([#844](https://github.com/cesarferreira/stax/issues/844))
+- *(restack)* Verify ancestry when recovering metadata after a manual rebase --continue ([#845](https://github.com/cesarferreira/stax/issues/845))
+- *(split)* Verify ancestry and track metadata refs in the interactive split TUI ([#846](https://github.com/cesarferreira/stax/issues/846))
+
+### 🧪 Testing
+
+- *(sync)* Cover full fetch of remote-only tags ([#836](https://github.com/cesarferreira/stax/issues/836))
+- *(reorder)* Pin the metadata-ref after-OID invariant, confirmed safe not buggy ([#847](https://github.com/cesarferreira/stax/issues/847))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
+## [0.108.0] - 2026-08-28
+
+### 🚀 Features
+
+- *(cli)* Repurpose `st update` as CLI upgrade + skills-update proposal ([#812](https://github.com/cesarferreira/stax/issues/812))
+- *(cli)* Add r alias for refresh ([#816](https://github.com/cesarferreira/stax/issues/816))
+- *(branch)* Track all local branches ([#821](https://github.com/cesarferreira/stax/issues/821))
+
+### 🐛 Bug Fixes
+
+- *(gitlab)* Include head SHA when merging ([#820](https://github.com/cesarferreira/stax/issues/820))
+- Fix st web linux tests
+- *(sync)* Snapshot branch metadata in restack transaction, harden needs_restack ([#826](https://github.com/cesarferreira/stax/issues/826))
+- *(release)* Auto-install cargo-release like git-cliff ([#829](https://github.com/cesarferreira/stax/issues/829))
+
+### 💼 Other
+
+- Let `st web` open any path inside a Git worktree ([#817](https://github.com/cesarferreira/stax/issues/817))
+- Add resizable stack pane and safe web sync ([#823](https://github.com/cesarferreira/stax/issues/823))
+
+### 🚜 Refactor
+
+- *(cli)* Remove the now-redundant `st cli upgrade` subcommand ([#815](https://github.com/cesarferreira/stax/issues/815))
+
+### 🧪 Testing
+
+- Cover multi-branch undo and cross-phase metadata idempotency ([#827](https://github.com/cesarferreira/stax/issues/827))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.107.1] - 2026-08-27
 
 ### 🐛 Bug Fixes
 
 - *(gitlab)* Retry transient MR source race ([#814](https://github.com/cesarferreira/stax/issues/814))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.107.0] - 2026-08-27
 
 ### 🚀 Features

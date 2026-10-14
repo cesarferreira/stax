@@ -530,6 +530,65 @@ fn sweep_delete_removes_branch_with_merged_pr_metadata() {
     );
 }
 
+#[test]
+fn sweep_closed_pr_requires_explicit_opt_in() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+    repo.run_stax(&["bc", "abandoned-pr"]).assert_success();
+    repo.create_file("abandoned.txt", "unmerged work");
+    repo.commit("Unmerged work");
+    repo.git(&["push", "-u", "origin", "abandoned-pr"]);
+    write_branch_pr_metadata_with_state(&repo, "abandoned-pr", "main", 44, "CLOSED");
+    repo.run_stax(&["t"]).assert_success();
+
+    let output = repo.run_stax(&["sweep", "--json"]);
+    output.assert_success();
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("valid sweep JSON");
+    let branch = rows["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "abandoned-pr")
+        .expect("closed branch should be visible");
+    assert_eq!(branch["status"], "closed-pr");
+
+    repo.run_stax(&["sweep", "--delete", "--force"])
+        .assert_success();
+    assert!(repo.list_branches().contains(&"abandoned-pr".to_string()));
+
+    repo.run_stax(&["sweep", "--delete", "--include-closed", "--force"])
+        .assert_success();
+    assert!(!repo.list_branches().contains(&"abandoned-pr".to_string()));
+}
+
+#[test]
+fn sweep_closed_pr_with_deleted_remote_is_not_merged_or_auto_deleted() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+    repo.run_stax(&["bc", "closed-gone-pr"]).assert_success();
+    repo.create_file("closed-gone.txt", "unmerged work");
+    repo.commit("Unmerged work");
+    repo.git(&["push", "-u", "origin", "closed-gone-pr"]);
+    write_branch_pr_metadata_with_state(&repo, "closed-gone-pr", "main", 45, "CLOSED");
+    repo.run_stax(&["t"]).assert_success();
+    repo.git(&["push", "origin", "--delete", "closed-gone-pr"]);
+
+    let output = repo.run_stax(&["sweep", "--json"]);
+    output.assert_success();
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("valid sweep JSON");
+    let branch = rows["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "closed-gone-pr")
+        .expect("closed branch should be visible");
+    assert_eq!(branch["status"], "closed-pr");
+
+    repo.run_stax(&["sweep", "--delete", "--force"])
+        .assert_success();
+    assert!(repo.list_branches().contains(&"closed-gone-pr".to_string()));
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — opt-in deletion
 // ---------------------------------------------------------------------------
@@ -743,4 +802,46 @@ fn sweep_reparents_tracked_children_on_delete() {
     // stax status should succeed (no orphan metadata errors)
     let status_out = repo.run_stax(&["status"]);
     status_out.assert_success();
+}
+
+#[test]
+fn sweep_ignores_worktree_checkout_marker() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "side"]).assert_success();
+    repo.create_file("side.txt", "side");
+    repo.commit("side commit");
+
+    let worktree_path = repo.path().join("wt-main");
+    let out = repo.git(&[
+        "worktree",
+        "add",
+        worktree_path.to_str().expect("worktree path"),
+        "main",
+    ]);
+    assert!(
+        out.status.success(),
+        "failed to add worktree: {}",
+        TestRepo::stderr(&out)
+    );
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+
+    let names: Vec<&str> = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array")
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .collect();
+
+    assert!(
+        !names.iter().any(|n| n.starts_with('+') || *n == "main"),
+        "trunk checked out in another worktree must not be swept: {:?}",
+        names
+    );
 }

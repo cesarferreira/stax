@@ -1052,3 +1052,120 @@ fn restack_success_receipt_persistence_failure_returns_in_memory_receipt() {
         OperationOutcome::Restacked { ref branches, .. } if branches == &vec![branch]
     ));
 }
+
+/// The op receipt's recorded after-OIDs must match what git itself reports.
+/// reorder/move_subtree record metadata-ref after-OIDs through libgit2
+/// (`Transaction::record_metadata_ref_after`) even though the refs are written
+/// by a `git update-ref` subprocess. That is safe only because `update-ref`
+/// always leaves a loose ref, which libgit2 reads from disk and which shadows
+/// packed-refs. The packed pass below removes the loose files first, pinning
+/// the case where libgit2's stat-cached packed backend is the only source --
+/// investigated during a broader test-coverage audit (issue #830 follow-up)
+/// and confirmed safe; this test exists so that finding doesn't need
+/// re-litigating if the write path here ever changes.
+#[test]
+fn reorder_and_move_record_metadata_after_oids_that_match_git() {
+    fn rev_parse(repo: &TestRepo, refname: &str) -> Option<String> {
+        let out = repo.git(&["rev-parse", "--verify", refname]);
+        out.status
+            .success()
+            .then(|| TestRepo::stdout(&out).trim().to_string())
+    }
+
+    fn latest_receipt(repo: &TestRepo) -> serde_json::Value {
+        let ops_dir = repository_git_dir(repo).join("stax").join("ops");
+        let mut entries: Vec<_> = std::fs::read_dir(&ops_dir)
+            .expect("read ops dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        entries.sort_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        let newest = entries.last().expect("expected at least one op receipt");
+        serde_json::from_str(&std::fs::read_to_string(newest.path()).unwrap()).unwrap()
+    }
+
+    fn assert_receipt_matches_git(repo: &TestRepo, branches: &[String], label: &str) {
+        let receipt = latest_receipt(repo);
+        let refs = receipt["local_refs"].as_array().unwrap();
+        for branch in branches {
+            for (entry_label, refname) in [
+                (branch.clone(), format!("refs/heads/{branch}")),
+                (
+                    format!("{branch}@meta"),
+                    format!("refs/branch-metadata/{branch}"),
+                ),
+            ] {
+                let entry = refs
+                    .iter()
+                    .find(|e| e["branch"] == serde_json::Value::String(entry_label.clone()))
+                    .unwrap_or_else(|| panic!("{label}: no receipt entry for {entry_label}"));
+                assert_eq!(entry["after_recorded"], serde_json::Value::Bool(true));
+                assert_eq!(
+                    entry["oid_after"].as_str().map(str::to_string),
+                    rev_parse(repo, &refname),
+                    "{label}: receipt oid_after for {entry_label} disagrees with git"
+                );
+            }
+            // The stamped boundary must really be in the branch's ancestry.
+            let meta: serde_json::Value = serde_json::from_str(&TestRepo::stdout(
+                &repo.git(&["show", &format!("refs/branch-metadata/{branch}")]),
+            ))
+            .unwrap();
+            let revision = meta["parentBranchRevision"].as_str().unwrap_or_default();
+            assert!(
+                repo.git(&["merge-base", "--is-ancestor", revision, branch])
+                    .status
+                    .success(),
+                "{label}: {branch} parentBranchRevision {revision} is not an ancestor"
+            );
+        }
+    }
+
+    for packed in [false, true] {
+        let label = if packed { "packed" } else { "loose" };
+
+        let repo = TestRepo::new();
+        repo.set_trunk("main");
+        let original = repo.create_stack(&["a", "b", "c"]);
+        let proposed = vec![
+            original[2].clone(),
+            original[0].clone(),
+            original[1].clone(),
+        ];
+        if packed {
+            repo.git(&["pack-refs", "--all"]).assert_success();
+            for branch in &original {
+                assert!(
+                    !repo
+                        .path()
+                        .join(".git/refs/branch-metadata")
+                        .join(branch)
+                        .exists(),
+                    "pack-refs should have removed the loose metadata ref for {branch}"
+                );
+            }
+        }
+        RepositorySession::open(repo.path())
+            .unwrap()
+            .reorder_stack(&original, &proposed, false, &mut NoopOperationReporter)
+            .unwrap();
+        assert_receipt_matches_git(&repo, &original, &format!("reorder/{label}"));
+
+        let repo = TestRepo::new();
+        repo.set_trunk("main");
+        let branches = repo.create_stack(&["a", "b", "c"]);
+        repo.git(&["checkout", "main"]).assert_success();
+        if packed {
+            repo.git(&["pack-refs", "--all"]).assert_success();
+        }
+        RepositorySession::open(repo.path())
+            .unwrap()
+            .move_subtree(&branches[1], "main", false, &mut NoopOperationReporter)
+            .unwrap();
+        assert_receipt_matches_git(&repo, &branches[1..], &format!("move_subtree/{label}"));
+    }
+}

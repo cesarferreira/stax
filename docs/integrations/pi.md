@@ -29,7 +29,7 @@ pi loads skills from `~/.pi/agent/skills/<name>/SKILL.md`.
 
 ```bash
 st generate --pr-body --agent pi
-st generate --pr-body --agent pi --model anthropic/claude-opus-4-8
+st generate --pr-body --agent pi --model anthropic/claude-opus-5
 st gen --pr-title --agent pi
 st gen --commit-msg --agent pi
 ```
@@ -38,7 +38,7 @@ st gen --commit-msg --agent pi
 
 ```bash
 st lane deep-dive --agent pi
-st lane deep-dive --agent pi --model anthropic/claude-opus-4-8 "trace the flaky test"
+st lane deep-dive --agent pi --model anthropic/claude-opus-5 "trace the flaky test"
 ```
 
 `--yolo` is not supported for pi (permission bypass is provided by opt-in
@@ -47,5 +47,5 @@ manually with `--agent-arg` if your pi setup supports one.
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [Hermes](hermes.md) · [OpenCode](opencode.md)
 - [PR templates + AI](pr-templates-and-ai.md)

@@ -5,9 +5,22 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::command;
+
+/// The leading commits of a branch that already landed on its parent as one commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SquashMergedPrefix {
+    /// Newest branch commit contained in the squash; the rebase boundary to use.
+    pub tip: String,
+    /// Number of branch commits (counted from the merge-base) the squash covers.
+    pub commit_count: usize,
+    /// The parent commit that contains their combined changes.
+    pub trunk_commit: String,
+}
 
 pub struct GitRepo {
     repo: Repository,
@@ -366,6 +379,18 @@ impl GitRepo {
 
     pub(crate) fn is_dirty_at(&self, cwd: &Path) -> Result<bool> {
         let output = self.run_git(cwd, &["status", "--porcelain"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git status failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
+    /// Like `is_dirty_at`, but ignores untracked files. Use this before an
+    /// operation (like `git reset --hard`) that only destroys tracked
+    /// changes, so an unrelated untracked scratch file doesn't block it.
+    pub(crate) fn has_tracked_changes_at(&self, cwd: &Path) -> Result<bool> {
+        let output = self.run_git(cwd, &["status", "--porcelain", "--untracked-files=no"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!("git status failed in '{}': {}", cwd.display(), stderr);
@@ -1145,8 +1170,13 @@ impl GitRepo {
         Ok(output.status.success())
     }
 
-    fn rebase_with_args_in_path(&self, cwd: &Path, args: &[&str]) -> Result<RebaseResult> {
-        let output = self.run_git(cwd, args)?;
+    fn rebase_with_args_in_path(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseResult> {
+        let output = self.run_rebase_reporting_progress(cwd, args, progress)?;
         if output.status.success() {
             return Ok(RebaseResult::Success);
         }
@@ -1164,8 +1194,48 @@ impl GitRepo {
         );
     }
 
-    fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto])
+    /// Run `git rebase` and, when a listener is attached, poll Git's on-disk
+    /// rebase state so the caller can show the commit currently being applied.
+    fn run_rebase_reporting_progress(
+        &self,
+        cwd: &Path,
+        args: &[&str],
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<Output> {
+        let Some(progress) = progress else {
+            return self.run_git(cwd, args);
+        };
+        let git_dir = self.git_dir_in_path(cwd).ok();
+        let stop = AtomicBool::new(false);
+        thread::scope(|scope| {
+            if let Some(git_dir) = git_dir.as_deref() {
+                scope.spawn(|| {
+                    let mut last = String::new();
+                    while !stop.load(Ordering::Relaxed) {
+                        if let Some(detail) = super::rebase_progress::rebase_detail_line(git_dir)
+                            && detail != last
+                            && !stop.load(Ordering::Relaxed)
+                        {
+                            progress(&detail);
+                            last = detail;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                });
+            }
+            let output = self.run_git(cwd, args);
+            stop.store(true, Ordering::Relaxed);
+            output
+        })
+    }
+
+    fn rebase_in_path(
+        &self,
+        cwd: &Path,
+        onto: &str,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseResult> {
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto], progress)
     }
 
     fn rebase_onto_upstream_in_path(
@@ -1173,8 +1243,13 @@ impl GitRepo {
         cwd: &Path,
         onto: &str,
         upstream: &str,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
     ) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", "--onto", onto, upstream])
+        self.rebase_with_args_in_path(
+            cwd,
+            &["rebase", "--empty=drop", "--onto", onto, upstream],
+            progress,
+        )
     }
 
     fn reset_hard_in_path(&self, cwd: &Path, target: &str) -> Result<()> {
@@ -1337,6 +1412,19 @@ impl GitRepo {
     }
 
     fn run_patch_id_from_input(&self, cwd: &Path, input: &[u8]) -> Result<Vec<String>> {
+        Ok(self
+            .run_patch_id_pairs_from_input(cwd, input)?
+            .into_iter()
+            .map(|(patch_id, _)| patch_id)
+            .collect())
+    }
+
+    /// Run `git patch-id --stable` and return `(patch_id, commit_id)` pairs.
+    fn run_patch_id_pairs_from_input(
+        &self,
+        cwd: &Path,
+        input: &[u8],
+    ) -> Result<Vec<(String, String)>> {
         let mut patch_id = Command::new("git")
             .args(["patch-id", "--stable"])
             .current_dir(cwd)
@@ -1375,14 +1463,25 @@ impl GitRepo {
 
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
-            .filter_map(|line| line.split_whitespace().next())
-            .map(ToString::to_string)
+            .filter_map(|line| {
+                let mut columns = line.split_whitespace();
+                let patch_id = columns.next()?;
+                let commit_id = columns.next().unwrap_or_default();
+                Some((patch_id.to_string(), commit_id.to_string()))
+            })
             .collect())
     }
 
     /// Max commits in `merge_base..trunk` for patch-id merged-branch detection; beyond this we
     /// skip the expensive `git log -p` path (see `is_branch_merged_equivalent_to_trunk`).
     pub(crate) const PATCH_ID_TRUNK_COMMIT_CAP: usize = 200;
+
+    /// Max branch commits examined by `find_squash_merged_prefix`.
+    pub(crate) const SQUASH_PREFIX_BRANCH_COMMIT_CAP: usize = 100;
+
+    /// Max changed files passed as a pathspec to narrow the trunk commits searched by
+    /// `find_squash_merged_prefix`; above this the filter is skipped.
+    pub(crate) const SQUASH_PREFIX_PATHSPEC_CAP: usize = 500;
 
     pub(crate) fn rev_list_count(&self, cwd: &Path, range: &str) -> Result<usize> {
         let output = self.run_git(cwd, &["rev-list", "--count", range])?;
@@ -1410,6 +1509,171 @@ impl GitRepo {
         Ok(self
             .run_patch_id_from_input(cwd, &output.stdout)?
             .into_iter()
+            .collect())
+    }
+
+    /// Find the longest prefix of `branch`'s own commits that already landed on
+    /// `parent` as a single squash (or cherry-pick) commit.
+    ///
+    /// A squash commit has the *cumulative* diff of the PR's commits, so no
+    /// single branch commit shares its patch-id and git cannot drop them while
+    /// rebasing. Instead, for each branch commit `C_i` (newest first) this compares
+    /// the patch-id of `merge-base..C_i` with the patch-ids of the commits that
+    /// `parent` gained since the merge-base. The first match is returned, so the
+    /// caller can rebase only the commits after `C_i`.
+    ///
+    /// Returns `Ok(None)` when nothing matches or when the search would be too
+    /// expensive (see [`Self::PATCH_ID_TRUNK_COMMIT_CAP`] and
+    /// [`Self::SQUASH_PREFIX_BRANCH_COMMIT_CAP`]). Diffs use `-U0` so unrelated
+    /// edits near the squashed hunks on trunk do not change the patch-id.
+    pub(crate) fn find_squash_merged_prefix(
+        &self,
+        branch: &str,
+        parent: &str,
+    ) -> Result<Option<SquashMergedPrefix>> {
+        let cwd = self.workdir()?;
+        let merge_base = self.merge_base(parent, branch)?;
+
+        let parent_range = format!("{merge_base}..{parent}");
+        let parent_count = self.rev_list_count(cwd, &parent_range)?;
+        if parent_count == 0 || parent_count > Self::PATCH_ID_TRUNK_COMMIT_CAP {
+            return Ok(None);
+        }
+
+        let branch_range = format!("{merge_base}..{branch}");
+        let branch_commits = self.git_stdout_lines(
+            cwd,
+            &["rev-list", "--topo-order", "--reverse", &branch_range],
+        )?;
+        if branch_commits.is_empty() || branch_commits.len() > Self::SQUASH_PREFIX_BRANCH_COMMIT_CAP
+        {
+            return Ok(None);
+        }
+
+        // Only trunk commits touching a file the branch touches can be the squash.
+        let changed_files = self.git_stdout_lines(
+            cwd,
+            &["diff", "--name-only", "--no-renames", &merge_base, branch],
+        )?;
+        let mut rev_list_args = vec!["rev-list", "--no-merges", parent_range.as_str()];
+        if !changed_files.is_empty() && changed_files.len() <= Self::SQUASH_PREFIX_PATHSPEC_CAP {
+            rev_list_args.push("--");
+            rev_list_args.extend(changed_files.iter().map(String::as_str));
+        }
+        let candidates = self.git_stdout_lines(cwd, &rev_list_args)?;
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+
+        let mut log_args = vec![
+            "log",
+            "--format=%H",
+            "-p",
+            "-U0",
+            "--no-renames",
+            "--binary",
+            "--no-ext-diff",
+            "--no-color",
+            "--no-walk=unsorted",
+        ];
+        log_args.extend(candidates.iter().map(String::as_str));
+        let log = self.run_git(cwd, &log_args)?;
+        if !log.status.success() {
+            return Ok(None);
+        }
+        let trunk_patch_ids: HashMap<String, String> = self
+            .run_patch_id_pairs_from_input(cwd, &log.stdout)?
+            .into_iter()
+            .collect();
+        if trunk_patch_ids.is_empty() {
+            return Ok(None);
+        }
+
+        for (index, tip) in branch_commits.iter().enumerate().rev() {
+            let diff = self.run_git(
+                cwd,
+                &[
+                    "diff",
+                    "-U0",
+                    "--no-renames",
+                    "--binary",
+                    "--no-ext-diff",
+                    "--no-color",
+                    &merge_base,
+                    tip,
+                ],
+            )?;
+            if !diff.status.success() {
+                continue;
+            }
+            let patch_ids = self.run_patch_id_pairs_from_input(cwd, &diff.stdout)?;
+            let Some((patch_id, _)) = patch_ids.first() else {
+                continue;
+            };
+            if let Some(trunk_commit) = trunk_patch_ids.get(patch_id)
+                && self.merging_adds_nothing(cwd, &merge_base, parent, tip)
+            {
+                return Ok(Some(SquashMergedPrefix {
+                    tip: tip.clone(),
+                    commit_count: index + 1,
+                    trunk_commit: trunk_commit.clone(),
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// True when merging `tip` into `parent` (3-way, from `merge_base`) is clean and
+    /// leaves `parent`'s tree unchanged, i.e. every change in `merge_base..tip` is
+    /// already present in `parent`.
+    ///
+    /// Patch-ids ignore line numbers and, with `-U0`, context, so the same text added
+    /// at a different place in a file would match. This check rules that out: a
+    /// misplaced copy of the change would show up as a difference in the merged tree.
+    fn merging_adds_nothing(&self, cwd: &Path, merge_base: &str, parent: &str, tip: &str) -> bool {
+        let Ok(output) = self.run_git(
+            cwd,
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                "--merge-base",
+                merge_base,
+                parent,
+                tip,
+            ],
+        ) else {
+            return false;
+        };
+        if !output.status.success() {
+            return false;
+        }
+        let merged_tree = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .unwrap_or_default();
+        let Ok(parent_tree) =
+            self.git_stdout_lines(cwd, &["rev-parse", &format!("{parent}^{{tree}}")])
+        else {
+            return false;
+        };
+        !merged_tree.is_empty() && parent_tree.first() == Some(&merged_tree)
+    }
+
+    /// Run git and return non-empty stdout lines; a non-zero exit is an error.
+    fn git_stdout_lines(&self, cwd: &Path, args: &[&str]) -> Result<Vec<String>> {
+        let output = self.run_git(cwd, args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git {} failed: {}", args.join(" "), stderr);
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
             .collect())
     }
 
@@ -1471,13 +1735,41 @@ impl GitRepo {
         auto_stash_pop: bool,
         check_squash_merge: bool,
     ) -> Result<RebaseOutcome> {
+        self.rebase_branch_onto_with_provenance_timing_reporting(
+            branch,
+            onto,
+            fallback_upstream,
+            auto_stash_pop,
+            check_squash_merge,
+            None,
+        )
+    }
+
+    /// Like [`rebase_branch_onto_with_provenance_timing`], and reports each slow
+    /// phase through `progress` when the caller is drawing a live status line.
+    pub(crate) fn rebase_branch_onto_with_provenance_timing_reporting(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+        auto_stash_pop: bool,
+        check_squash_merge: bool,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<RebaseOutcome> {
+        let report = |detail: &str| {
+            if let Some(progress) = progress {
+                progress(detail);
+            }
+        };
         let mut timings = RebaseTimings::default();
 
+        report("Preparing worktree");
         let prepare_started_at = Instant::now();
         let (_current_workdir, target_workdir) = self.prepare_branch_rebase_context(branch)?;
         timings.prepare_context = prepare_started_at.elapsed();
 
         let mut stashed = false;
+        report("Checking for local changes");
         let dirty_check_started_at = Instant::now();
         let target_is_dirty = self.is_dirty_at(&target_workdir)?;
         timings.dirty_check = dirty_check_started_at.elapsed();
@@ -1490,38 +1782,43 @@ Use --auto-stash-pop or stash/commit changes first.",
                     target_workdir.display()
                 );
             }
+            report("Stashing local changes");
             let auto_stash_push_started_at = Instant::now();
             stashed = self.stash_push_at(&target_workdir)?;
             timings.auto_stash_push = auto_stash_push_started_at.elapsed();
         }
 
         let git_rebase_started_at = Instant::now();
-        if check_squash_merge
-            && self
+        if check_squash_merge {
+            report("Checking if this branch is already merged");
+            if self
                 .branch_is_integrated_into(onto, branch)
                 .unwrap_or(false)
-        {
-            self.reset_hard_in_path(&target_workdir, onto)
-                .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;
-            timings.git_rebase = git_rebase_started_at.elapsed();
+            {
+                report(&format!("Moving onto {onto}; changes are already there"));
+                self.reset_hard_in_path(&target_workdir, onto)
+                    .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;
+                timings.git_rebase = git_rebase_started_at.elapsed();
 
-            if stashed {
-                let auto_stash_pop_started_at = Instant::now();
-                self.stash_pop_at(&target_workdir).with_context(|| {
-                    format!(
-                        "Moved '{}' to '{}' successfully, but failed to auto-pop stash in '{}'",
-                        branch,
-                        onto,
-                        target_workdir.display()
-                    )
-                })?;
-                timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
+                if stashed {
+                    report("Restoring stashed changes");
+                    let auto_stash_pop_started_at = Instant::now();
+                    self.stash_pop_at(&target_workdir).with_context(|| {
+                        format!(
+                            "Moved '{}' to '{}' successfully, but failed to auto-pop stash in '{}'",
+                            branch,
+                            onto,
+                            target_workdir.display()
+                        )
+                    })?;
+                    timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
+                }
+
+                return Ok(RebaseOutcome {
+                    result: RebaseResult::Success,
+                    timings,
+                });
             }
-
-            return Ok(RebaseOutcome {
-                result: RebaseResult::Success,
-                timings,
-            });
         }
 
         // Always prefer `git rebase --onto <onto> <upstream> <branch>` when the
@@ -1530,8 +1827,9 @@ Use --auto-stash-pop or stash/commit changes first.",
         // thousands of trunk commits when the stored revision is no longer a
         // reachable ancestor (e.g. after squash-merges or metadata drift).
         // Only fall back to plain `git rebase <onto>` when no upstream is provided.
+        report(&format!("Rebasing onto {onto}"));
         let rebase_result = if !fallback_upstream.trim().is_empty() {
-            self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream)
+            self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream, progress)
                 .with_context(|| {
                     format!(
                         "Failed to rebase '{}' onto '{}' with upstream '{}' in '{}'",
@@ -1542,14 +1840,15 @@ Use --auto-stash-pop or stash/commit changes first.",
                     )
                 })
         } else {
-            self.rebase_in_path(&target_workdir, onto).with_context(|| {
-                format!(
-                    "Failed to rebase '{}' onto '{}' in '{}'",
-                    branch,
-                    onto,
-                    target_workdir.display()
-                )
-            })
+            self.rebase_in_path(&target_workdir, onto, progress)
+                .with_context(|| {
+                    format!(
+                        "Failed to rebase '{}' onto '{}' in '{}'",
+                        branch,
+                        onto,
+                        target_workdir.display()
+                    )
+                })
         };
         timings.git_rebase = git_rebase_started_at.elapsed();
 
@@ -1567,6 +1866,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         };
 
         if stashed && result == RebaseResult::Success {
+            report("Restoring stashed changes");
             let auto_stash_pop_started_at = Instant::now();
             self.stash_pop_at(&target_workdir).with_context(|| {
                 format!(
@@ -1734,6 +2034,31 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(self
             .repo
             .graph_descendant_of(descendant_oid, ancestor_oid)?)
+    }
+
+    /// Resolve the `parentBranchRevision` boundary to persist for `child` when it is
+    /// reparented onto a new parent.
+    ///
+    /// The stored boundary is what the next restack feeds to
+    /// `git rebase --onto <parent> <boundary>`, so it MUST be a commit that is really
+    /// in `child`'s ancestry. Stamping a commit `child` was never actually rebased
+    /// onto (e.g. a sibling branch's tip after a metadata-only reparent) makes the
+    /// next restack replay stale or already-upstream commits back in (see #830).
+    ///
+    /// Candidates are tried in order; the first one genuinely in `child`'s ancestry
+    /// wins, otherwise the previously recorded revision is preserved (see #120).
+    pub fn resolve_child_parent_boundary(
+        &self,
+        child: &str,
+        candidates: &[Option<&str>],
+        recorded_revision: &str,
+    ) -> String {
+        for candidate in candidates.iter().flatten() {
+            if self.is_ancestor(candidate, child).unwrap_or(false) {
+                return candidate.to_string();
+            }
+        }
+        recorded_revision.to_string()
     }
 
     /// Delete a branch
@@ -3055,5 +3380,55 @@ mod tests {
             .branches_with_configured_upstream()
             .expect("no branch config should not be an error");
         assert!(configured.is_empty());
+    }
+
+    #[test]
+    fn rebase_progress_reports_phases_before_replaying_commits() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["checkout", "-b", "feature"]);
+        fs::write(path.join("feature.txt"), "feature\n").expect("write feature");
+        run_git(path, &["add", "feature.txt"]);
+        run_git(path, &["commit", "-m", "Fix Kotlin compiler warnings"]);
+        run_git(path, &["checkout", "main"]);
+        fs::write(path.join("README.md"), "trunk\n").expect("move trunk");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Move trunk"]);
+
+        let upstream = run_git_capture(path, &["rev-parse", "main~1"]);
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let seen = std::sync::Mutex::new(Vec::new());
+        repo.rebase_branch_onto_with_provenance_timing_reporting(
+            "feature",
+            "main",
+            upstream.trim(),
+            false,
+            true,
+            Some(&|message| {
+                seen.lock().expect("progress log").push(message.to_string());
+            }),
+        )
+        .expect("rebase feature onto main");
+
+        let seen = seen.lock().expect("progress log");
+        assert!(
+            seen.iter().any(|message| message == "Preparing worktree"),
+            "phases: {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|message| message == "Checking if this branch is already merged"),
+            "phases: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|message| message == "Rebasing onto main"),
+            "phases: {seen:?}"
+        );
     }
 }

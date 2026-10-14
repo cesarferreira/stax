@@ -1,7 +1,7 @@
-<!-- stax-skills-version: 0.107.1 -->
+<!-- stax-skills-version: 0.116.0 -->
 # Stax Skills for AI Coding Agents
 
-This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, pi) how to use `stax` to manage stacked Git branches and PRs.
+This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, Hermes, OpenCode, pi) how to use `stax` to manage stacked Git branches and PRs.
 
 > Installing this skill: run `stax skills update` (or `st setup --install-skills`). To print the bundled skill (SKILL.md format): `st --skill`. Per-agent setup details live in `docs/integrations/`.
 
@@ -28,8 +28,9 @@ stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
 stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
-stax sync|rs                   # Sync trunk + clean merged branches
-stax sweep                     # Classify + optionally delete merged/gone/stale branches
+stax sync|rs                   # Sync trunk + clean merged branches; report closed PRs without deleting
+stax sweep                     # Classify merged/closed-pr/gone/stale/active; --delete --include-closed opts into discarding closed PR branches
+stax stats                     # Single-screen local stacking health snapshot (--current, --json, --ci)
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates (no trunk fetch; offline-friendly)
 
@@ -95,8 +96,7 @@ stax gen --commit-msg          # Non-interactive: amend HEAD commit message from
 
 stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
-stax cli upgrade               # Detect the install method and run the matching upgrade flow
-stax update                    # Upgrade the CLI, then offer to refresh installed AI agent skill files
+stax update                    # Detect the install method and run the matching upgrade flow, then offer to refresh installed AI agent skill files
 stax doctor                    # Health checks (also reports stale skill files)
 stax doctor --fix              # Show one repair plan, then apply safe local fixes after confirmation
 stax validate                  # Validate stack metadata
@@ -204,6 +204,8 @@ stax create --below -am "message"  # Auto-stash/apply, stage all, commit on new 
 stax bc <name>                     # Hidden shortcut alias
 # create -m/-am commits before branch creation, including --from/--below,
 # so hook failures or interrupts do not leave orphan branches or -2 retries.
+# Generated branch names are lowercased ("Bump Fastlane" -> bump-fastlane);
+# the commit message keeps its original casing. Opt out with branch.lowercase = false.
 # -m/--ai derived branch names refuse collisions instead of creating -2 duplicates.
 # --below keeps prepared work in place by stashing before moving downstack,
 # then applying it on the inserted lower branch.
@@ -282,7 +284,8 @@ fork_remote = "fork"               # name of a pre-configured git remote for the
 # CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
 # stax strips those overrides before `gh stack` and falls back to a keyring OAuth
 # account. `stax doctor` always shows the installed version, marks anything below
-# v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `merge --stack`),
+# v0.2.1 as out of date (v0.1.0 added `gh stack merge` for atomic `merge --stack`;
+# v0.2.1 fixes custom SSH host aliases),
 # can upgrade it with `stax doctor --fix`, and probes legacy OAuth (versions
 # below v0.0.8 only) only when token overrides exist.
 # Native GitHub Stack updates are append-only. If relinking would remove or insert
@@ -328,6 +331,7 @@ stax merge --remote                # Merge via GitHub API only — no local chec
 stax merge --remote --all          # Include full stack (GitHub only)
 stax merge --interval 30           # Positive poll seconds for --when-ready / --remote / --queue / --stack --when-ready
 stax merge --no-wait               # Fail fast if CI is pending
+stax merge --ignore-failed-ci      # Merge even when CI failed (still blocks draft/conflicts/changes-requested); incompatible with --queue
 stax merge --timeout 60            # Positive max-wait minutes (default 30; zero is rejected)
 stax merge --no-delete             # Keep branches after merge
 stax merge --no-sync               # Skip post-merge sync
@@ -336,7 +340,11 @@ stax merge-when-ready              # Backward-compatible alias
 # For merge --queue, timeout is a hard polling deadline: cap the final sleep to
 # the remaining budget and never poll the forge at or after the deadline.
 
-stax rs                            # Sync trunk + clean merged branches
+stax rs                            # Sync trunk + clean merged; report closed-but-unmerged PR branches without deleting
+# In st web, Sync is confirmed and uses the active repository (not server cwd):
+# fetch + trunk update + merged-local cleanup; clean tree required, no stash/restack.
+# Refresh remains read-only. The stack pane auto-fits long names; drag/Arrow-resize
+# persists per repository in browser localStorage, and double-click resets it.
 stax rs --restack                  # Sync then restack
 stax sync --dry-run                # Preview sync plan (read-only — no fetch, no stash, no ref writes); alias: --plan
 stax sync --dry-run --json         # Same as --dry-run but emits a single JSON doc (kind:"sync_plan", schema_version:1, dry_run:true); always exits 0; no receipt written
@@ -345,40 +353,52 @@ stax sync --json --force           # Same as --json but also auto-confirms branc
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
+# A deleted remote head does not make a known CLOSED PR merged. Closed branches stay local; stax sweep --delete --include-closed discards them explicitly.
 # Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
+# [sync] confirm_delete = false in config: sync/rs and bare `stax get` delete merged branches without the prompt (linked-worktree branches still ask; --quiet/--json still skip deletions).
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
-stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
+stax sync --full                   # Fetch all remote branches and tags with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
+stax sync --get                    # Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
 # When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
 # Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
 # If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
+# If cleanup deletes the branch you are on, sync checks out the next branch of that stack (first unmerged descendant, branch-name order on forks) instead of trunk, so `stax refresh` carries on with the rest of the stack; it stays on trunk if nothing is left above or the child is checked out in another worktree.
 # sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
 # --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; error message names --stash; stax sync --json --stash succeeds on a dirty tree (stashes before sync, restores after); --json conflicts with --continue.
 # trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 
-stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
-stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation
+stax sweep                         # Classify ALL local branches (merged/closed-pr/gone/stale/active) — read-only
+stax sweep --delete                # Delete merged/tracked-merged PRs + safe upstream-gone branches; closed PRs stay
+stax sweep --delete --include-closed # Also discard closed-but-unmerged PR branches (confirmed)
 stax sweep --delete --include-stale  # Also delete stale branches
 stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
 
-stax refresh                        # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
+stax stats                          # Single-screen local-only stacking health snapshot (stack shape, PR mix, health, worktrees, hygiene, next action)
+stax stats --current                # Scope to the current stack only
+stax stats --json                   # Machine-readable RepoStats document
+stax stats --ci                     # Add an opt-in CI roll-up (network call); omitted (non-fatal) without forge auth — always exits 0
+
+stax refresh|r                      # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
+stax refresh --get                  # Before restacking, reconcile each branch in the current stack against its remote ref; use after another machine rebased/force-pushed the stack (add --force to let the remote win)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
+# With --all-stacks, --get still reconciles only the current stack; other stacks restack from local commits.
 stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
 stax refresh --verbose              # Show detailed sync/restack/submit timings
 # refresh inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
-# `stax update` is a separate top-level command: it upgrades the CLI (see `stax cli upgrade`), then offers to refresh installed AI agent skill files.
+# `stax update` is a separate top-level command: it upgrades the CLI, then offers to refresh installed AI agent skill files.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
@@ -423,6 +443,7 @@ stax get teammate-branch --no-checkout  # Fetch and track without switching bran
 # Imported PRs still get stack-link comments with relative intro text. GitHub comments keep compact native PR references and mark the rendered PR with 👈.
 # sync --restack refreshes clean imported bases before rebasing descendants; cleanup can remove them locally after merge/gone.
 stax branch track --parent main    # Track existing branch under parent
+stax branch track --all            # Local-only bulk tracking by nearest cycle-safe strict ancestor; equal-tip non-trunk branches never parent each other, otherwise fall back to trunk
 stax branch track --all-prs        # Import your open PRs
 stax branch untrack <branch>       # Remove stax metadata only
 stax branch reparent --parent new  # Change parent branch
@@ -531,7 +552,7 @@ stax generate --pr-body --agent codex --model gpt-5
 stax lane                                         # Interactive lane picker (create or resume)
 stax lane add-dark-mode "Add dark mode"           # Start a named lane with a prompt
 stax lane add-dark-mode --agent codex             # Start a lane with a specific agent
-stax lane add-dark-mode --agent codex --model gpt-5.5-fast  # Override model too
+stax lane add-dark-mode --agent codex --model gpt-5.6-terra  # Override model too
 stax lane add-dark-mode                           # Re-enter the lane (reattaches tmux session)
 stax lane add-dark-mode "new prompt" --no-tmux    # Force direct terminal (no tmux)
 
@@ -583,8 +604,7 @@ stax auth --token <token>          # Save GitHub PAT
 stax auth --from-gh                # Import from gh auth token
 stax auth status                   # Show active auth source
 stax config                        # Print config location + values
-stax cli upgrade                   # Upgrade using the detected install method, then refresh shell setup
-stax update                        # Upgrade the CLI, then offer to refresh installed AI agent skill files
+stax update                        # Upgrade using the detected install method (refreshing shell setup), then offer to refresh installed AI agent skill files
 stax doctor                        # Repo/config health checks (also reports stale skill files)
 stax doctor --fix                  # Confirm once to set recommended git config and update stale installed skills
 stax demo                          # Interactive tutorial
@@ -664,6 +684,11 @@ history than `merge-base(parent, branch)`, it prints a `preflight:` notice and
 automatically uses the merge-base boundary for that rebase. This is the common
 cause of “conflicts on files I never edited” after `git merge main` into a
 branch or late tracking.
+
+The preflight also detects commits that were squash-merged into the parent: when
+the first N commits of a branch already landed on the parent as one squash
+commit, stax rebases only the commits after them (a plain rebase would replay
+the merged ones and conflict). `stax validate` does not check for this.
 
 Silence the notice with `[restack] preflight_warn = false` or `--quiet`.
 Disable the automatic correction with `[restack] preflight_auto_repair = false`

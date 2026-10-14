@@ -20,9 +20,13 @@ pub struct SyncOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protected_branches: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub closed_prs: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub partially_merged: Vec<PartiallyMergedJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub restacked_branches: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reconciled_branches: Vec<ReconciledBranchJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub imported_branches_updated: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +74,12 @@ pub struct DeletedBranchJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tip: Option<String>,
     pub metadata_deleted: bool,
+}
+
+#[derive(Serialize)]
+pub struct ReconciledBranchJson {
+    pub branch: String,
+    pub action: String,
 }
 
 #[derive(Serialize)]
@@ -140,6 +150,7 @@ pub struct PredictedConflictJson {
 /// Passed from `sync_plan::run()` to `build_plan()`.
 pub(super) struct SyncPlanData {
     pub merged_candidates: Vec<MergedCandidateJson>,
+    pub closed_prs: Vec<String>,
     pub partially_merged: Vec<PartiallyMergedJson>,
     pub upstream_gone_protected: Vec<String>,
     pub upstream_gone_deletable: Vec<UpstreamGoneDeleteJson>,
@@ -242,6 +253,7 @@ pub(super) fn build(
     let skipped_branches = stats
         .cleanup_skips
         .iter()
+        .chain(stats.get_skips.iter())
         .map(|s| SkippedBranchJson {
             name: s.branch.clone(),
             reason: s.reason.clone(),
@@ -256,6 +268,15 @@ pub(super) fn build(
             reason: r.reason,
             pr_number: r.pr_number,
             extra_commits: r.extra_commits,
+        })
+        .collect();
+
+    let reconciled_branches = stats
+        .reconciled_branches
+        .iter()
+        .map(|r| ReconciledBranchJson {
+            branch: r.branch.clone(),
+            action: r.action.to_string(),
         })
         .collect();
 
@@ -282,8 +303,10 @@ pub(super) fn build(
         deleted_branches,
         skipped_branches,
         protected_branches: stats.protected_branches.clone(),
+        closed_prs: stats.closed_prs.clone(),
         partially_merged,
         restacked_branches: stats.restacked_branches.clone(),
+        reconciled_branches,
         imported_branches_updated: stats.imported_branches_updated.clone(),
         checkout_change,
         stash,
@@ -344,8 +367,10 @@ pub(super) fn build_plan(
         deleted_branches: vec![],
         skipped_branches: vec![],
         protected_branches: vec![],
+        closed_prs: plan_data.closed_prs,
         partially_merged: plan_data.partially_merged,
         restacked_branches: vec![],
+        reconciled_branches: vec![],
         imported_branches_updated: vec![],
         checkout_change: None,
         stash: StashJson {
@@ -603,6 +628,7 @@ mod tests {
         use crate::commands::sync_plan::TrunkPlan;
 
         let plan_data = SyncPlanData {
+            closed_prs: vec![],
             merged_candidates: vec![
                 MergedCandidateJson {
                     name: "feat-a".to_string(),
@@ -704,6 +730,7 @@ mod tests {
 
         let plan_data = SyncPlanData {
             merged_candidates: vec![],
+            closed_prs: vec![],
             partially_merged: vec![],
             upstream_gone_protected: vec![],
             upstream_gone_deletable: vec![],

@@ -49,7 +49,7 @@ pub fn run(stack_filter: Option<String>, all: bool) -> Result<()> {
             None => continue,
         };
 
-        let needs_restack = meta.needs_restack(repo.inner()).unwrap_or(false);
+        let needs_restack = meta.needs_restack(repo.inner(), branch).unwrap_or(false);
         if !needs_restack {
             println!(
                 "\n{} {}",

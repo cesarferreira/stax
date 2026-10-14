@@ -44,6 +44,8 @@ st status   # your existing stack appears immediately
 
 New remote-only branches imported by `st get` are read-only stack bases: Stax can create and restack local branches on top of them, but submit skips pushing or updating the imported branch itself. Existing Stax-managed branches keep their ownership metadata when synced with `st get`. Existing local branches fast-forward when possible, or rebase local-only commits onto the fetched remote tip when histories diverge; `--force` is the explicit reset path. Branches checked out in another linked worktree are skipped. `st freeze` protects a tracked branch from restacks and sync history rewrites, including imported-tip refreshes and squash-merge cleanup rebases; `st get --unfrozen <branch>` clears that protection before syncing. Sync cleanup may delete an imported local support branch after it is merged or upstream-gone, but it will not push-delete the imported remote branch. If the imported branch already has a PR, stack-link comments still include and sync that PR, with labels relative to the PR being rendered.
 
+For reconciling a stack after running stax on a different machine, see [Working across multiple machines](../workflows/multi-machine.md).
+
 Like Graphite's branch/upstack submit flow, `st branch submit` and `st upstack submit` can publish stale local branches without forcing an immediate local restack when the excluded parent is already synced to the remote. Stax does this without a central server by creating internal temporary refs for the push; local branch tips and stack metadata stay unchanged until you run `st restack`.
 
 ## Short alias: `st`

@@ -17,11 +17,11 @@ use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -36,11 +36,20 @@ pub(super) struct SyncStats {
     pub(super) restacked_branches: Vec<String>,
     pub(super) imported_branches_updated: Vec<String>,
     pub(super) partially_merged: Vec<PartialMergeRecord>,
+    pub(super) closed_prs: Vec<String>,
     pub(super) protected_branches: Vec<String>,
     pub(super) trunk_not_updated: Option<TrunkNotUpdated>,
     pub(super) cleanup_skips: Vec<CleanupSkip>,
     pub(super) checkout_change: Option<CheckoutChange>,
     pub(super) stash: StashOutcome,
+    pub(super) reconciled_branches: Vec<ReconciledBranchRecord>,
+    pub(super) get_skips: Vec<CleanupSkip>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ReconciledBranchRecord {
+    pub(super) branch: String,
+    pub(super) action: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +108,16 @@ impl SyncStats {
         self.cleanup_skips.push(CleanupSkip {
             branch: branch.to_string(),
             reason: reason.into(),
+        });
+    }
+
+    fn record_get_skip(&mut self, branch: &str, reason: &'static str) {
+        if self.get_skips.iter().any(|skip| skip.branch == branch) {
+            return;
+        }
+        self.get_skips.push(CleanupSkip {
+            branch: branch.to_string(),
+            reason: reason.to_string(),
         });
     }
 }
@@ -286,6 +305,9 @@ struct SyncContext {
     stack: Stack,
     current: String,
     current_after_deletions: String,
+    /// Branches this run detected as merged, including ones the user kept. Never a
+    /// "next branch" to continue on.
+    merged_this_run: HashSet<String>,
     restack: bool,
     full: bool,
     delete_merged: bool,
@@ -323,6 +345,7 @@ struct SyncContext {
     /// Merged-branch detection from the interactive sync plan (pre-trunk-update).
     /// Reused after trunk moves to avoid a second full patch-id scan of the stack.
     planned_merged_detection: Option<PlannedMergedDetection>,
+    get: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -334,6 +357,9 @@ struct PlannedMergedDetection {
 impl SyncContext {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        repo: GitRepo,
+        config: Config,
+        auto_confirm: bool,
         sync_started_at: Instant,
         restack: bool,
         full: bool,
@@ -348,12 +374,11 @@ impl SyncContext {
         json: bool,
         extra_fetch_refs: &[String],
         skip_interactive_plan: bool,
+        get: bool,
     ) -> Result<(Self, GitRepo)> {
-        let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
         let workdir = repo.workdir()?.to_path_buf();
-        let config = Config::load()?;
         let remote_name = config.remote_name().to_string();
         let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
         let imported_branches = imported_branches_for_remote(&repo, &stack, &remote_name)?;
@@ -364,9 +389,13 @@ impl SyncContext {
                 sync_extra_fetch_refs.push(branch.clone());
             }
         }
-        let auto_confirm = force;
         let current_after_deletions = current.clone();
         let effective_quiet = quiet || json;
+        let delete_confirm_strategy = if config.sync.confirm_delete || effective_quiet {
+            DeleteConfirmStrategy::PerBranch
+        } else {
+            DeleteConfirmStrategy::BulkNonBlocking
+        };
         Ok((
             Self {
                 workdir,
@@ -376,6 +405,7 @@ impl SyncContext {
                 stack,
                 current,
                 current_after_deletions,
+                merged_this_run: HashSet::new(),
                 restack,
                 full,
                 delete_merged,
@@ -407,8 +437,9 @@ impl SyncContext {
                 stats: SyncStats::default(),
                 tx: None,
                 trunk_planned: false,
-                delete_confirm_strategy: DeleteConfirmStrategy::PerBranch,
+                delete_confirm_strategy,
                 planned_merged_detection: None,
+                get,
             },
             repo,
         ))
@@ -500,7 +531,7 @@ impl SyncContext {
     fn fetch_remote(&mut self, repo: &GitRepo) -> Result<()> {
         // 1. Fetch from remote
         // Default: trunk-only fetch + `ls-remote --heads` in parallel (fast on large repos).
-        // `--full`: classic `fetch --prune --no-tags` for all remote-tracking refs.
+        // `--full`: classic `fetch --prune` for all remote-tracking refs, tags included.
         let fetch_timer = LiveTimer::maybe_new(!self.quiet, &format!("Fetch {}", self.remote_name));
 
         let fetch_started_at = Instant::now();
@@ -522,8 +553,7 @@ impl SyncContext {
         );
 
         if self.full {
-            let fetch_args: Vec<&str> =
-                vec!["fetch", "--prune", "--no-tags", self.remote_name.as_str()];
+            let fetch_args: Vec<&str> = vec!["fetch", "--prune", self.remote_name.as_str()];
             output = Command::new("git")
                 .args(&fetch_args)
                 .current_dir(&self.workdir)
@@ -919,7 +949,16 @@ impl SyncContext {
         // Refresh live PR state before merged-branch detection so squash-merged PRs
         // (missed by `git branch --merged` when the remote branch still exists) are
         // visible via Method 2 on the first sync after merge.
-        if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(repo, &self.config, self.quiet) {
+        //
+        // The sync-wide transaction is threaded in so the metadata blobs this
+        // rewrites land in the op receipt (issue #835).
+        let refreshed = {
+            let Self {
+                config, quiet, tx, ..
+            } = self;
+            refresh_pr_draft_states(repo, config, *quiet, tx.as_mut())?
+        };
+        if let Some(pr_refresh_elapsed) = refreshed {
             self.step_timings
                 .push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
             self.stack = Stack::load(repo)?;
@@ -995,10 +1034,14 @@ impl SyncContext {
             merged_branch_names = merged.into_iter().map(|m| m.branch).collect();
         }
 
+        let retained_closed = retained_closed_prs(&self.stack, &merged_branch_names);
         let mut upstream_gone_deletable: Vec<String> = Vec::new();
         if self.delete_upstream_gone {
             let detected = find_upstream_gone_branches(&self.workdir, &self.stack.trunk)?;
             for branch in detected {
+                if retained_closed.contains(&branch) {
+                    continue;
+                }
                 if has_unique_commits_since_any_base(
                     &self.workdir,
                     &branch,
@@ -1015,12 +1058,12 @@ impl SyncContext {
             restack_candidates = self.planned_restack_branches(repo)?;
         }
 
-        let has_deletion_candidates =
-            !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
+        let confirm_deletions = self.delete_confirm_strategy == DeleteConfirmStrategy::PerBranch
+            && (!merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty());
 
         // A trunk fast-forward is what `stax sync` is *for* — don't ask about it on its own.
         // Only branch deletions and history-rewriting restacks are worth a prompt.
-        let needs_confirm = has_deletion_candidates || !restack_candidates.is_empty();
+        let needs_confirm = confirm_deletions || !restack_candidates.is_empty();
 
         if !needs_confirm {
             return Ok(SyncFlow::Continue);
@@ -1058,6 +1101,7 @@ impl SyncContext {
                 Some(&self.stack),
             );
         }
+        print_retained_closed_prs(&self.stack, &retained_closed);
         if !restack_candidates.is_empty() {
             let word = if restack_candidates.len() == 1 {
                 "branch"
@@ -1075,7 +1119,7 @@ impl SyncContext {
             println!();
         }
 
-        let selected = if has_deletion_candidates {
+        let selected = if confirm_deletions {
             let options = [
                 "Continue — delete all listed branches",
                 "Choose action for each branch",
@@ -1099,7 +1143,7 @@ impl SyncContext {
                 .interact()?
         };
 
-        if has_deletion_candidates {
+        if confirm_deletions {
             match selected {
                 0 => {
                     self.delete_confirm_strategy = DeleteConfirmStrategy::BulkNonBlocking;
@@ -1322,6 +1366,14 @@ impl SyncContext {
                     )?;
                     (merged, partially_merged_notes)
                 };
+            let merged_branch_names: Vec<String> =
+                merged.iter().map(|info| info.branch.clone()).collect();
+            self.merged_this_run
+                .extend(merged_branch_names.iter().cloned());
+            self.stats.closed_prs = retained_closed_prs(&self.stack, &merged_branch_names);
+            if !self.quiet {
+                print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
+            }
             self.step_timings.push((
                 "detect merged branches".to_string(),
                 detect_merged_started_at.elapsed(),
@@ -1335,9 +1387,6 @@ impl SyncContext {
             let forge_client = init_forge_client(&repo, &self.config);
 
             if !merged.is_empty() {
-                let merged_branch_names: Vec<String> =
-                    merged.iter().map(|m| m.branch.clone()).collect();
-
                 if !self.quiet {
                     print_cleanup_candidates("merged", &merged_branch_names);
                 }
@@ -1367,15 +1416,25 @@ impl SyncContext {
                     // confirmed set, so if the user declines some branches the effective
                     // parent may be closer in the chain than what the prompt suggests.
                     let prompt_parent = if is_current_branch {
-                        Some(
-                            resolve_fallback_parent_skipping_doomed(
-                                &self.workdir,
-                                &self.stack,
-                                branch,
-                                &merged_branch_names,
+                        // Sync continues on the next branch of the stack when there is
+                        // one (see `checkout_next_branch_after_deletion`), else on the
+                        // surviving parent.
+                        next_branch_after_deletion(&self.stack, branch, &|candidate| {
+                            !merged_branch_names.iter().any(|name| name == candidate)
+                                && local_branch_exists(&self.workdir, candidate)
+                                && !is_merged_pr(&self.stack, candidate)
+                        })
+                        .or_else(|| {
+                            Some(
+                                resolve_fallback_parent_skipping_doomed(
+                                    &self.workdir,
+                                    &self.stack,
+                                    branch,
+                                    &merged_branch_names,
+                                )
+                                .0,
                             )
-                            .0,
-                        )
+                        })
                     } else {
                         None
                     };
@@ -1490,6 +1549,7 @@ impl SyncContext {
                                 );
                             }
 
+                            let mut rebased_children: Vec<String> = Vec::new();
                             for child in &children {
                                 if BranchMetadata::is_frozen(repo.inner(), child)? {
                                     if !self.quiet {
@@ -1508,6 +1568,10 @@ impl SyncContext {
                                     tx.snapshot_branch_with_metadata(&repo, child)?;
                                 }
 
+                                // Tip of the merged parent BEFORE deletion — the boundary
+                                // fallback when the child did not actually move onto trunk.
+                                let merged_parent_tip = repo.branch_commit(branch).ok();
+
                                 // Use existing provenance-aware rebase
                                 match repo.rebase_branch_onto_with_provenance(
                                     child,
@@ -1515,14 +1579,22 @@ impl SyncContext {
                                     branch, // fallback upstream
                                     false,  // auto_stash_pop
                                 ) {
-                                    Ok(_) => {
+                                    Ok(RebaseResult::Success) => {
                                         // Update child's parent metadata to trunk
+                                        let trunk_tip = repo.rev_parse(&self.stack.trunk)?;
                                         if let Some(mut metadata) =
                                             BranchMetadata::read(repo.inner(), child)?
                                         {
                                             metadata.parent_branch_name = self.stack.trunk.clone();
-                                            metadata.parent_branch_revision =
-                                                repo.rev_parse(&self.stack.trunk)?;
+                                            metadata.parent_branch_revision = repo
+                                                .resolve_child_parent_boundary(
+                                                    child,
+                                                    &[
+                                                        Some(trunk_tip.as_str()),
+                                                        merged_parent_tip.as_deref(),
+                                                    ],
+                                                    &metadata.parent_branch_revision,
+                                                );
                                             metadata.write(repo.inner(), child)?;
                                         }
 
@@ -1554,6 +1626,45 @@ impl SyncContext {
                                                 self.stack.trunk.cyan()
                                             );
                                         }
+
+                                        rebased_children.push(child.clone());
+                                    }
+                                    Ok(RebaseResult::Conflict) => {
+                                        let trunk_name = self.stack.trunk.clone();
+                                        let conflict_stack = self.stack.current_stack(child);
+                                        if !self.json {
+                                            print_restack_conflict(
+                                                &repo,
+                                                &RestackConflictContext {
+                                                    branch: child,
+                                                    parent_branch: &trunk_name,
+                                                    completed_branches: &rebased_children,
+                                                    remaining_branches: 0,
+                                                    continue_commands: &[
+                                                        "stax resolve",
+                                                        "stax continue",
+                                                        "stax sync --continue",
+                                                    ],
+                                                    stack_branches: &conflict_stack,
+                                                },
+                                            );
+                                        }
+                                        if self.stashed && !self.json {
+                                            println!(
+                                                "{}",
+                                                "Stash kept to avoid conflicts. Run `git stash pop` after resolving."
+                                                    .yellow()
+                                            );
+                                            self.stash_guard.disarm();
+                                        }
+                                        if let Some(tx) = self.tx.take() {
+                                            tx.finish_err(
+                                                "Rebase conflict",
+                                                Some("cleanup-merged"),
+                                                Some(child),
+                                            )?;
+                                        }
+                                        return Err(ConflictStopped.into());
                                     }
                                     Err(e) => {
                                         eprintln!(
@@ -1823,6 +1934,10 @@ impl SyncContext {
             }
             Ok(repo)
         } else {
+            self.stats.closed_prs = retained_closed_prs(&self.stack, &[]);
+            if !self.quiet {
+                print_retained_closed_prs(&self.stack, &self.stats.closed_prs);
+            }
             Ok(repo)
         }
     }
@@ -1843,6 +1958,9 @@ impl SyncContext {
             let mut gone: Vec<String> = Vec::with_capacity(detected_gone.len());
             let mut protected_gone: Vec<String> = Vec::new();
             for branch in detected_gone {
+                if self.stats.closed_prs.contains(&branch) {
+                    continue;
+                }
                 if has_unique_commits_since_any_base(
                     &self.workdir,
                     &branch,
@@ -2103,6 +2221,52 @@ impl SyncContext {
         Ok(())
     }
 
+    /// When cleanup deleted the branch the user was on, continue on the next branch of
+    /// that stack (the first unmerged descendant, in `st next` order) instead of leaving
+    /// them on trunk. Runs after the deferred trunk update, which needs trunk checked out.
+    /// A failed checkout (e.g. the branch lives in another worktree) is not an error:
+    /// the user simply stays where cleanup left them.
+    fn checkout_next_branch_after_deletion(&mut self, repo: &GitRepo) {
+        if !self.stack.branches.contains_key(&self.current)
+            || local_branch_exists(&self.workdir, &self.current)
+        {
+            return;
+        }
+        let Ok(live_stack) = Stack::load(repo) else {
+            return;
+        };
+        let Some(next) = next_branch_after_deletion(&self.stack, &self.current, &|candidate| {
+            local_branch_exists(&self.workdir, candidate)
+                && !self.merged_this_run.contains(candidate)
+                && !is_merged_pr(&live_stack, candidate)
+        }) else {
+            return;
+        };
+        if next == self.current_after_deletions {
+            return;
+        }
+
+        match checkout_branch_for_cleanup(repo, &self.workdir, &next) {
+            Ok(()) => {
+                self.current_after_deletions = next.clone();
+                if !self.quiet {
+                    println!("  {} checked out {}", "→".cyan(), next.cyan());
+                }
+            }
+            Err(error) => {
+                if !self.quiet {
+                    println!(
+                        "  {} couldn't check out {} ({}); staying on {}",
+                        "⚠".yellow(),
+                        next.yellow(),
+                        error,
+                        self.current_after_deletions.cyan()
+                    );
+                }
+            }
+        }
+    }
+
     // If we deferred trunk update (refspec fetch failed while not on trunk) and we're
     // now on trunk after branch deletions, retry with git pull which is more reliable
     fn retry_deferred_trunk_update(&mut self, repo: &GitRepo) -> Result<()> {
@@ -2119,6 +2283,182 @@ impl SyncContext {
                 deferred_update_started_at.elapsed(),
             ));
         }
+        Ok(())
+    }
+
+    fn get_phase(&mut self, repo: &GitRepo) -> Result<()> {
+        if !self.get {
+            return Ok(());
+        }
+
+        if repo.rebase_in_progress()? {
+            if !self.quiet {
+                println!(
+                    "{} skipping --get reconciliation: a rebase is already in progress.",
+                    "Warning:".yellow().bold()
+                );
+            }
+            return Ok(());
+        }
+
+        let scope_order: Vec<String> = if self.current != self.stack.trunk
+            && self.stack.branches.contains_key(&self.current)
+        {
+            self.stack.current_stack(&self.current)
+        } else {
+            Vec::new()
+        };
+
+        let mut frozen_branches = Vec::new();
+        let mut candidate_branches: Vec<String> = Vec::new();
+        for branch in &scope_order {
+            let frozen = BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false);
+            if frozen {
+                frozen_branches.push(branch.clone());
+                self.stats.record_get_skip(branch, "frozen");
+            } else {
+                candidate_branches.push(branch.clone());
+            }
+        }
+        if !frozen_branches.is_empty() && !self.quiet {
+            println!(
+                "  {} Skipping frozen {}: {}",
+                "▸".dimmed(),
+                if frozen_branches.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                },
+                frozen_branches.join(", ").cyan()
+            );
+        }
+
+        let current_path =
+            std::fs::canonicalize(&self.workdir).unwrap_or_else(|_| self.workdir.clone());
+        let mut branches: Vec<String> = Vec::new();
+        for branch in candidate_branches {
+            let other_worktree = repo.branch_worktree(&branch)?.filter(|worktree| {
+                let other_path =
+                    std::fs::canonicalize(&worktree.path).unwrap_or_else(|_| worktree.path.clone());
+                other_path != current_path
+            });
+            if other_worktree.is_some() {
+                self.stats
+                    .record_get_skip(&branch, "checked out in another worktree");
+            } else {
+                branches.push(branch);
+            }
+        }
+
+        if branches.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .tx
+            .take()
+            .context("sync transaction was already finished")?;
+        for branch in &branches {
+            tx.plan_branch(repo, branch)?;
+            tx.plan_metadata_ref(repo, branch)?;
+        }
+        self.tx = Some(tx);
+
+        if !self.quiet {
+            println!();
+            println!("{}", "Fetching stack branches from remote...".bold());
+        }
+
+        for branch in &branches {
+            if !self.quiet {
+                println!(
+                    "{} {} from {}...",
+                    "Fetching".blue().bold(),
+                    branch.cyan(),
+                    self.remote_name.cyan()
+                );
+            }
+
+            let outcome = match crate::commands::get::reconcile_branch_with_remote(
+                &self.workdir,
+                &self.remote_name,
+                branch,
+                self.force,
+                false,
+            ) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    if !self.quiet {
+                        println!("{}", err.to_string().red());
+                    }
+                    if let Some(tx) = self.tx.take() {
+                        tx.finish_err("Rebase conflict", Some("get"), Some(branch))?;
+                    }
+                    return Err(ConflictStopped.into());
+                }
+            };
+
+            let (message, action) = match outcome {
+                crate::commands::get::ReconcileOutcome::NoRemote => {
+                    self.stats.record_get_skip(branch, "no remote branch");
+                    (None, None)
+                }
+                crate::commands::get::ReconcileOutcome::UpToDate => (None, None),
+                crate::commands::get::ReconcileOutcome::Created => (
+                    Some(format!(
+                        "{} {} tracking remote.",
+                        "Created".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("created"),
+                ),
+                crate::commands::get::ReconcileOutcome::FastForwarded => (
+                    Some(format!(
+                        "{} {} to remote tip.",
+                        "Fast-forwarded".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("fast_forwarded"),
+                ),
+                crate::commands::get::ReconcileOutcome::Kept => (
+                    Some(format!(
+                        "{} {} already contains remote tip.",
+                        "Kept".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("kept"),
+                ),
+                crate::commands::get::ReconcileOutcome::Rebased => (
+                    Some(format!(
+                        "{} {} onto remote tip.",
+                        "Rebased".green().bold(),
+                        branch.cyan()
+                    )),
+                    Some("rebased"),
+                ),
+                crate::commands::get::ReconcileOutcome::Reset => (
+                    Some(format!(
+                        "{} {} to remote tip.",
+                        "Reset".yellow().bold(),
+                        branch.cyan()
+                    )),
+                    Some("reset"),
+                ),
+            };
+
+            if let Some(message) = message
+                && !self.quiet
+            {
+                println!("{}", message);
+            }
+            if let Some(action) = action {
+                self.stats.reconciled_branches.push(ReconciledBranchRecord {
+                    branch: branch.clone(),
+                    action,
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -2216,7 +2556,12 @@ impl SyncContext {
                     .tx
                     .take()
                     .context("sync transaction was already finished")?;
-                tx.plan_branches(repo, &restack_scope_order)?;
+                for branch in &restack_scope_order {
+                    tx.plan_branch(repo, branch)?;
+                    if branch != &self.stack.trunk {
+                        tx.plan_metadata_ref(repo, branch)?;
+                    }
+                }
                 let restack_count = branches_to_restack.len();
                 let summary = PlanSummary {
                     branches_to_rebase: restack_count,
@@ -2263,6 +2608,7 @@ impl SyncContext {
 
                     let restack_timer =
                         LiveTimer::maybe_new(!self.quiet, &format!("Restack {}", branch));
+                    let detail = restack_timer.as_ref().map(LiveTimer::detail_handle);
 
                     let rebase_upstream = crate::engine::restack_preflight::choose_rebase_upstream(
                         repo,
@@ -2273,16 +2619,30 @@ impl SyncContext {
                         self.quiet,
                     );
 
-                    let rebase = repo.rebase_branch_onto_with_provenance_timing(
-                        branch,
-                        &parent_branch_name,
-                        &rebase_upstream,
-                        self.auto_stash_pop,
-                        true,
-                    )?;
+                    let rebase = if let Some(detail) = &detail {
+                        repo.rebase_branch_onto_with_provenance_timing_reporting(
+                            branch,
+                            &parent_branch_name,
+                            &rebase_upstream,
+                            self.auto_stash_pop,
+                            true,
+                            Some(&|message| detail.set(message)),
+                        )?
+                    } else {
+                        repo.rebase_branch_onto_with_provenance_timing(
+                            branch,
+                            &parent_branch_name,
+                            &rebase_upstream,
+                            self.auto_stash_pop,
+                            true,
+                        )?
+                    };
 
                     match rebase.result {
                         RebaseResult::Success => {
+                            if let Some(detail) = &detail {
+                                detail.set("Updating branch metadata");
+                            }
                             let metadata_update_started_at = Instant::now();
                             let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
                             let existing_metadata = BranchMetadata::read(repo.inner(), branch)?;
@@ -2328,6 +2688,11 @@ impl SyncContext {
 
                             // Record after-OID
                             tx.record_after(repo, branch)?;
+                            let meta_after = resolve_ref_oid(
+                                &self.workdir,
+                                &format!("refs/branch-metadata/{}", branch),
+                            );
+                            tx.record_known_metadata_after(branch, meta_after.as_deref());
                             tx.push_completed_branch(branch);
 
                             if self.verbose {
@@ -2597,9 +2962,109 @@ pub fn run(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
+    get: bool,
+) -> Result<()> {
+    run_with_repo(
+        GitRepo::open()?,
+        Config::load()?,
+        force,
+        restack,
+        full,
+        delete_merged,
+        delete_upstream_gone,
+        force,
+        safe,
+        r#continue,
+        quiet,
+        verbose,
+        auto_stash_pop,
+        stash_policy,
+        json,
+        extra_fetch_refs,
+        skip_interactive_plan,
+        get,
+    )
+}
+
+/// Run sync against an explicit repository instead of the process working
+/// directory. This is the web-server boundary; CLI callers keep using `run`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_at(
+    repository: &Path,
+    auto_confirm: bool,
+    restack: bool,
+    full: bool,
+    delete_merged: bool,
+    delete_upstream_gone: bool,
+    force: bool,
+    safe: bool,
+    r#continue: bool,
+    quiet: bool,
+    verbose: bool,
+    auto_stash_pop: bool,
+    stash_policy: StashPolicy,
+    json: bool,
+    extra_fetch_refs: &[String],
+    skip_interactive_plan: bool,
+    get: bool,
+) -> Result<()> {
+    let repo = GitRepo::open_from_path(repository)?;
+    for worktree in repo.list_worktrees()? {
+        if repo.is_dirty_at(&worktree.path)? {
+            bail!(
+                "Working tree '{}' has uncommitted changes; Sync made no changes",
+                worktree.path.display()
+            );
+        }
+    }
+    run_with_repo(
+        repo,
+        Config::load_for_trusted_network(repository)?,
+        auto_confirm,
+        restack,
+        full,
+        delete_merged,
+        delete_upstream_gone,
+        force,
+        safe,
+        r#continue,
+        quiet,
+        verbose,
+        auto_stash_pop,
+        stash_policy,
+        json,
+        extra_fetch_refs,
+        skip_interactive_plan,
+        get,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_with_repo(
+    repo: GitRepo,
+    config: Config,
+    auto_confirm: bool,
+    restack: bool,
+    full: bool,
+    delete_merged: bool,
+    delete_upstream_gone: bool,
+    force: bool,
+    safe: bool,
+    r#continue: bool,
+    quiet: bool,
+    verbose: bool,
+    auto_stash_pop: bool,
+    stash_policy: StashPolicy,
+    json: bool,
+    extra_fetch_refs: &[String],
+    skip_interactive_plan: bool,
+    get: bool,
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let (mut ctx, repo) = SyncContext::new(
+        repo,
+        config,
+        auto_confirm,
         sync_started_at,
         restack,
         full,
@@ -2614,6 +3079,7 @@ pub fn run(
         json,
         extra_fetch_refs,
         skip_interactive_plan,
+        get,
     )?;
 
     if r#continue {
@@ -2702,7 +3168,13 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
             println!("Aborted.");
         }
         ctx.restore_stash(&repo)?;
-        ctx.tx = None;
+        // The PR-metadata refresh above may already have snapshotted metadata refs,
+        // so close the transaction rather than dropping it -- a dropped snapshotted
+        // transaction is persisted as Failed by `Transaction::drop`. `finish_transaction`
+        // is a no-op when nothing was snapshotted, preserving "cancelling leaves no
+        // receipt" (see the doc comment on `confirm_sync_plan`).
+        let current_after = ctx.current_after_deletions.clone();
+        ctx.finish_transaction(&current_after)?;
         return Ok(());
     }
 
@@ -2726,6 +3198,10 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 
     ctx.ensure_trunk_ready_for_restack(&repo)?;
 
+    ctx.checkout_next_branch_after_deletion(&repo);
+
+    ctx.get_phase(&repo)?;
+
     ctx.restack_phase(&repo)?;
 
     ctx.restore_stash(&repo)?;
@@ -2742,7 +3218,12 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 /// both branch metadata and CiCache. Called before merged-branch detection
 /// during sync so that operations like `gh pr ready`, `gh pr merge`, or
 /// `gh pr edit --base` are reflected in time for cleanup.
-fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Option<Duration> {
+fn refresh_pr_draft_states(
+    repo: &GitRepo,
+    config: &Config,
+    quiet: bool,
+    mut tx: Option<&mut Transaction>,
+) -> Result<Option<Duration>> {
     let started_at = Instant::now();
     let stack = match Stack::load(repo) {
         Ok(s) => s,
@@ -2750,7 +3231,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             if !quiet {
                 eprintln!("{}", stale_stack_warning("skipping PR metadata refresh", e));
             }
-            return None;
+            return Ok(None);
         }
     };
     let tracked_pr_branches: Vec<(String, u64)> = stack
@@ -2766,7 +3247,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         })
         .collect();
     if tracked_pr_branches.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let timer = LiveTimer::maybe_new(!quiet, "Refresh PR metadata");
@@ -2775,14 +3256,14 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         Ok(info) => info,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let _enter = rt.enter();
@@ -2790,14 +3271,14 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
         Ok(c) => c,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
     let cache_dir = match repo.common_git_dir() {
         Ok(p) => p,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
-            return Some(started_at.elapsed());
+            return Ok(Some(started_at.elapsed()));
         }
     };
 
@@ -2820,11 +3301,18 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             continue;
         };
 
-        apply_live_pr_state(repo, &stack, &cache_dir, &branch_name, &live_pr);
+        apply_live_pr_state(
+            repo,
+            &stack,
+            &cache_dir,
+            &branch_name,
+            &live_pr,
+            tx.as_deref_mut(),
+        )?;
     }
 
     LiveTimer::maybe_finish_timed(timer);
-    Some(started_at.elapsed())
+    Ok(Some(started_at.elapsed()))
 }
 
 fn apply_live_pr_state(
@@ -2833,11 +3321,13 @@ fn apply_live_pr_state(
     cache_dir: &Path,
     branch_name: &str,
     live_pr: &ForgePrInfo,
-) {
+    mut tx: Option<&mut Transaction>,
+) -> Result<()> {
     let pr_state = live_pr.state.to_uppercase();
 
     // Update branch metadata with fresh state, is_draft, and base
     if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
+        let before = meta.clone();
         if let Some(ref mut pr_info) = meta.pr_info {
             pr_info.is_draft = Some(live_pr.is_draft);
             pr_info.state = pr_state.clone();
@@ -2849,22 +3339,54 @@ fn apply_live_pr_state(
             let base_is_known =
                 live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
             if base_is_known {
-                // Update parent revision to the current tip of the new parent
-                if let Ok(parent_ref) = repo
+                // The new parent's tip is only a valid boundary if `branch_name` has
+                // actually moved onto it; a GitHub-side base retarget (e.g. after an
+                // intermediate branch is deleted) can flip `live_pr.base` with no local
+                // rebase having happened. Verify ancestry before trusting it, else keep
+                // the previously recorded (still-valid) boundary (see #830).
+                let new_parent_tip = repo
                     .inner()
                     .find_branch(&live_pr.base, git2::BranchType::Local)
-                    && let Ok(commit) = parent_ref.get().peel_to_commit()
-                {
-                    meta.parent_branch_revision = commit.id().to_string();
-                }
+                    .ok()
+                    .and_then(|r| r.get().peel_to_commit().ok())
+                    .map(|c| c.id().to_string());
+                meta.parent_branch_revision = repo.resolve_child_parent_boundary(
+                    branch_name,
+                    &[new_parent_tip.as_deref()],
+                    &meta.parent_branch_revision,
+                );
                 meta.parent_branch_name = live_pr.base.clone();
             }
         }
 
+        // Only snapshot when the refresh actually rewrites the blob. Metadata is
+        // content-addressed, so an unchanged rewrite leaves the ref OID untouched --
+        // snapshotting it would turn a no-op sync into an undoable receipt and break
+        // the lazy-snapshot guard in `finish_transaction` (see
+        // sync_undo_tests::sync_that_changes_nothing_leaves_the_previous_receipt_undoable).
+        let metadata_changed = meta != before;
+
+        if metadata_changed && let Some(tx) = tx.as_deref_mut() {
+            tx.plan_metadata_ref(repo, branch_name)?;
+            tx.snapshot()?;
+        }
+
         let _ = meta.write(repo.inner(), branch_name);
+
+        if metadata_changed && let Some(tx) = tx {
+            // Metadata refs are written by `git update-ref` (subprocess); libgit2's
+            // cached refdb may not see them, so resolve the after-OID the same way
+            // `cleanup_merged_branches` does (see `record_known_after`'s doc comment).
+            let meta_after = repo.workdir().ok().and_then(|workdir| {
+                resolve_ref_oid(workdir, &format!("refs/branch-metadata/{}", branch_name))
+            });
+            tx.record_known_metadata_after(branch_name, meta_after.as_deref());
+        }
     }
 
     let _ = CiCache::update_branch_pr(cache_dir, branch_name, Some(pr_state));
+
+    Ok(())
 }
 
 fn sync_fetch_refs(
@@ -3130,7 +3652,44 @@ fn merge_planned_merged_detection(
     for info in planned {
         by_branch.entry(info.branch.clone()).or_insert(info);
     }
-    by_branch.into_values().collect()
+    let mut merged: Vec<MergedBranchInfo> = by_branch.into_values().collect();
+    merged.sort_by(|a, b| a.branch.cmp(&b.branch));
+    merged
+}
+
+pub(super) fn retained_closed_prs(stack: &Stack, merged: &[String]) -> Vec<String> {
+    let mut closed: Vec<String> = stack
+        .branches
+        .iter()
+        .filter(|(branch, info)| {
+            *branch != &stack.trunk
+                && !merged.contains(*branch)
+                && matches!(
+                    info.pr_state.as_deref(),
+                    Some(state) if state.eq_ignore_ascii_case("closed")
+                )
+        })
+        .map(|(branch, _)| branch.clone())
+        .collect();
+    closed.sort();
+    closed
+}
+
+pub(super) fn print_retained_closed_prs(stack: &Stack, closed: &[String]) {
+    for branch in closed {
+        let number = stack
+            .branches
+            .get(branch)
+            .and_then(|info| info.pr_number)
+            .map(|number| format!(" (PR #{number})"))
+            .unwrap_or_default();
+        println!(
+            "    {} {}{} — closed without merge; retained (use stax sweep --delete --include-closed to discard)",
+            "↷".yellow(),
+            branch.cyan(),
+            number
+        );
+    }
 }
 
 pub(super) fn find_merged_branches(
@@ -3146,7 +3705,13 @@ pub(super) fn find_merged_branches(
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
-        .args(["branch", "--merged", &stack.trunk])
+        .args([
+            "for-each-ref",
+            "--merged",
+            &stack.trunk,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])
         .current_dir(workdir)
         .output()
         .context("Failed to list merged branches")?;
@@ -3154,7 +3719,7 @@ pub(super) fn find_merged_branches(
     let merged_output = String::from_utf8_lossy(&output.stdout);
 
     for line in merged_output.lines() {
-        let branch = branch_name_from_merged_output(line);
+        let branch = line.trim();
 
         // Skip trunk itself and any non-tracked branches
         if branch == stack.trunk || branch.is_empty() {
@@ -3174,7 +3739,13 @@ pub(super) fn find_merged_branches(
 
     // Method 1b: git branch --merged origin/trunk (handles stale/diverged local trunk)
     let output = Command::new("git")
-        .args(["branch", "--merged", &remote_trunk_ref])
+        .args([
+            "for-each-ref",
+            "--merged",
+            &remote_trunk_ref,
+            "--format=%(refname:short)",
+            "refs/heads",
+        ])
         .current_dir(workdir)
         .output();
 
@@ -3182,7 +3753,7 @@ pub(super) fn find_merged_branches(
         let merged_output = String::from_utf8_lossy(&output.stdout);
 
         for line in merged_output.lines() {
-            let branch = branch_name_from_merged_output(line);
+            let branch = line.trim();
 
             // Skip trunk itself and any non-tracked branches
             if branch == stack.trunk || branch.is_empty() {
@@ -3248,8 +3819,14 @@ pub(super) fn find_merged_branches(
             continue;
         }
 
-        // Check if remote branch was deleted (strong signal it was merged)
-        if !remote_branches.contains(branch.as_str()) {
+        // A deleted remote head does not prove integration when the PR was
+        // explicitly closed without merging.
+        if !remote_branches.contains(branch.as_str())
+            && !matches!(
+                info.pr_state.as_deref(),
+                Some(state) if state.eq_ignore_ascii_case("closed")
+            )
+        {
             // Remote branch doesn't exist and had a PR - likely merged and deleted
             merged.push(MergedBranchInfo {
                 branch: branch.clone(),
@@ -3297,6 +3874,7 @@ pub(super) fn find_merged_branches(
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
     if skip_patch_id_provenance {
+        merged.sort_by(|a, b| a.branch.cmp(&b.branch));
         return Ok(merged);
     }
 
@@ -3403,6 +3981,8 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    // The passes above iterate `HashMap`s; sort so prompts and output are stable.
+    merged.sort_by(|a, b| a.branch.cmp(&b.branch));
     Ok(merged)
 }
 
@@ -3513,14 +4093,6 @@ fn count_extra_commits(workdir: &Path, branch: &str, bases: &[&str]) -> Result<u
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().parse::<usize>().unwrap_or(0))
-}
-
-fn branch_name_from_merged_output(line: &str) -> &str {
-    let branch = line.trim();
-    branch
-        .strip_prefix("* ")
-        .or_else(|| branch.strip_prefix("+ "))
-        .unwrap_or(branch)
 }
 
 pub(super) fn find_upstream_gone_branches(
@@ -4030,6 +4602,47 @@ pub(super) fn resolve_fallback_parent_skipping_doomed(
 /// Used by both the merged-branch and upstream-gone cleanup paths.
 /// Return the names of children that will be reparented when `branch` is deleted.
 /// Excludes any child whose name appears in `skipped_deletions` (i.e. also being deleted).
+/// First branch above `deleted` worth continuing on, found breadth-first through the
+/// stack snapshot taken before cleanup. Children are visited in name order, so the
+/// choice is deterministic on forks and matches `st next`. Branches that fail
+/// `eligible` (deleted, merged) are walked through, not returned.
+fn next_branch_after_deletion(
+    stack_snapshot: &Stack,
+    deleted: &str,
+    eligible: &dyn Fn(&str) -> bool,
+) -> Option<String> {
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    let enqueue_children = |branch: &str, queue: &mut VecDeque<String>| {
+        let mut children = stack_snapshot
+            .branches
+            .get(branch)
+            .map(|info| info.children.clone())
+            .unwrap_or_default();
+        children.sort();
+        queue.extend(children);
+    };
+    enqueue_children(deleted, &mut queue);
+    while let Some(candidate) = queue.pop_front() {
+        if !seen.insert(candidate.clone()) {
+            continue;
+        }
+        if eligible(&candidate) {
+            return Some(candidate);
+        }
+        enqueue_children(&candidate, &mut queue);
+    }
+    None
+}
+
+fn is_merged_pr(stack: &Stack, branch: &str) -> bool {
+    stack
+        .branches
+        .get(branch)
+        .and_then(|info| info.pr_state.as_deref())
+        .is_some_and(|state| state.eq_ignore_ascii_case("merged"))
+}
+
 fn children_to_reparent(
     stack_snapshot: &Stack,
     branch: &str,
@@ -4065,10 +4678,11 @@ fn reparent_children_for_deletion(
         // --onto <new> <old>` precisely. Only use the deleted branch's tip
         // when it is still in the child's ancestry; otherwise keep the
         // recorded revision (see #120).
-        let old_parent_boundary = doomed_tip
-            .clone()
-            .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
-            .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+        let old_parent_boundary = repo.resolve_child_parent_boundary(
+            child,
+            &[doomed_tip.as_deref()],
+            &child_meta.parent_branch_revision,
+        );
 
         let updated_meta = BranchMetadata {
             parent_branch_name: new_parent.to_string(),
@@ -4296,6 +4910,13 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
     for skip in &stats.cleanup_skips {
         lines.push(format!(
             "⚠ Cleanup skipped for {} ({})",
+            skip.branch, skip.reason
+        ));
+    }
+
+    for skip in &stats.get_skips {
+        lines.push(format!(
+            "⚠ Skipped {} for --get reconciliation ({})",
             skip.branch, skip.reason
         ));
     }
@@ -4864,6 +5485,19 @@ mod tests {
     }
 
     #[test]
+    fn merge_planned_merged_detection_orders_by_branch_name() {
+        let info = |name: &str| MergedBranchInfo {
+            branch: name.to_string(),
+            merge_type: MergeType::SquashMerge,
+        };
+        let planned = vec![info("m"), info("a"), info("z")];
+        let fresh = vec![info("q"), info("b")];
+        let merged = super::merge_planned_merged_detection(planned, fresh);
+        let names: Vec<&str> = merged.iter().map(|m| m.branch.as_str()).collect();
+        assert_eq!(names, ["a", "b", "m", "q", "z"]);
+    }
+
+    #[test]
     fn merge_planned_merged_detection_unions_planned_and_fresh() {
         let planned = vec![MergedBranchInfo {
             branch: "squash-only".to_string(),
@@ -4885,5 +5519,219 @@ mod tests {
         let msg = prune_deprecation_warning();
         assert!(msg.contains("--prune"), "must name --prune: {msg}");
         assert!(msg.contains("--full"), "must name --full: {msg}");
+    }
+
+    fn init_repo_with_two_branches(path: &std::path::Path) -> String {
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+        run(&["branch", "branch-b"]);
+
+        let output = Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(path)
+            .output()
+            .expect("git");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn apply_live_pr_state_records_the_metadata_ref_in_the_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let main_oid = init_repo_with_two_branches(path);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        repo.set_trunk("main").unwrap();
+        BranchMetadata::new("branch-a", &main_oid)
+            .write(repo.inner(), "branch-b")
+            .unwrap();
+
+        let stack = Stack::load(&repo).unwrap();
+        let cache_dir = repo.common_git_dir().unwrap();
+        let ops_dir = path.join(".git/stax/ops");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+
+        let meta_oid_before = Command::new("git")
+            .args(["rev-parse", "--verify", "refs/branch-metadata/branch-b"])
+            .current_dir(path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        let live_pr = ForgePrInfo {
+            number: 1,
+            state: "OPEN".to_string(),
+            is_draft: false,
+            base: "main".to_string(),
+        };
+        apply_live_pr_state(
+            &repo,
+            &stack,
+            &cache_dir,
+            "branch-b",
+            &live_pr,
+            Some(&mut tx),
+        )
+        .unwrap();
+
+        let finalized = tx.finish_ok_preserving_receipt();
+        let entry = finalized
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-b@meta")
+            .expect("branch-b@meta should be tracked in the receipt");
+
+        assert!(entry.after_recorded);
+        assert_eq!(entry.oid_before, meta_oid_before);
+        assert_ne!(entry.oid_after, meta_oid_before);
+        assert!(entry.oid_after.is_some());
+    }
+
+    #[test]
+    fn apply_live_pr_state_does_not_snapshot_when_metadata_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let main_oid = init_repo_with_two_branches(path);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        repo.set_trunk("main").unwrap();
+        BranchMetadata::new("branch-a", &main_oid)
+            .write(repo.inner(), "branch-b")
+            .unwrap();
+
+        let stack = Stack::load(&repo).unwrap();
+        let cache_dir = repo.common_git_dir().unwrap();
+        let ops_dir = path.join(".git/stax/ops");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        let live_pr = ForgePrInfo {
+            number: 1,
+            state: "OPEN".to_string(),
+            is_draft: false,
+            base: "branch-a".to_string(),
+        };
+        apply_live_pr_state(
+            &repo,
+            &stack,
+            &cache_dir,
+            "branch-b",
+            &live_pr,
+            Some(&mut tx),
+        )
+        .unwrap();
+
+        assert!(!tx.is_snapshotted());
+        let finalized = tx.finish_ok_preserving_receipt();
+        assert!(
+            !finalized
+                .receipt
+                .local_refs
+                .iter()
+                .any(|e| e.branch == "branch-b@meta")
+        );
+    }
+    fn stack_of(edges: &[(&str, &[&str])], merged: &[&str]) -> Stack {
+        let mut branches = HashMap::new();
+        for (name, children) in edges {
+            branches.insert(
+                name.to_string(),
+                crate::engine::stack::StackBranch {
+                    name: name.to_string(),
+                    parent: None,
+                    parent_revision: None,
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: merged.contains(name).then(|| "MERGED".to_string()),
+                    pr_is_draft: None,
+                },
+            );
+        }
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn next_branch_after_deletion_prefers_first_child_by_name() {
+        let stack = stack_of(
+            &[("a", &["zeta", "alpha"]), ("zeta", &[]), ("alpha", &[])],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|_| true),
+            Some("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_walks_through_ineligible_branches() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["c"]), ("c", &[])], &[]);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "c"),
+            Some("c".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_is_breadth_first_across_forks() {
+        // The shallow sibling wins over a deeper branch under an earlier-named fork.
+        let stack = stack_of(
+            &[
+                ("a", &["b1", "b2"]),
+                ("b1", &["c"]),
+                ("b2", &[]),
+                ("c", &[]),
+            ],
+            &[],
+        );
+        assert_eq!(
+            next_branch_after_deletion(&stack, "a", &|name| name == "b2" || name == "c"),
+            Some("b2".to_string())
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_returns_none_without_eligible_descendants() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &[])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+        assert_eq!(next_branch_after_deletion(&stack, "b", &|_| true), None);
+        assert_eq!(
+            next_branch_after_deletion(&stack, "unknown", &|_| true),
+            None
+        );
+    }
+
+    #[test]
+    fn next_branch_after_deletion_survives_a_cycle_in_the_snapshot() {
+        let stack = stack_of(&[("a", &["b"]), ("b", &["a"])], &[]);
+        assert_eq!(next_branch_after_deletion(&stack, "a", &|_| false), None);
+    }
+
+    #[test]
+    fn is_merged_pr_matches_state_case_insensitively() {
+        let stack = stack_of(&[("a", &[]), ("b", &[])], &["a"]);
+        assert!(is_merged_pr(&stack, "a"));
+        assert!(!is_merged_pr(&stack, "b"));
+        assert!(!is_merged_pr(&stack, "missing"));
     }
 }

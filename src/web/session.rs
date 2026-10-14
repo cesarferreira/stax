@@ -1,6 +1,6 @@
 //! Shared session state for the `st web` workspace.
 
-use crate::application::OperationReceipt;
+use crate::application::TransactionSummary;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -85,8 +85,8 @@ pub struct WebSession {
     pub show_inspector: bool,
     /// Light / dark / system appearance.
     pub theme: ThemePreference,
-    /// Last completed operation receipt (for undo/redo state).
-    pub last_receipt: Option<OperationReceipt>,
+    /// Latest persisted local transaction summary (for undo/redo state).
+    pub last_receipt: Option<TransactionSummary>,
     /// Whether a mutation is currently in flight.
     pub active_operation: bool,
     /// Recently opened repository roots (up to 10, most recent first).

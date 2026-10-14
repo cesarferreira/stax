@@ -138,7 +138,7 @@ st generate --pr-body --no-prompt
 | `--template <name>` | Use a specific PR template |
 | `--no-template` | Skip PR template |
 
-Supported agents: `claude`, `codex`, `gemini`, `opencode`, `pi`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`, `pi`, `hermes`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults. Hermes resolves provider-qualified model IDs (for example, `anthropic/claude-sonnet-4.6`) through its own configuration and credentials.
 
 To forget the saved AI pairing and re-prompt:
 
@@ -159,10 +159,11 @@ stack_links = "body"   # or "both"
 ### More examples
 
 ```bash
-st generate --pr-body --agent codex --model gpt-5.3-codex
+st generate --pr-body --agent codex --model gpt-5.6-terra
 st generate --pr-body --agent claude --model claude-haiku-4-5
-st generate --pr-body --agent gemini --model gemini-2.5-flash
+st generate --pr-body --agent gemini --model gemini-3.8-flash
 st generate --pr-body --agent opencode
+st generate --pr-body --agent hermes
 st generate --pr-body --edit
 st generate --pr-body --template feature
 st gen --pr-title --agent claude

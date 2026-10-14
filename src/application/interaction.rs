@@ -2,7 +2,7 @@
 //!
 //! Shared by the `st web` workspace.
 
-use super::{OperationReceipt, RepositorySnapshot};
+use super::{OperationReceipt, RepositorySnapshot, TransactionSummary};
 
 /// Whether a specific user action is currently available.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +58,25 @@ pub fn interaction_state(
     active_mutating: bool,
     last_receipt: Option<&OperationReceipt>,
 ) -> InteractionState {
+    interaction_state_from_transaction(
+        snapshot,
+        selected,
+        active_mutating,
+        last_receipt.and_then(|receipt| receipt.transaction.as_ref()),
+    )
+}
+
+/// Returns interaction state from the latest persisted local transaction.
+///
+/// Application operations normally provide an [`OperationReceipt`], while
+/// clients that invoke a legacy transactional command can reload its
+/// [`TransactionSummary`] directly from disk and use this entry point.
+pub fn interaction_state_from_transaction(
+    snapshot: &RepositorySnapshot,
+    selected: Option<&str>,
+    active_mutating: bool,
+    last_transaction: Option<&TransactionSummary>,
+) -> InteractionState {
     if active_mutating {
         let reason = "A repository operation is running.";
         let disabled = ActionAvailability::disabled(reason);
@@ -86,10 +105,7 @@ pub fn interaction_state(
         .map(|b| b.name.as_str())
         .unwrap_or("the selected branch");
     let has_non_trunk = snapshot.branches.iter().any(|b| !b.is_trunk);
-    let local_transaction = last_receipt
-        .as_ref()
-        .and_then(|r| r.transaction.as_ref())
-        .filter(|tx| !tx.changed_remote_refs);
+    let local_transaction = last_transaction.filter(|tx| !tx.changed_remote_refs);
     let reorder_len = selected_summary
         .and_then(|b| linear_stack_order(snapshot, &b.name))
         .map(|v| v.len())

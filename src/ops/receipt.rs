@@ -34,6 +34,7 @@ pub enum OpKind {
     Fix,
     Edit,
     Fold,
+    Create,
 }
 
 impl OpKind {
@@ -54,6 +55,7 @@ impl OpKind {
             OpKind::Fix => "stack fix",
             OpKind::Edit => "edit",
             OpKind::Fold => "fold",
+            OpKind::Create => "create",
         }
     }
 }

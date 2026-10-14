@@ -106,6 +106,10 @@ async fn setup_install_skills_flag_with_skills_list_installs_subset() {
     assert!(home.path().join(".codex/skills/stax/SKILL.md").exists());
     assert!(home.path().join(".cursor/skills/stax/SKILL.md").exists());
     assert!(!home.path().join(".claude/skills/stax/SKILL.md").exists());
+    assert!(
+        !home.path().join(".hermes/skills/stax/SKILL.md").exists(),
+        "hermes should not be installed when it is not in --skills"
+    );
     assert!(!home.path().join(".pi/agent/skills/stax/SKILL.md").exists());
     assert!(
         !home
@@ -305,5 +309,56 @@ async fn skills_update_all_overrides_configured_selection() {
     );
     assert!(home.path().join(".claude/skills/stax/SKILL.md").exists());
     assert!(home.path().join(".cursor/skills/stax/SKILL.md").exists());
+    assert!(home.path().join(".hermes/skills/stax/SKILL.md").exists());
     assert!(home.path().join(".pi/agent/skills/stax/SKILL.md").exists());
+}
+
+/// `--skills hermes` is the documented install path in docs/integrations/hermes.md.
+/// It must write only the Hermes skill file and leave the other harnesses alone.
+#[tokio::test]
+async fn setup_skills_hermes_installs_only_hermes() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+    let _snippet = configure_existing_shell_setup(home.path());
+    let gh_bin = write_unavailable_gh(home.path());
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.51.0 -->\n# Stax Skills\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let repo = tempdir().expect("repo");
+    let output = Command::new(stax_bin())
+        .args(["setup", "--yes", "--install-skills", "--skills", "hermes"])
+        .current_dir(repo.path())
+        .env("HOME", home.path())
+        .env("SHELL", TEST_SHELL)
+        .env("PATH", path_with_bin(gh_bin.path()))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run setup");
+
+    assert!(output.status.success(), "{:?}", output);
+
+    let hermes_skill = home.path().join(".hermes/skills/stax/SKILL.md");
+    assert!(hermes_skill.exists(), "hermes skill should be installed");
+
+    // SKILL.md format: YAML frontmatter naming the skill, stamped with PKG_VERSION.
+    let written = std::fs::read_to_string(&hermes_skill).expect("read hermes skill");
+    assert!(written.starts_with("---\n"), "expected YAML frontmatter");
+    assert!(written.contains("name: stax"));
+
+    assert!(!home.path().join(".codex/skills/stax/SKILL.md").exists());
+    assert!(!home.path().join(".cursor/skills/stax/SKILL.md").exists());
+    assert!(!home.path().join(".claude/skills/stax/SKILL.md").exists());
+    assert!(!home.path().join(".pi/agent/skills/stax/SKILL.md").exists());
 }

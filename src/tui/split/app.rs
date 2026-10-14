@@ -4,6 +4,8 @@ use crate::git::GitRepo;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use anyhow::{Context, Result};
+use std::path::Path;
+use std::process::Command;
 
 /// A commit to display in the split UI
 #[derive(Debug, Clone)]
@@ -55,6 +57,19 @@ pub struct SplitApp {
     pub should_quit: bool,
     pub execute_requested: bool,
     pub existing_branches: Vec<String>,
+}
+
+/// Resolve `refname` to its OID via a git subprocess; `None` when absent.
+fn resolve_ref_oid(workdir: &Path, refname: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--verify", refname])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 impl SplitApp {
@@ -291,6 +306,11 @@ impl SplitApp {
         let mut affected = new_branches.clone();
         affected.push(self.current_branch.clone());
         tx.plan_branches(&self.repo, &affected)?;
+        // Every branch touched below gets its metadata rewritten too -- plan those refs so
+        // `stax undo` can actually reverse a split (see #830/#835).
+        for branch in &affected {
+            tx.plan_metadata_ref(&self.repo, branch)?;
+        }
 
         let summary = PlanSummary {
             branches_to_rebase: 0,
@@ -304,6 +324,7 @@ impl SplitApp {
         // Create branches at split points
         let mut prev_parent = self.parent_branch.clone();
         let mut prev_idx = 0;
+        let workdir = self.repo.workdir()?.to_path_buf();
 
         for sp in &self.split_points {
             // The commit at sp.after_commit_index becomes the tip of the new branch
@@ -313,10 +334,35 @@ impl SplitApp {
             self.repo
                 .create_branch_at_commit(&sp.branch_name, commit_sha)?;
 
-            // Create metadata for the new branch
+            // Create metadata for the new branch. `prev_parent`'s live tip is only a
+            // valid boundary if this new branch's commits are actually descended from
+            // it -- if `prev_parent` advanced between opening the split TUI and
+            // confirming (or, for later split points, is simply a sibling of the new
+            // branch rather than a real ancestor), it isn't. The merge-base is always
+            // a real ancestor by definition; verify it before trusting the live tip,
+            // else fall back to it directly as a last resort (see #830).
             let parent_rev = self.repo.branch_commit(&prev_parent)?;
-            let meta = BranchMetadata::new(&prev_parent, &parent_rev);
+            let merge_base = self.repo.merge_base(&prev_parent, &sp.branch_name).ok();
+            let parent_branch_revision = self.repo.resolve_child_parent_boundary(
+                &sp.branch_name,
+                &[merge_base.as_deref(), Some(parent_rev.as_str())],
+                &parent_rev,
+            );
+            let meta = BranchMetadata::new(&prev_parent, &parent_branch_revision);
             meta.write(self.repo.inner(), &sp.branch_name)?;
+
+            tx.record_known_after(
+                &sp.branch_name,
+                resolve_ref_oid(&workdir, &format!("refs/heads/{}", sp.branch_name)).as_deref(),
+            );
+            tx.record_known_metadata_after(
+                &sp.branch_name,
+                resolve_ref_oid(
+                    &workdir,
+                    &format!("refs/branch-metadata/{}", sp.branch_name),
+                )
+                .as_deref(),
+            );
 
             println!(
                 "Created branch '{}' with {} commits",
@@ -335,9 +381,23 @@ impl SplitApp {
 
             // Read and update existing metadata
             if let Some(mut meta) = BranchMetadata::read(self.repo.inner(), &self.current_branch)? {
+                let merge_base = self.repo.merge_base(new_parent, &self.current_branch).ok();
                 meta.parent_branch_name = new_parent.clone();
-                meta.parent_branch_revision = parent_rev;
+                meta.parent_branch_revision = self.repo.resolve_child_parent_boundary(
+                    &self.current_branch,
+                    &[merge_base.as_deref(), Some(parent_rev.as_str())],
+                    &meta.parent_branch_revision,
+                );
                 meta.write(self.repo.inner(), &self.current_branch)?;
+
+                tx.record_known_metadata_after(
+                    &self.current_branch,
+                    resolve_ref_oid(
+                        &workdir,
+                        &format!("refs/branch-metadata/{}", self.current_branch),
+                    )
+                    .as_deref(),
+                );
             }
 
             println!(
@@ -345,10 +405,238 @@ impl SplitApp {
                 self.current_branch, new_parent
             );
         }
+        tx.record_known_after(
+            &self.current_branch,
+            resolve_ref_oid(&workdir, &format!("refs/heads/{}", self.current_branch)).as_deref(),
+        );
 
         tx.finish_ok()?;
         println!("\nSplit complete! Use `stax status` to see the new stack structure.");
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git_hermetic(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env(
+                "GIT_CONFIG_SYSTEM",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Issue #830: if `parent_branch` advances between when an interactive split
+    /// session captured its commits and when the split is actually executed, the
+    /// first new branch's `parentBranchRevision` must not be stamped with the
+    /// live (advanced) tip -- that tip is not actually an ancestor of the new
+    /// branch's commits, which were captured before the advance.
+    #[test]
+    fn execute_split_keeps_first_branchs_boundary_ancestry_valid_when_parent_advances_mid_session()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        git_hermetic(dir, &["init", "-b", "main"]);
+        git_hermetic(dir, &["config", "user.name", "Test"]);
+        git_hermetic(dir, &["config", "user.email", "test@example.com"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "base"]);
+        GitRepo::open_from_path(dir)
+            .unwrap()
+            .set_trunk("main")
+            .unwrap();
+
+        git_hermetic(dir, &["checkout", "-b", "feature"]);
+        std::fs::write(dir.join("c1.txt"), "c1\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C1"]);
+        let c1_sha = git_hermetic(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("c2.txt"), "c2\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C2"]);
+
+        {
+            let repo = GitRepo::open_from_path(dir).unwrap();
+            let main_oid = git_hermetic(dir, &["rev-parse", "main"]);
+            BranchMetadata::new("main", &main_oid)
+                .write(repo.inner(), "feature")
+                .unwrap();
+        }
+
+        // Advance main AFTER "commits were captured" (simulating the TOCTOU gap
+        // between opening the interactive split TUI and confirming the split).
+        git_hermetic(dir, &["checkout", "main"]);
+        std::fs::write(dir.join("m1.txt"), "m1\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "M1"]);
+        git_hermetic(dir, &["checkout", "feature"]);
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let commits = vec![
+            CommitDisplay {
+                sha: c1_sha.clone(),
+                short_sha: c1_sha[..7].to_string(),
+                message: "C1".to_string(),
+            },
+            CommitDisplay {
+                sha: git_hermetic(dir, &["rev-parse", "feature"]),
+                short_sha: "unused".to_string(),
+                message: "C2".to_string(),
+            },
+        ];
+        let mut app = SplitApp {
+            repo,
+            current_branch: "feature".to_string(),
+            parent_branch: "main".to_string(),
+            commits,
+            split_points: vec![SplitPoint {
+                after_commit_index: 0,
+                branch_name: "feature-split-1".to_string(),
+            }],
+            selected_index: 0,
+            mode: SplitMode::Normal,
+            input_buffer: String::new(),
+            input_cursor: 0,
+            status_message: None,
+            should_quit: false,
+            execute_requested: false,
+            existing_branches: vec![],
+        };
+
+        app.execute_split().unwrap();
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let meta = BranchMetadata::read(repo.inner(), "feature-split-1")
+            .unwrap()
+            .unwrap();
+        assert!(
+            repo.is_ancestor(&meta.parent_branch_revision, "feature-split-1")
+                .unwrap(),
+            "boundary {} is not an ancestor of feature-split-1 (issue #830)",
+            meta.parent_branch_revision
+        );
+    }
+
+    /// Issue #835: a successful split must record the metadata refs it rewrites
+    /// in the op receipt, or `stax undo` cannot reverse it.
+    #[test]
+    fn execute_split_records_metadata_refs_in_the_op_receipt() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        git_hermetic(dir, &["init", "-b", "main"]);
+        git_hermetic(dir, &["config", "user.name", "Test"]);
+        git_hermetic(dir, &["config", "user.email", "test@example.com"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "base"]);
+        GitRepo::open_from_path(dir)
+            .unwrap()
+            .set_trunk("main")
+            .unwrap();
+
+        git_hermetic(dir, &["checkout", "-b", "feature"]);
+        std::fs::write(dir.join("c1.txt"), "c1\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C1"]);
+        let c1_sha = git_hermetic(dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("c2.txt"), "c2\n").unwrap();
+        git_hermetic(dir, &["add", "-A"]);
+        git_hermetic(dir, &["commit", "-m", "C2"]);
+        let feature_tip = git_hermetic(dir, &["rev-parse", "HEAD"]);
+
+        {
+            let repo = GitRepo::open_from_path(dir).unwrap();
+            let main_oid = git_hermetic(dir, &["rev-parse", "main"]);
+            BranchMetadata::new("main", &main_oid)
+                .write(repo.inner(), "feature")
+                .unwrap();
+        }
+        let feature_meta_before = git_hermetic(dir, &["rev-parse", "refs/branch-metadata/feature"]);
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let commits = vec![
+            CommitDisplay {
+                sha: c1_sha.clone(),
+                short_sha: c1_sha[..7].to_string(),
+                message: "C1".to_string(),
+            },
+            CommitDisplay {
+                sha: feature_tip,
+                short_sha: "unused".to_string(),
+                message: "C2".to_string(),
+            },
+        ];
+        let mut app = SplitApp {
+            repo,
+            current_branch: "feature".to_string(),
+            parent_branch: "main".to_string(),
+            commits,
+            split_points: vec![SplitPoint {
+                after_commit_index: 0,
+                branch_name: "feature-split-1".to_string(),
+            }],
+            selected_index: 0,
+            mode: SplitMode::Normal,
+            input_buffer: String::new(),
+            input_cursor: 0,
+            status_message: None,
+            should_quit: false,
+            execute_requested: false,
+            existing_branches: vec![],
+        };
+
+        app.execute_split().unwrap();
+
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let receipt = crate::ops::receipt::OpReceipt::load_latest(repo.git_dir().unwrap())
+            .unwrap()
+            .expect("split should have written a receipt");
+
+        let split_meta = receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "feature-split-1@meta")
+            .expect("feature-split-1@meta must be tracked");
+        // `plan_metadata_ref` resolves via `refs::metadata_ref_oid`, which returns
+        // `None` for a ref that doesn't exist yet -- confirmed by reading
+        // `Transaction::plan_metadata_ref` in src/ops/tx.rs before writing this.
+        assert_eq!(split_meta.oid_before, None);
+        assert!(split_meta.oid_after.is_some());
+        assert!(split_meta.after_recorded);
+
+        let feature_meta_entry = receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "feature@meta")
+            .expect("feature@meta must be tracked");
+        let feature_meta_after = git_hermetic(dir, &["rev-parse", "refs/branch-metadata/feature"]);
+        assert_eq!(
+            feature_meta_entry.oid_before.as_deref(),
+            Some(feature_meta_before.as_str())
+        );
+        assert_eq!(
+            feature_meta_entry.oid_after.as_deref(),
+            Some(feature_meta_after.as_str())
+        );
+        assert!(feature_meta_entry.after_recorded);
     }
 }

@@ -119,3 +119,13 @@ fn lane_tmux_session_requires_explicit_lane_name() {
         .assert_failure()
         .assert_stderr_contains("--tmux-session requires an explicit lane name");
 }
+
+#[test]
+fn merge_queue_and_ignore_failed_ci_are_mutually_exclusive() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--queue", "--ignore-failed-ci"]);
+    output
+        .assert_failure()
+        .assert_stderr_contains("cannot be used with");
+}

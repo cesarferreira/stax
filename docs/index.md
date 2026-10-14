@@ -31,6 +31,7 @@
 | Run parallel AI coding sessions | [AI worktree lanes](workflows/agent-worktrees.md) |
 | Manage Git worktrees as lanes | [Worktrees](worktrees/index.md) |
 | Understand worktree-aware behavior | [Multi-worktree behavior](workflows/multi-worktree.md) |
+| Sync a stack after working on another machine | [Working across multiple machines](workflows/multi-machine.md) |
 | Recover from a bad rewrite | [Undo and redo](safety/undo-redo.md) |
 | Validate or repair stack metadata | [Stack health](commands/stack-health.md) |
 | Generate branch names, PR bodies, or standup summaries | [Reporting](workflows/reporting.md) · [PR templates + AI](integrations/pr-templates-and-ai.md) |

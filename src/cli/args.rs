@@ -200,6 +200,21 @@ impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BoardTabArg {
+    Prs,
+    Issues,
+}
+
+impl From<BoardTabArg> for commands::board::BoardTabSelection {
+    fn from(value: BoardTabArg) -> Self {
+        match value {
+            BoardTabArg::Prs => commands::board::BoardTabSelection::PullRequests,
+            BoardTabArg::Issues => commands::board::BoardTabSelection::Issues,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum StandupSummaryStyle {
     Spoken,
@@ -380,6 +395,9 @@ pub(crate) enum Commands {
         /// Fail if CI pending (don't poll/wait)
         #[arg(long)]
         no_wait: bool,
+        /// Merge even when CI checks failed (still blocks on draft, changes requested, and conflicts)
+        #[arg(long)]
+        ignore_failed_ci: bool,
         /// Max wait time for CI per PR in minutes
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
@@ -394,7 +412,7 @@ pub(crate) enum Commands {
         stack: bool,
         /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
         /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack", "ignore_failed_ci"])]
         queue: bool,
         /// Polling interval in seconds for --when-ready, --remote, --queue, and --stack --when-ready
         #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..))]
@@ -454,7 +472,7 @@ pub(crate) enum Commands {
         /// Deprecated no-op, accepted for compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
-        /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
+        /// Fetch all remote branches and tags with `--prune` (slower; default is trunk-only fetch + ls-remote)
         #[arg(long)]
         full: bool,
         /// Don't delete merged branches
@@ -490,9 +508,12 @@ pub(crate) enum Commands {
         /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
         #[arg(long, conflicts_with = "continue")]
         json: bool,
+        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        #[arg(long)]
+        get: bool,
     },
 
-    /// List and optionally clean up local branches (merged, upstream-gone, stale)
+    /// List and optionally clean up local branches (merged, closed PR, upstream-gone, stale)
     Sweep {
         /// Delete merged and upstream-gone branches (safe to remove)
         #[arg(short, long)]
@@ -500,6 +521,9 @@ pub(crate) enum Commands {
         /// When deleting, also include stale branches (use with --delete)
         #[arg(long, requires = "delete")]
         include_stale: bool,
+        /// When deleting, also include closed but unmerged PR branches (use with --delete)
+        #[arg(long, requires = "delete")]
+        include_closed: bool,
         /// Skip confirmation prompts (use with --delete)
         #[arg(short, long, requires = "delete")]
         force: bool,
@@ -554,6 +578,7 @@ pub(crate) enum Commands {
     },
 
     /// Sync trunk, restack current stack, then submit updates
+    #[command(visible_alias = "r")]
     Refresh {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
@@ -582,6 +607,12 @@ pub(crate) enum Commands {
         /// Refresh every stack in the repo, not just the current one
         #[arg(long)]
         all_stacks: bool,
+        /// Delete local branches whose PRs were merged (off by default, unlike `stax sync`)
+        #[arg(long)]
+        delete_merged: bool,
+        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        #[arg(long)]
+        get: bool,
     },
 
     /// Checkout a branch in the stack
@@ -686,12 +717,6 @@ pub(crate) enum Commands {
         command: Option<AuthSubcommand>,
     },
 
-    /// Manage the installed stax CLI
-    Cli {
-        #[command(subcommand)]
-        command: CliSubcommand,
-    },
-
     /// Upgrade the stax CLI and check for skill updates
     Update {
         /// Run the upgrade even if already on the latest version
@@ -753,6 +778,12 @@ pub(crate) enum Commands {
     Skills {
         #[command(subcommand)]
         command: Option<SkillsCommands>,
+    },
+
+    /// View or set personal preferences (branch naming, editor, tips, submit body)
+    User {
+        #[command(subcommand)]
+        command: Option<UserSubcommand>,
     },
 
     /// Switch to the trunk branch, or set it with `stax trunk <branch>`
@@ -866,6 +897,23 @@ pub(crate) enum Commands {
         /// Auto-refresh interval in seconds for the interactive TUI (default: 15)
         #[arg(long, default_value = "15")]
         interval: u64,
+    },
+
+    /// Interactive dashboard of open pull requests and issues for this repository
+    #[command(visible_alias = "home")]
+    Board {
+        /// Maximum number of pull requests / issues to list (max: 100)
+        #[arg(long, default_value_t = DEFAULT_GITHUB_LIST_LIMIT, value_parser = clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        /// Tab to open on launch
+        #[arg(long, value_enum, default_value_t = BoardTabArg::Prs)]
+        tab: BoardTabArg,
+        /// Auto-refresh interval in seconds for the interactive TUI (default: 60)
+        #[arg(long, default_value = "60")]
+        interval: u64,
+        /// Render static tables instead of the interactive dashboard
+        #[arg(long)]
+        plain: bool,
     },
 
     /// Browse open issues in the current repository
@@ -1143,6 +1191,19 @@ pub(crate) enum Commands {
     /// Interactive tutorial (no auth or repo needed)
     Demo,
 
+    /// Single-screen snapshot of local stacking health
+    Stats {
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+        /// Scope to the current stack only (default: all tracked branches)
+        #[arg(long)]
+        current: bool,
+        /// Include a CI roll-up (may add network latency)
+        #[arg(long)]
+        ci: bool,
+    },
+
     /// Generate standup summary of recent activity
     Standup {
         /// Output raw JSON (standup data, or summary JSON when combined with --ai)
@@ -1319,7 +1380,7 @@ pub(crate) enum Commands {
         /// Install AI agent skills without prompting
         #[arg(long, conflicts_with_all = ["skip_skills", "print", "refresh"])]
         install_skills: bool,
-        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,opencode,pi)
+        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,hermes,opencode,pi)
         #[arg(
             long,
             value_name = "LIST",
@@ -1467,10 +1528,65 @@ pub(crate) enum AuthSubcommand {
     Status,
 }
 
-#[derive(Subcommand, Clone)]
-pub(crate) enum CliSubcommand {
-    /// Upgrade stax using the current installation method
-    Upgrade,
+#[derive(Subcommand)]
+pub(crate) enum UserSubcommand {
+    /// Prefix applied to new branch names (e.g. "cesar/")
+    BranchPrefix {
+        /// Set the branch prefix
+        #[arg(long)]
+        set: Option<String>,
+        /// Clear the branch prefix
+        #[arg(long, conflicts_with = "set")]
+        unset: bool,
+    },
+    /// Whether new branch names include a date
+    BranchDate {
+        /// Include a date in new branch names
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Do not include a date in new branch names
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Character used to replace spaces and special chars in branch names
+    BranchReplacement {
+        /// Set the replacement character
+        #[arg(long, conflicts_with_all = ["set_dash", "set_underscore"])]
+        set: Option<String>,
+        /// Shorthand for --set "-"
+        #[arg(long, conflicts_with = "set_underscore")]
+        set_dash: bool,
+        /// Shorthand for --set "_"
+        #[arg(long)]
+        set_underscore: bool,
+    },
+    /// Preferred editor for interactive text edits (e.g. `stax pr --edit`)
+    Editor {
+        /// Set the preferred editor
+        #[arg(long)]
+        set: Option<String>,
+        /// Clear the preferred editor (fall back to $EDITOR)
+        #[arg(long, conflicts_with = "set")]
+        unset: bool,
+    },
+    /// Contextual tips/suggestions shown by stax commands
+    Tips {
+        /// Show contextual tips/suggestions
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Hide contextual tips/suggestions
+        #[arg(long)]
+        disable: bool,
+    },
+    /// Whether the default PR body includes a commit-message summary
+    SubmitBody {
+        /// Include a commit-message summary in the default PR body
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Omit the commit-message summary from the default PR body
+        #[arg(long)]
+        disable: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1583,10 +1699,13 @@ pub(crate) enum BranchCommands {
     /// Track an existing branch (set its parent)
     Track {
         /// Parent branch name
-        #[arg(short, long, conflicts_with = "all_prs")]
+        #[arg(short, long, conflicts_with_all = ["all", "all_prs"])]
         parent: Option<String>,
+        /// Track all untracked local branches under their nearest local ancestors
+        #[arg(long, conflicts_with_all = ["parent", "all_prs"])]
+        all: bool,
         /// Track all open PRs authored by you
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["parent", "all"])]
         all_prs: bool,
     },
 
@@ -1910,6 +2029,7 @@ impl Commands {
             | Commands::Ll { .. }
             | Commands::Log { .. }
             | Commands::Ready { .. }
+            | Commands::Board { .. }
             | Commands::Ci { .. }
             | Commands::Watch { .. }
             | Commands::Diff { .. }
@@ -1920,7 +2040,8 @@ impl Commands {
             | Commands::Web(_)
             | Commands::W
             | Commands::Wtll { .. }
-            | Commands::Wtls => CommandPolicy::RebaseSafe,
+            | Commands::Wtls
+            | Commands::Stats { .. } => CommandPolicy::RebaseSafe,
             Commands::Issue { command } => match command {
                 None | Some(IssueCommands::List { .. }) => CommandPolicy::RebaseSafe,
             },

@@ -1,7 +1,7 @@
 use crate::cache::CiCache;
 use crate::commands::stack_palette;
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack, StackSnapshot};
+use crate::engine::{Stack, StackSnapshot};
 use crate::git::{GitRepo, command};
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
@@ -647,22 +647,7 @@ fn collect_display_branches_with_nesting(
 }
 
 fn collect_missing_parent_branches(repo: &GitRepo, stack: &Stack) -> HashMap<String, String> {
-    let mut missing = HashMap::new();
-
-    for name in stack.branches.keys().filter(|name| *name != &stack.trunk) {
-        let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), name) else {
-            continue;
-        };
-        let parent = meta.parent_branch_name.trim();
-        if parent.is_empty() || parent == stack.trunk {
-            continue;
-        }
-        if repo.branch_commit(parent).is_err() {
-            missing.insert(name.clone(), parent.to_string());
-        }
-    }
-
-    missing
+    crate::engine::collect_tracked_facts(repo, stack).missing_parent
 }
 
 /// Get line additions and deletions between parent and branch

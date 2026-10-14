@@ -6,14 +6,34 @@ use crate::ops::receipt::{OpKind, OpReceipt, OpStatus};
 use anyhow::Result;
 use colored::Colorize;
 
+/// Resolve the parent branch that metadata should record after a rebase.
+///
+/// The parent recorded on disk may no longer exist locally (e.g. it was merged
+/// upstream and pruned before the sync that started this rebase). `Stack::load`
+/// already reparents such orphans onto trunk in memory, and `restack` rebases
+/// them onto trunk — so mirror that here instead of failing on a branch that is
+/// gone. When the recorded parent still exists, this is a no-op.
+pub(crate) fn effective_parent_branch(repo: &GitRepo, recorded_parent: &str) -> Result<String> {
+    if repo
+        .inner()
+        .find_branch(recorded_parent, git2::BranchType::Local)
+        .is_ok()
+    {
+        return Ok(recorded_parent.to_string());
+    }
+    repo.trunk_branch()
+}
+
 pub(crate) fn continue_rebase_and_update_metadata(repo: &GitRepo) -> Result<RebaseResult> {
     match repo.rebase_continue()? {
         RebaseResult::Success => {
             // Update metadata for current branch
             let current = repo.current_branch()?;
             if let Some(meta) = BranchMetadata::read(repo.inner(), &current)? {
-                let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;
+                let parent_name = effective_parent_branch(repo, &meta.parent_branch_name)?;
+                let new_parent_rev = repo.branch_commit(&parent_name)?;
                 let updated_meta = BranchMetadata {
+                    parent_branch_name: parent_name,
                     parent_branch_revision: new_parent_rev,
                     ..meta
                 };

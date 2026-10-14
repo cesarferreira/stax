@@ -93,6 +93,7 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 - **Submit** — push the stack and create/update PRs (draft mode)
 - **Undo / Redo** — restore local transaction state (top-bar utility buttons)
 - **Refresh** — reload the repository snapshot (top-bar `↺` button)
+- **Sync** — after confirmation, fetch updates, fast-forward trunk, and delete merged local branches. It requires a clean worktree, never stashes, and does not restack. Refresh remains read-only.
 - **Rename** — rename a branch (inspector Actions → Rename overlay)
 - **Create** — create a new branch stacked on the selected one (inspector or quick action `N`)
 - **Delete** — delete a non-current branch (inspector Actions)
@@ -105,6 +106,7 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 - Every mutating POST requires a matching **CSRF token** (`csrf` form field). Requests with wrong CSRF return `403 Forbidden`.
 - `Host` must be `127.0.0.1` or `localhost`. An absent `Origin` is allowed for navigation and non-browser clients; when present, exactly one `Origin` header must equal `http://127.0.0.1:<actual-bound-port>`. Cross-site, malformed, duplicate, and wrong-port Origins return `403 Forbidden`.
 - Only **one mutation at a time** — mutating controls are disabled while an operation is in flight.
+- The stack pane automatically fits branch names and topology. Drag its accessible divider or use Arrow keys to resize; the width is stored in browser localStorage per canonical repository. Double-click the divider to return to automatic sizing. Narrow layouts stack panes and wrap long names.
 - `--host` flag is intentionally absent — you cannot expose this server to the network.
 
 ## Routes reference
@@ -129,6 +131,7 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 | `POST` | `/s/:token/op/rename` | Rename a branch |
 | `POST` | `/s/:token/op/delete` | Delete a branch |
 | `POST` | `/s/:token/op/restack` | Restack |
+| `POST` | `/s/:token/op/sync` | Confirmed safe sync (clean worktree, no stash or restack) |
 | `POST` | `/s/:token/op/submit` | Submit (draft PRs) |
 | `POST` | `/s/:token/op/undo` | Undo last transaction |
 | `POST` | `/s/:token/op/redo` | Redo last transaction |

@@ -59,12 +59,22 @@ impl RepositorySession {
         options: RestackExecutionOptions,
         reporter: &mut dyn OperationReporter,
     ) -> OperationResult {
+        self.restack_with_options_reporting(options, reporter, None)
+    }
+
+    /// Restack, forwarding live phase text to `progress` when the caller is drawing a status line.
+    pub(crate) fn restack_with_options_reporting(
+        &self,
+        options: RestackExecutionOptions,
+        reporter: &mut dyn OperationReporter,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> OperationResult {
         let request = OperationRequest::Restack {
             scope: options.scope.clone(),
             auto_stash: options.auto_stash,
         };
         report_operation(request.clone(), reporter, |reporter| {
-            self.restack_with_options_unframed(&request, options, reporter)
+            self.restack_with_options_unframed(&request, options, reporter, progress)
         })
     }
 
@@ -82,7 +92,7 @@ impl RepositorySession {
             restore_branch: None,
             completed_from_receipt: HashSet::new(),
         };
-        self.restack_with_options_unframed(request, options, reporter)
+        self.restack_with_options_unframed(request, options, reporter, None)
     }
 
     fn restack_with_options_unframed(
@@ -90,6 +100,7 @@ impl RepositorySession {
         request: &OperationRequest,
         options: RestackExecutionOptions,
         reporter: &mut dyn OperationReporter,
+        progress: Option<&(dyn Fn(&str) + Send + Sync)>,
     ) -> OperationResult {
         let repo = self.open_repo().map_err(|error| {
             OperationError::from_source(
@@ -131,7 +142,7 @@ impl RepositorySession {
         self.with_mutation(
             request,
             MutationTargets::branches(scope_branches.clone()),
-            || restack_inner(self, request, options, scope_branches, reporter),
+            || restack_inner(self, request, options, scope_branches, reporter, progress),
         )
     }
 }
@@ -229,6 +240,7 @@ fn restack_inner(
     options: RestackExecutionOptions,
     mut scope_branches: Vec<String>,
     reporter: &mut dyn OperationReporter,
+    progress: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> OperationResult {
     let repo = open_operation_repo(session, request)?;
     let current = repo.current_branch().map_err(|error| {
@@ -528,37 +540,35 @@ fn restack_inner(
             .and_then(|branch| branch.pr_state.as_deref())
             .unwrap_or("");
         let pr_is_open = matches!(pr_state.to_uppercase().as_str(), "OPEN" | "DRAFT");
-        let rebase_result = if pr_is_open {
-            repo.rebase_branch_onto_with_provenance_no_squash_check(
+        let rebase_result = repo
+            .rebase_branch_onto_with_provenance_timing_reporting(
                 branch,
                 &parent_branch_name,
                 &rebase_upstream,
                 options.auto_stash,
+                !pr_is_open,
+                progress,
             )
-        } else {
-            repo.rebase_branch_onto_with_provenance(
-                branch,
-                &parent_branch_name,
-                &rebase_upstream,
-                options.auto_stash,
-            )
-        }
-        .map_err(|error| {
-            finish_transaction_error(
-                request,
-                &repo,
-                &mut tx,
-                &completed,
-                &stashes,
-                format!("Could not rebase '{branch}'"),
-                "Resolve the Git rebase error and retry",
-                error,
-                Some(branch),
-            )
-        })?;
+            .map(|outcome| outcome.result)
+            .map_err(|error| {
+                finish_transaction_error(
+                    request,
+                    &repo,
+                    &mut tx,
+                    &completed,
+                    &stashes,
+                    format!("Could not rebase '{branch}'"),
+                    "Resolve the Git rebase error and retry",
+                    error,
+                    Some(branch),
+                )
+            })?;
 
         match rebase_result {
             RebaseResult::Success => {
+                if let Some(progress) = progress {
+                    progress("Updating branch metadata");
+                }
                 let new_parent_rev = repo.branch_commit(&parent_branch_name).map_err(|error| {
                     finish_transaction_error(
                         request,

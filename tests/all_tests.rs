@@ -24,6 +24,8 @@ mod application_operation_tests;
 mod application_session_tests;
 #[path = "auth_tests.rs"]
 mod auth_tests;
+#[path = "board_tests.rs"]
+mod board_tests;
 #[path = "changelog_tests.rs"]
 mod changelog_tests;
 #[path = "ci_tests.rs"]
@@ -52,6 +54,8 @@ mod create_insert_tests;
 mod create_message_tests;
 #[path = "create_rollback_tests.rs"]
 mod create_rollback_tests;
+#[path = "create_undo_tests.rs"]
+mod create_undo_tests;
 #[path = "demo_tests.rs"]
 mod demo_tests;
 #[path = "detach_tests.rs"]
@@ -84,6 +88,8 @@ mod github_list_tests;
 mod guard_rail_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
+#[path = "merge_ignore_failed_ci_tests.rs"]
+mod merge_ignore_failed_ci_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
 #[path = "performance_tests.rs"]
@@ -100,6 +106,8 @@ mod prev_watch_tmux_tests;
 mod ready_tests;
 #[path = "refresh_all_stacks_tests.rs"]
 mod refresh_all_stacks_tests;
+#[path = "refresh_forge_tests.rs"]
+mod refresh_forge_tests;
 #[path = "refresh_visual_tests.rs"]
 mod refresh_visual_tests;
 #[path = "reorder_tests.rs"]
@@ -116,6 +124,8 @@ mod runtime_safety_tests;
 mod scoped_submit_tests;
 #[path = "skills_selection_tests.rs"]
 mod skills_selection_tests;
+#[path = "skills_symlink_tests.rs"]
+mod skills_symlink_tests;
 #[path = "split_hunk_tests.rs"]
 mod split_hunk_tests;
 #[path = "split_tests.rs"]
@@ -126,6 +136,8 @@ mod stack_test_tests;
 mod staging_menu_tests;
 #[path = "standup_tests.rs"]
 mod standup_tests;
+#[path = "stats_tests.rs"]
+mod stats_tests;
 #[path = "status_tests.rs"]
 mod status_tests;
 #[path = "submit_fetch_failure_tests.rs"]
@@ -146,12 +158,20 @@ mod sweep_tests;
 mod sync_confirm_tests;
 #[path = "sync_dry_run_tests.rs"]
 mod sync_dry_run_tests;
+#[path = "sync_fetch_tests.rs"]
+mod sync_fetch_tests;
+#[path = "sync_get_tests.rs"]
+mod sync_get_tests;
 #[path = "sync_json_tests.rs"]
 mod sync_json_tests;
+#[path = "sync_next_branch_tests.rs"]
+mod sync_next_branch_tests;
 #[path = "sync_stash_tests.rs"]
 mod sync_stash_tests;
 #[path = "sync_undo_tests.rs"]
 mod sync_undo_tests;
+#[path = "track_all_local_tests.rs"]
+mod track_all_local_tests;
 #[path = "track_all_prs_tests.rs"]
 mod track_all_prs_tests;
 #[path = "track_merge_base_tests.rs"]
@@ -162,6 +182,8 @@ mod track_plan_tests;
 mod tui_commands_tests;
 #[path = "upstack_onto_tests.rs"]
 mod upstack_onto_tests;
+#[path = "user_tests.rs"]
+mod user_tests;
 #[path = "validate_tests.rs"]
 mod validate_tests;
 #[path = "web_tests.rs"]

@@ -18,6 +18,8 @@ pub fn run(
     no_prompt: bool,
     auto_stash_pop: bool,
     all_stacks: bool,
+    delete_merged: bool,
+    get: bool,
 ) -> Result<()> {
     if all_stacks {
         return run_all_stacks(
@@ -29,6 +31,8 @@ pub fn run(
             yes,
             no_prompt,
             auto_stash_pop,
+            delete_merged,
+            get,
         );
     }
 
@@ -64,7 +68,7 @@ pub fn run(
     commands::sync::run(
         true,  // restack
         false, // full
-        false, // delete_merged
+        delete_merged,
         false, // delete_upstream_gone
         force,
         safe,
@@ -76,6 +80,7 @@ pub fn run(
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
+        get,
     )?;
 
     if repo.rebase_in_progress()? {
@@ -229,6 +234,8 @@ fn run_all_stacks(
     yes: bool,
     no_prompt: bool,
     auto_stash_pop: bool,
+    delete_merged: bool,
+    get: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
@@ -270,7 +277,7 @@ fn run_all_stacks(
     if let Err(error) = commands::sync::run(
         true,  // restack
         false, // full
-        false, // delete_merged
+        delete_merged,
         false, // delete_upstream_gone
         force,
         safe,
@@ -282,6 +289,7 @@ fn run_all_stacks(
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
+        get,
     ) {
         if let Some(root) = sync_root.as_deref() {
             print_all_stacks_progress(&plans, &[], root);

@@ -1,5 +1,6 @@
 use crate::common;
 use common::{OutputAssertions, TestRepo};
+use serde_json::Value;
 
 #[test]
 fn test_create_insert_reparents_children() {
@@ -183,5 +184,54 @@ fn test_create_insert_from_trunk_reparents_direct_children() {
             .is_some_and(|parent| parent.contains("trunk-mid")),
         "trunk-b should be reparented to trunk-mid, got parent: {:?}",
         b_parent
+    );
+}
+
+/// Issue #830: `--insert` reparents pre-existing children onto the newly
+/// created branch's tip with no rebase. If a child was already stale
+/// relative to the parent branch *before* the insert ran, that tip isn't
+/// actually in the child's ancestry -- the write must fall back to the
+/// child's previously recorded (still-valid) boundary instead.
+#[test]
+fn test_create_insert_does_not_poison_stale_childs_boundary() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let branches = repo.create_stack(&["stale-insert-a", "stale-insert-b"]);
+    let branch_a = &branches[0];
+    let branch_b = &branches[1];
+
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_b);
+    let read_boundary = |repo: &TestRepo| -> String {
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(output.status.success());
+        let metadata: Value = serde_json::from_str(&TestRepo::stdout(&output)).unwrap();
+        metadata["parentBranchRevision"]
+            .as_str()
+            .expect("parentBranchRevision missing")
+            .to_string()
+    };
+    let recorded_boundary = read_boundary(&repo);
+
+    // Advance A without rebasing B onto it: B is now stale relative to A.
+    repo.run_stax(&["checkout", branch_a]).assert_success();
+    repo.create_file("a-extra.txt", "more work on A");
+    repo.commit("More work on A");
+
+    let output = repo.run_stax(&["create", "stale-insert-mid", "--insert"]);
+    output.assert_success();
+    assert!(TestRepo::stdout(&output).contains("Reparented"));
+
+    let boundary = read_boundary(&repo);
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, branch_b]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {} (issue #830)",
+        boundary,
+        branch_b
+    );
+    assert_eq!(
+        boundary, recorded_boundary,
+        "Expected the pre-existing boundary to be preserved when the new branch's tip isn't in B's ancestry"
     );
 }

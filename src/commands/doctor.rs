@@ -172,9 +172,9 @@ pub fn run(fix: bool) -> Result<()> {
                         "{} {}",
                         "⚠".yellow(),
                         format!(
-                            "gh-stack v{installed} is out of date — v0.1.0+ adds `gh stack \
-                             merge` for atomic native stack merges (run `gh extension upgrade \
-                             stack`)"
+                            "gh-stack v{installed} is out of date — v0.2.1+ is recommended (v0.1.0 \
+                             added `gh stack merge` for atomic native stack merges; v0.2.1 fixes \
+                             custom SSH host aliases) (run `gh extension upgrade stack`)"
                         )
                         .yellow()
                     );

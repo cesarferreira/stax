@@ -1,4 +1,5 @@
 pub(crate) mod command;
+pub(crate) mod rebase_progress;
 pub mod refs;
 pub mod repo;
 

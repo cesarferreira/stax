@@ -1,5 +1,5 @@
 use crate::cli::args::{
-    BranchCommands, Cli, CliSubcommand, CommandPolicy, Commands, RestackSubmitAfter, StackCommands,
+    BranchCommands, Cli, CommandPolicy, Commands, RestackSubmitAfter, StackCommands,
     WorktreeCommands,
 };
 use crate::cli::interactive::{
@@ -373,14 +373,17 @@ fn restack_backward_compat() {
 }
 
 #[test]
-fn cli_upgrade_parses() {
-    let cli = parse_cli(&["stax", "cli", "upgrade"]);
+fn update_force_parses() {
+    let cli = parse_cli(&["stax", "update", "--force"]);
     assert!(matches!(
         cli.command,
-        Some(Commands::Cli {
-            command: CliSubcommand::Upgrade
-        })
+        Some(Commands::Update { force: true })
     ));
+}
+
+#[test]
+fn cli_subcommand_no_longer_parses() {
+    assert!(try_parse_cli(&["stax", "cli", "upgrade"]).is_err());
 }
 
 #[test]
@@ -512,4 +515,24 @@ fn merge_accepts_timeout_of_one() {
         cli.command,
         Some(Commands::Merge { timeout: 1, .. })
     ));
+}
+
+#[test]
+fn merge_accepts_ignore_failed_ci() {
+    let cli = parse_cli(&["stax", "merge", "--ignore-failed-ci"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Merge {
+            ignore_failed_ci: true,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn merge_queue_rejects_ignore_failed_ci() {
+    assert!(
+        try_parse_cli(&["stax", "merge", "--queue", "--ignore-failed-ci"]).is_err(),
+        "--queue and --ignore-failed-ci should be mutually exclusive"
+    );
 }

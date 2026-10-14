@@ -834,6 +834,604 @@ fn test_restack_preflight_silent_on_clean_linear_branch() {
 }
 
 // =============================================================================
+// Preflight: leading commits already squash-merged into the parent
+// =============================================================================
+
+/// Build a branch whose first two commits both edit `shared.txt`, squash those
+/// two commits into `main`, then advance `main` again. The branch keeps a third,
+/// still-unmerged commit. Returns the branch name.
+fn build_squash_merged_prefix_fixture(repo: &TestRepo) -> String {
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "squashed-feature"]);
+    repo.create_file("shared.txt", "v1\n");
+    repo.commit("feature commit 1");
+    repo.create_file("shared.txt", "v2\n");
+    repo.commit("feature commit 2");
+    repo.create_file("extra.txt", "still unmerged\n");
+    repo.commit("feature commit 3");
+
+    // GitHub-style squash merge of the first two commits.
+    repo.git(&["checkout", "main"]);
+    assert_git_success(
+        repo,
+        &["merge", "--squash", "squashed-feature~1"],
+        "squash merge prefix",
+    );
+    repo.commit("Squash merge of feature commits 1 and 2 (#1)");
+    repo.create_file("unrelated.txt", "trunk moved on\n");
+    repo.commit("unrelated trunk commit");
+
+    write_branch_metadata_raw(repo, "squashed-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "squashed-feature"]);
+
+    "squashed-feature".to_string()
+}
+
+/// The first N commits of a branch were squash-merged: restack must rebase only
+/// the commits after them instead of replaying the merged ones and conflicting.
+#[test]
+fn test_restack_preflight_skips_squash_merged_prefix() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let branch = build_squash_merged_prefix_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stdout.contains("already merged into 'main'")
+            || stderr.contains("already merged into 'main'"),
+        "expected a preflight notice about the squash-merged commits; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, &format!("main..{branch}")),
+        1,
+        "only the unmerged third commit should remain above main"
+    );
+    // Nothing may be lost or invented: relative to main, the branch differs only by
+    // its own unmerged commit.
+    let changed = output_text(repo.git(&["diff", "--name-only", "main", &branch]));
+    assert_eq!(changed, "extra.txt");
+    let shared = output_text(repo.git(&["show", &format!("{branch}:shared.txt")]));
+    assert_eq!(shared, "v2", "squashed content from main must be kept");
+    let extra = output_text(repo.git(&["show", &format!("{branch}:extra.txt")]));
+    assert_eq!(extra, "still unmerged", "unmerged commit must be preserved");
+}
+
+/// With `preflight_auto_repair = false` the same fixture conflicts, which proves
+/// the squash detection (not the fixture) is what makes the restack succeed.
+#[test]
+fn test_restack_squash_merged_prefix_conflicts_when_auto_repair_disabled() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    std::fs::write(
+        config_dir.path().join("config.toml"),
+        "[restack]\npreflight_auto_repair = false\n",
+    )
+    .expect("write config");
+
+    build_squash_merged_prefix_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_failure();
+    assert!(
+        repo.has_rebase_in_progress(),
+        "replaying squash-merged commits should conflict without the repair"
+    );
+
+    repo.abort_rebase();
+}
+
+/// Trunk commits that are not a squash of the branch's commits must not make
+/// stax skip anything: every unmerged commit is still replayed.
+#[test]
+fn test_restack_preflight_does_not_skip_unmatched_commits() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let fork_point = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "-b", "unmatched-feature"]);
+    repo.create_file("feat1.txt", "one\n");
+    repo.commit("unmatched 1");
+    repo.create_file("feat2.txt", "two\n");
+    repo.commit("unmatched 2");
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("other.txt", "trunk\n");
+    repo.commit("unrelated trunk commit");
+
+    write_branch_metadata_raw(&repo, "unmatched-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "unmatched-feature"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("already merged") && !stderr.contains("already merged"),
+        "no commits are merged, so no squash notice is expected; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, "main..unmatched-feature"),
+        2,
+        "both unmerged commits must be replayed"
+    );
+}
+
+/// Same text added at a *different place* in the same file has the same -U0
+/// patch-id as the branch commit, but the change is not actually on trunk. The
+/// branch commit must be kept (and here it must conflict or replay, never vanish).
+#[test]
+fn test_restack_preflight_does_not_skip_same_text_at_different_place() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    repo.create_file("list.txt", "a\nb\nc\nd\ne\nf\n");
+    repo.commit("add list");
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "lookalike-feature"]);
+    repo.create_file("list.txt", "a\nb\nc\nNEW\nd\ne\nf\n");
+    repo.commit("add NEW after c");
+    repo.create_file("tail.txt", "tail\n");
+    repo.commit("add tail");
+
+    // Trunk adds the identical line, but after e instead of after c.
+    repo.git(&["checkout", "main"]);
+    repo.create_file("list.txt", "a\nb\nc\nd\ne\nNEW\nf\n");
+    repo.commit("add NEW after e");
+
+    write_branch_metadata_raw(&repo, "lookalike-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "lookalike-feature"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("already merged") && !stderr.contains("already merged"),
+        "a look-alike change must not be treated as merged; stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    if repo.has_rebase_in_progress() {
+        repo.abort_rebase();
+    } else {
+        assert_eq!(
+            rev_list_count(&repo, "main..lookalike-feature"),
+            2,
+            "both branch commits must still be replayed"
+        );
+    }
+}
+
+/// Later trunk edits to the squashed file (on other lines) must not defeat the
+/// detection: the 3-way merge is still a no-op for the squashed changes.
+#[test]
+fn test_restack_preflight_skips_squash_when_trunk_edited_same_file_elsewhere() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    repo.create_file("doc.txt", "1\n2\n3\n4\n5\n6\n7\n8\n9\n");
+    repo.commit("add doc");
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "doc-feature"]);
+    repo.create_file("doc.txt", "1\nTWO\n3\n4\n5\n6\n7\n8\n9\n");
+    repo.commit("edit line 2");
+    repo.create_file("doc.txt", "1\nTWO\n3\n4\n5\n6\n7\n8\nNINE\n");
+    repo.commit("edit line 9");
+    repo.create_file("more.txt", "kept\n");
+    repo.commit("unmerged follow-up");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "doc-feature~1"], "squash");
+    repo.commit("Squash merge (#2)");
+    repo.create_file("doc.txt", "1\nTWO\n3\n4\nFIVE\n6\n7\n8\nNINE\n");
+    repo.commit("trunk edits line 5");
+
+    write_branch_metadata_raw(&repo, "doc-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "doc-feature"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert_eq!(rev_list_count(&repo, "main..doc-feature"), 1);
+    let doc = output_text(repo.git(&["show", "doc-feature:doc.txt"]));
+    assert_eq!(doc, "1\nTWO\n3\n4\nFIVE\n6\n7\n8\nNINE");
+}
+
+/// A branch whose every commit was squash-merged restacks onto main cleanly
+/// instead of conflicting.
+#[test]
+fn test_restack_preflight_handles_fully_squash_merged_branch() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let fork_point = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "-b", "all-merged"]);
+    repo.create_file("m.txt", "v1\n");
+    repo.commit("m 1");
+    repo.create_file("m.txt", "v2\n");
+    repo.commit("m 2");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "all-merged"], "squash");
+    repo.commit("Squash merge all (#3)");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "all-merged", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "all-merged"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(rev_list_count(&repo, "main..all-merged"), 0);
+}
+
+/// A child stacked on a branch with a squash-merged prefix must keep only its own
+/// commits: the child's boundary is the parent's old tip, not the squashed prefix.
+#[test]
+fn test_restack_stack_child_of_squash_merged_branch_keeps_only_own_commits() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let fork_point = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "-b", "stack-parent"]);
+    repo.create_file("s.txt", "v1\n");
+    repo.commit("parent 1");
+    repo.create_file("s.txt", "v2\n");
+    repo.commit("parent 2");
+    repo.create_file("p3.txt", "p3\n");
+    repo.commit("parent 3");
+    let parent_tip = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "stack-child"]);
+    repo.create_file("child.txt", "child\n");
+    repo.commit("child 1");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "stack-parent~1"], "squash");
+    repo.commit("Squash merge parent 1+2 (#4)");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "stack-parent", "main", &fork_point);
+    write_branch_metadata_raw(&repo, "stack-child", "stack-parent", &parent_tip);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "stack-child"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--all", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(rev_list_count(&repo, "main..stack-parent"), 1);
+    assert_eq!(
+        rev_list_count(&repo, "stack-parent..stack-child"),
+        1,
+        "child must replay only its own commit"
+    );
+}
+
+/// Run `stax restack --yes` with an isolated config dir.
+fn restack_isolated(repo: &TestRepo) -> std::process::Output {
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    )
+}
+
+fn assert_no_merged_notice(output: &std::process::Output) {
+    let stdout = TestRepo::stdout(output);
+    let stderr = TestRepo::stderr(output);
+    assert!(
+        !stdout.contains("already merged") && !stderr.contains("already merged"),
+        "must not treat commits as merged; stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
+
+/// The squash was reverted on trunk, so the squashed changes are NOT on main any
+/// more. Skipping the branch's commits would silently drop the user's work.
+#[test]
+fn test_restack_preflight_does_not_skip_commits_whose_squash_was_reverted() {
+    let repo = TestRepo::new();
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "reverted-feature"]);
+    repo.create_file("r.txt", "v1\n");
+    repo.commit("r 1");
+    repo.create_file("r.txt", "v2\n");
+    repo.commit("r 2");
+    repo.create_file("keep.txt", "keep\n");
+    repo.commit("r 3");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(
+        &repo,
+        &["merge", "--squash", "reverted-feature~1"],
+        "squash",
+    );
+    repo.commit("Squash merge (#5)");
+    assert_git_success(&repo, &["revert", "--no-edit", "HEAD"], "revert squash");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "reverted-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "reverted-feature"]);
+
+    let output = restack_isolated(&repo);
+    assert_no_merged_notice(&output);
+    output.assert_success();
+    assert_eq!(
+        rev_list_count(&repo, "main..reverted-feature"),
+        3,
+        "all three commits must survive because the squash is no longer on main"
+    );
+    assert_eq!(
+        output_text(repo.git(&["show", "reverted-feature:r.txt"])),
+        "v2"
+    );
+}
+
+/// Binary changes to the same path by different bytes are not the same change.
+#[test]
+fn test_restack_preflight_does_not_skip_different_binary_change_to_same_path() {
+    let repo = TestRepo::new();
+    std::fs::write(repo.path().join("b.bin"), [0u8, 1, 2, 3, 0, 5]).unwrap();
+    repo.commit("add binary");
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "binary-feature"]);
+    std::fs::write(repo.path().join("b.bin"), [0u8, 9, 9, 9, 0, 5]).unwrap();
+    repo.commit("binary change A");
+    repo.create_file("after.txt", "after\n");
+    repo.commit("after binary");
+
+    repo.git(&["checkout", "main"]);
+    std::fs::write(repo.path().join("b.bin"), [0u8, 7, 7, 7, 0, 5]).unwrap();
+    repo.commit("binary change B on trunk");
+
+    write_branch_metadata_raw(&repo, "binary-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "binary-feature"]);
+    let before = repo.get_commit_sha("binary-feature");
+
+    let output = restack_isolated(&repo);
+    assert_no_merged_notice(&output);
+    if repo.has_rebase_in_progress() {
+        repo.abort_rebase();
+        assert_eq!(repo.get_commit_sha("binary-feature"), before);
+    } else {
+        assert_eq!(rev_list_count(&repo, "main..binary-feature"), 2);
+    }
+}
+
+/// The squash commit contains more than the branch's commits (edited at merge
+/// time), so it is not a match: behave exactly as before, losing nothing.
+#[test]
+fn test_restack_preflight_does_not_skip_when_squash_contains_extra_changes() {
+    let repo = TestRepo::new();
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "extra-feature"]);
+    repo.create_file("e.txt", "v1\n");
+    repo.commit("e 1");
+    repo.create_file("e.txt", "v2\n");
+    repo.commit("e 2");
+    repo.create_file("tail.txt", "tail\n");
+    repo.commit("e 3");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "extra-feature~1"], "squash");
+    repo.create_file("sneaky.txt", "added while merging\n");
+    repo.commit("Squash merge plus extra (#6)");
+
+    write_branch_metadata_raw(&repo, "extra-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "extra-feature"]);
+    let before = repo.get_commit_sha("extra-feature");
+
+    let output = restack_isolated(&repo);
+    assert_no_merged_notice(&output);
+    if repo.has_rebase_in_progress() {
+        repo.abort_rebase();
+        assert_eq!(repo.get_commit_sha("extra-feature"), before);
+    }
+}
+
+/// A single commit cherry-picked onto trunk is dropped; the rest is kept.
+#[test]
+fn test_restack_preflight_handles_cherry_picked_first_commit() {
+    let repo = TestRepo::new();
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "picked-feature"]);
+    repo.create_file("c.txt", "c1\n");
+    repo.commit("pick me");
+    let picked = repo.get_commit_sha("HEAD");
+    repo.create_file("c2.txt", "c2\n");
+    repo.commit("keep me");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["cherry-pick", &picked], "cherry-pick");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "picked-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "picked-feature"]);
+
+    restack_isolated(&repo).assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(rev_list_count(&repo, "main..picked-feature"), 1);
+    assert_eq!(
+        output_text(repo.git(&["diff", "--name-only", "main", "picked-feature"])),
+        "c2.txt"
+    );
+}
+
+/// A stored boundary that is not in the branch's ancestry (metadata drift) must
+/// not stop the squash detection from working, and must not lose commits.
+#[test]
+fn test_restack_preflight_squash_with_non_ancestor_stored_revision() {
+    let repo = TestRepo::new();
+
+    repo.git(&["checkout", "-b", "side"]);
+    repo.create_file("side.txt", "side\n");
+    repo.commit("side commit");
+    let unrelated_sha = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "main"]);
+
+    repo.git(&["checkout", "-b", "drift-feature"]);
+    repo.create_file("d.txt", "v1\n");
+    repo.commit("d 1");
+    repo.create_file("d.txt", "v2\n");
+    repo.commit("d 2");
+    repo.create_file("keep.txt", "keep\n");
+    repo.commit("d 3");
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "drift-feature~1"], "squash");
+    repo.commit("Squash merge (#7)");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "drift-feature", "main", &unrelated_sha);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "drift-feature"]);
+
+    restack_isolated(&repo).assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(
+        output_text(repo.git(&["diff", "--name-only", "main", "drift-feature"])),
+        "keep.txt"
+    );
+}
+
+/// Commits that cancel each other out (empty cumulative diff) must not confuse
+/// the search or lose anything.
+#[test]
+fn test_restack_preflight_handles_empty_cumulative_diff() {
+    let repo = TestRepo::new();
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "cancel-feature"]);
+    repo.create_file("x.txt", "x\n");
+    repo.commit("add x");
+    assert_git_success(&repo, &["rm", "-q", "x.txt"], "remove x");
+    repo.commit("remove x");
+    repo.create_file("real.txt", "real\n");
+    repo.commit("real change");
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("real.txt", "different\n");
+    repo.commit("trunk touches the same path");
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["reset", "--hard", &fork_point], "reset trunk");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "cancel-feature", "main", &fork_point);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "cancel-feature"]);
+
+    let output = restack_isolated(&repo);
+    assert_no_merged_notice(&output);
+    output.assert_success();
+    assert_eq!(rev_list_count(&repo, "main..cancel-feature"), 3);
+}
+
+/// The parent was amended after the child was created, so the child still holds the
+/// parent's OLD last commit and git cannot recognise it as already applied. The child
+/// must be rebased from its stored boundary (the old parent tip), not from the
+/// squash-merged prefix, or the stale commit would be replayed and conflict.
+#[test]
+fn test_restack_stack_child_of_amended_squash_merged_parent() {
+    let repo = TestRepo::new();
+
+    let fork_point = repo.get_commit_sha("HEAD");
+    repo.git(&["checkout", "-b", "amended-parent"]);
+    repo.create_file("s.txt", "v1\n");
+    repo.commit("parent 1");
+    repo.create_file("s.txt", "v2\n");
+    repo.commit("parent 2");
+    repo.create_file("p3.txt", "p3\n");
+    repo.commit("parent 3");
+    let old_parent_tip = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "amended-child"]);
+    repo.create_file("child.txt", "child\n");
+    repo.commit("child 1");
+
+    repo.git(&["checkout", "amended-parent"]);
+    repo.create_file("p3.txt", "p3 amended\n");
+    assert_git_success(&repo, &["add", "-A"], "stage amend");
+    assert_git_success(
+        &repo,
+        &["commit", "--amend", "--no-edit", "-q"],
+        "amend parent",
+    );
+
+    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["merge", "--squash", "amended-parent~1"], "squash");
+    repo.commit("Squash merge parent 1+2 (#8)");
+    repo.create_file("u.txt", "u\n");
+    repo.commit("unrelated");
+
+    write_branch_metadata_raw(&repo, "amended-parent", "main", &fork_point);
+    write_branch_metadata_raw(&repo, "amended-child", "amended-parent", &old_parent_tip);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "amended-child"]);
+
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    let output = repo.run_stax_with_env(
+        &["restack", "--all", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(rev_list_count(&repo, "main..amended-parent"), 1);
+    assert_eq!(rev_list_count(&repo, "amended-parent..amended-child"), 1);
+    assert_eq!(
+        output_text(repo.git(&["show", "amended-child:p3.txt"])),
+        "p3 amended",
+        "the child must keep the amended parent content"
+    );
+}
+
+// =============================================================================
 // Genuine conflict is still reported correctly (no regression)
 // =============================================================================
 

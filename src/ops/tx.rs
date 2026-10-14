@@ -231,6 +231,17 @@ impl Transaction {
     /// may be absent (e.g., metadata was deleted) — that's recorded as
     /// `oid_after = None`, which `stax undo` handles by re-creating the ref
     /// from `oid_before`.
+    ///
+    /// Safe for callers that only ever *write* a branch's metadata ref (via
+    /// `BranchMetadata::write` -> `git::refs::write_metadata`, a `git update-ref`
+    /// subprocess): `update-ref` always leaves a loose ref file, and libgit2 reads
+    /// loose refs straight off disk, ahead of the stat-cached packed-refs backend,
+    /// so there's no staleness window to worry about here (verified empirically,
+    /// including with the ref pre-packed via `git pack-refs`). Callers that instead
+    /// *delete* a metadata ref (`git update-ref -d`, which does rewrite packed-refs)
+    /// must resolve the after-OID via a subprocess `git rev-parse --verify <ref>`
+    /// helper and `record_known_metadata_after` instead — see `sync.rs`, `split.rs`,
+    /// `branch/create.rs`, `detach.rs`, `edit.rs`, `tui/split/app.rs` for the pattern.
     pub fn record_metadata_ref_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
         let oid = refs::metadata_ref_oid(repo.inner(), branch);
         self.receipt
@@ -714,6 +725,70 @@ mod tests {
         assert!(entry.after_recorded);
         assert!(entry.oid_after.is_some());
         assert_ne!(entry.oid_after, Some(oid_before));
+    }
+
+    #[test]
+    fn plan_metadata_ref_across_two_phases_keeps_the_earliest_before_oid() {
+        // sync runs multiple phases against the same transaction (e.g. a
+        // deletion/reparent phase followed by a restack phase). If both
+        // phases touch the same branch's metadata ref, plan_metadata_ref's
+        // second call must be a no-op that preserves the FIRST phase's
+        // before-OID -- otherwise undo would only roll back to the
+        // intermediate state written by the first phase, not the true
+        // pre-operation state.
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"original\"}").unwrap();
+        let original_oid =
+            refs::metadata_ref_oid(repo.inner(), "branch-a").expect("original metadata oid");
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+
+        // Phase 1 (e.g. deletion/reparent) plans and then mutates the ref.
+        tx.plan_metadata_ref(&repo, "branch-a").unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"after_phase_one\"}").unwrap();
+
+        // Phase 2 (restack) plans the SAME branch again before its own mutation.
+        tx.plan_metadata_ref(&repo, "branch-a").unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"phase\":\"after_phase_two\"}").unwrap();
+
+        let entries: Vec<_> = tx
+            .receipt
+            .local_refs
+            .iter()
+            .filter(|e| e.branch == "branch-a@meta")
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the two plan_metadata_ref calls must fold into a single receipt entry"
+        );
+
+        // The receipt's before-OID must be the ref's state prior to EITHER
+        // phase, not the intermediate state phase 1 left behind.
+        assert_eq!(
+            entries[0].oid_before.as_deref(),
+            Some(original_oid.as_str())
+        );
     }
 
     #[test]

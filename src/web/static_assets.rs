@@ -115,6 +115,7 @@ pub const APP_CSS: &str = r#"
   --rail-bleed:     calc(var(--card-pad-y) + var(--card-border-w) + var(--card-margin-y));
   --topo-lane-w:   20px;
   --stack-rail-w:  240px;
+  --stack-pane-w:  240px;
 
   --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
           "Segoe UI Variable Text", "Segoe UI", Inter, Roboto,
@@ -244,7 +245,7 @@ html, body {
 /* ── Three-column stage ─────────────────────────────────────────────── */
 .stage {
   display: grid;
-  grid-template-columns: max-content 1fr 280px;
+  grid-template-columns: var(--stack-pane-w) 8px minmax(0, 1fr) 280px;
   grid-template-rows: 1fr;
   flex: 1;
   overflow: hidden;
@@ -262,6 +263,15 @@ html, body {
 .pane:last-child { border-right: none; }
 
 .pane-stack  { min-width: 200px; }
+.stack-resizer {
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  touch-action: none;
+}
+.stack-resizer:hover, .stack-resizer:focus-visible { background: var(--accent); outline: none; }
+.stage.stack-hidden { grid-template-columns: minmax(0, 1fr) 280px; }
 .pane-changes {
   flex-direction: column;
 }
@@ -320,7 +330,7 @@ html, body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  width: var(--stack-rail-w, 240px);
+  width: 100%;
 }
 
 .stack-header {
@@ -1175,8 +1185,11 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
 /* Medium: inspector moves below review */
 @media (max-width: 1100px) {
   .stage {
-    grid-template-columns: max-content 1fr;
+    grid-template-columns: var(--stack-pane-w) 8px minmax(0, 1fr);
     grid-template-rows: 1fr auto;
+  }
+  .stage.stack-hidden {
+    grid-template-columns: minmax(0, 1fr);
   }
   .pane-inspector {
     grid-column: 1 / -1;
@@ -1199,6 +1212,8 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
   .pane-inspector { order: 1; max-height: none; }
   .pane-stack { min-width: 0; }
   .stack-rail { width: 100%; }
+  .stack-resizer { display: none; }
+  .card-name { overflow-wrap: anywhere; white-space: normal; }
 
   .changes-panel { flex-direction: column; }
   .file-nav {
@@ -1303,7 +1318,204 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   initFileList();
+  initStackPaneSizing();
 });
+
+var stackPaneSizingController = null;
+
+function clampStackPaneWidth(width, min, max) {
+  var numeric = Number(width);
+  if (!Number.isFinite(numeric)) numeric = min;
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function intrinsicTextWidth(element) {
+  if (!document.createRange) return element.scrollWidth;
+  var range = document.createRange();
+  range.selectNodeContents(element);
+  var width = range.getBoundingClientRect().width;
+  if (range.detach) range.detach();
+  return Math.ceil(width);
+}
+
+function initStackPaneSizing() {
+  if (!stackPaneSizingController) {
+    var stage = document.querySelector('.stage');
+    var resizer = document.querySelector('.stack-resizer');
+    if (!stage || !resizer) return;
+    stackPaneSizingController = createStackPaneSizingController(stage, resizer);
+    window.staxStackPaneSizing = stackPaneSizingController;
+    window.staxStackSizingMath = { clampWidth: clampStackPaneWidth };
+  }
+  stackPaneSizingController.refreshSizing();
+}
+
+function refreshStackPaneSizing() {
+  if (stackPaneSizingController) stackPaneSizingController.refreshSizing();
+  else initStackPaneSizing();
+}
+
+function createStackPaneSizingController(stage, resizer) {
+  var key = 'stax.stack-pane-width:' + (stage.getAttribute('data-repository-key') || 'default');
+  var manualMin = 200;
+  var changesMin = 320;
+  var mode = readStoredWidth() === null ? 'auto' : 'manual';
+  var manualWidth = readStoredWidth();
+  var autoWidth = 240;
+
+  function readStoredWidth() {
+    var stored = localStorage.getItem(key);
+    if (stored === null || stored === '') return null;
+    var width = Number(stored);
+    return Number.isFinite(width) ? width : null;
+  }
+
+  function isVisible(element) {
+    if (!element || element.hidden || element.classList.contains('pane-hidden')) return false;
+    return getComputedStyle(element).display !== 'none';
+  }
+
+  function visibleWidth(element) {
+    return isVisible(element) ? element.getBoundingClientRect().width : 0;
+  }
+
+  function bounds() {
+    var stageWidth = stage.getBoundingClientRect().width || stage.clientWidth || window.innerWidth;
+    var stacked = window.matchMedia('(max-width: 800px)').matches;
+    if (stacked) {
+      var fullWidth = Math.max(0, Math.round(stageWidth));
+      return { min: fullWidth, max: fullWidth, stacked: true };
+    }
+    var inspector = document.querySelector('.pane-inspector');
+    var changes = document.querySelector('.pane-changes');
+    var inspectorWidth = window.matchMedia('(max-width: 1100px)').matches ? 0 : visibleWidth(inspector);
+    var dividerWidth = visibleWidth(resizer) || 8;
+    var reservedChanges = isVisible(changes) ? changesMin : 0;
+    var max = Math.max(manualMin, Math.floor(stageWidth - inspectorWidth - dividerWidth - reservedChanges));
+    return { min: manualMin, max: max, stacked: false };
+  }
+
+  function topologyMin(rail) {
+    if (!rail) return 240;
+    return Math.max(manualMin, parseInt(rail.getAttribute('data-topology-min-width') || '240', 10));
+  }
+
+  function automatic(rail, range) {
+    var width = topologyMin(rail);
+    if (rail && isVisible(rail) && rail.getBoundingClientRect().width > 0) {
+      var railWidth = rail.getBoundingClientRect().width;
+      rail.querySelectorAll('.card-name').forEach(function(name) {
+        var chromeWidth = railWidth - name.getBoundingClientRect().width;
+        width = Math.max(width, intrinsicTextWidth(name) + chromeWidth + 2);
+      });
+      autoWidth = width;
+    } else {
+      width = Math.max(width, autoWidth);
+    }
+    return clampStackPaneWidth(width, Math.min(topologyMin(rail), range.max), range.max);
+  }
+
+  function apply(width, applicationMode, rail, range) {
+    if (range.stacked) {
+      stage.style.setProperty('--stack-pane-w', '100%');
+      resizer.setAttribute('aria-valuemin', range.min);
+      resizer.setAttribute('aria-valuemax', range.max);
+      resizer.setAttribute('aria-valuenow', range.max);
+      return range.max;
+    }
+    var effectiveMin = applicationMode === 'auto'
+      ? Math.min(topologyMin(rail), range.max)
+      : range.min;
+    var applied = clampStackPaneWidth(width, effectiveMin, range.max);
+    stage.style.setProperty('--stack-pane-w', applied + 'px');
+    resizer.setAttribute('aria-valuemin', range.min);
+    resizer.setAttribute('aria-valuemax', range.max);
+    resizer.setAttribute('aria-valuenow', Math.round(applied));
+    return applied;
+  }
+
+  function refreshSizing() {
+    var rail = document.querySelector('.stack-rail');
+    var range = bounds();
+    if (range.stacked) {
+      apply(range.max, mode, rail, range);
+      return;
+    }
+    if (mode === 'manual' && manualWidth !== null) apply(manualWidth, 'manual', rail, range);
+    else apply(automatic(rail, range), 'auto', rail, range);
+  }
+
+  if (window.PointerEvent) {
+    resizer.addEventListener('pointerdown', function(e) {
+      if (bounds().stacked) return;
+      resizer.setPointerCapture(e.pointerId);
+      var start = e.clientX;
+      var initial = parseFloat(getComputedStyle(stage).getPropertyValue('--stack-pane-w')) || autoWidth;
+      var width = initial;
+      function move(event) {
+        var range = bounds();
+        width = clampStackPaneWidth(initial + event.clientX - start, range.min, range.max);
+        apply(width, 'manual', document.querySelector('.stack-rail'), range);
+      }
+      function cleanup() {
+        resizer.removeEventListener('pointermove', move);
+        resizer.removeEventListener('pointerup', end);
+        resizer.removeEventListener('pointercancel', cancel);
+        resizer.removeEventListener('lostpointercapture', cancel);
+      }
+      function release(event) {
+        if (resizer.hasPointerCapture(event.pointerId)) resizer.releasePointerCapture(event.pointerId);
+      }
+      function end(event) {
+        cleanup(); release(event);
+        mode = 'manual'; manualWidth = width;
+        localStorage.setItem(key, String(manualWidth));
+      }
+      function cancel(event) { cleanup(); release(event); refreshSizing(); }
+      resizer.addEventListener('pointermove', move);
+      resizer.addEventListener('pointerup', end);
+      resizer.addEventListener('pointercancel', cancel);
+      resizer.addEventListener('lostpointercapture', cancel);
+    });
+  }
+
+  resizer.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    var range = bounds();
+    if (range.stacked) return;
+    var current = parseFloat(getComputedStyle(stage).getPropertyValue('--stack-pane-w')) || autoWidth;
+    manualWidth = clampStackPaneWidth(current + (e.key === 'ArrowLeft' ? -16 : 16), range.min, range.max);
+    mode = 'manual';
+    localStorage.setItem(key, String(manualWidth));
+    apply(manualWidth, 'manual', document.querySelector('.stack-rail'), range);
+  });
+  resizer.addEventListener('dblclick', function() {
+    localStorage.removeItem(key);
+    mode = 'auto'; manualWidth = null;
+    refreshSizing();
+  });
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    var target = e.detail && e.detail.target;
+    if (target && (target.id === 'stack-pane' || target.querySelector?.('#stack-pane'))) refreshSizing();
+  });
+  window.addEventListener('resize', refreshSizing);
+
+  return {
+    refreshSizing: refreshSizing,
+    getState: function() {
+      var range = bounds();
+      return {
+        mode: mode,
+        manualWidth: manualWidth,
+        min: range.min,
+        max: range.max,
+        now: Number(resizer.getAttribute('aria-valuenow')),
+        stacked: range.stacked,
+      };
+    },
+  };
+}
 
 function isInput(el) {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.contentEditable === 'true';
@@ -1312,6 +1524,14 @@ function isInput(el) {
 function togglePane(id, pane) {
   var el = document.getElementById(id);
   if (el) el.classList.toggle('pane-hidden');
+  var stage = document.querySelector('.stage');
+  var resizer = document.querySelector('.stack-resizer');
+  if (pane === 'stack' && stage && resizer) {
+    var hidden = el.classList.contains('pane-hidden');
+    stage.classList.toggle('stack-hidden', hidden);
+    resizer.hidden = hidden;
+    if (!hidden) refreshStackPaneSizing();
+  }
   var csrf = document.querySelector('input[name="csrf"]');
   var base = location.pathname.replace(/\/?$/, '');
   if (csrf && pane) {
@@ -1432,16 +1652,36 @@ mod tests {
     #[test]
     fn stack_column_is_sized_by_rendered_topology_width() {
         assert!(
-            APP_CSS.contains("grid-template-columns: max-content 1fr 280px;"),
-            "desktop stack track should follow the rendered stack width"
+            APP_CSS
+                .contains("grid-template-columns: var(--stack-pane-w) 8px minmax(0, 1fr) 280px;"),
+            "desktop stack track should follow the adaptive stack width"
         );
         assert!(
-            APP_CSS.contains("width: var(--stack-rail-w, 240px);"),
-            "stack rail should use the lane-count-driven width until the stacked breakpoint"
+            APP_CSS.contains("width: 100%;"),
+            "stack rail should fill the adaptive pane width"
         );
         assert!(
             !APP_CSS.contains("min(var(--stack-rail-w, 240px), 40vw)"),
             "a viewport cap before the 800px breakpoint would squash dense stacks"
+        );
+    }
+
+    #[test]
+    fn hidden_stack_grid_drops_stack_tracks_at_desktop_and_medium_widths() {
+        assert!(
+            APP_CSS
+                .contains(".stage.stack-hidden { grid-template-columns: minmax(0, 1fr) 280px; }"),
+            "desktop hidden-stack layout should contain only changes and inspector tracks"
+        );
+        let medium = APP_CSS
+            .split("@media (max-width: 1100px)")
+            .nth(1)
+            .and_then(|css| css.split("@media (max-width: 800px)").next())
+            .expect("medium layout media query should exist");
+        assert!(
+            medium.contains(".stage.stack-hidden")
+                && medium.contains("grid-template-columns: minmax(0, 1fr);"),
+            "medium hidden-stack layout should not retain stack or divider tracks"
         );
     }
 

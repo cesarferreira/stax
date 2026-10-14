@@ -14,6 +14,29 @@ Config is loaded as follows:
 2. Otherwise, `~/.config/stax/config.toml` is loaded.
 3. If present, `stax.toml` at the current git repository root overlays only the values it sets.
 
+## User preferences
+
+`stax user` is a shortcut for setting common personal preferences in the global config, without hand-editing `config.toml`:
+
+```bash
+st user                                      # print current values
+st user branch-prefix --set "cesar/"         # config.branch.prefix
+st user branch-prefix --unset
+st user branch-date --enable                 # config.branch.date
+st user branch-date --disable
+st user branch-replacement --set "_"         # config.branch.replacement
+st user branch-replacement --set-dash        # shorthand for --set "-"
+st user branch-replacement --set-underscore  # shorthand for --set "_"
+st user editor --set vim                     # config.editor (falls back to $EDITOR when unset)
+st user editor --unset
+st user tips --enable                        # config.ui.tips
+st user tips --disable
+st user submit-body --enable                 # config.submit.commit_messages_in_body
+st user submit-body --disable
+```
+
+If `branch.format` is already set, `branch-date --enable`/`--disable` prints a warning: `format` takes precedence and the date toggle has no effect until `format` is unset.
+
 ## Example config
 
 Run `st --default-config` for the full annotated template (every section, with allowed values in comments). Copy the output to `~/.config/stax/config.toml` and uncomment only the keys you want to override.
@@ -30,11 +53,14 @@ single_stack = "on"    # "on" | "off"
 <summary>Full template (same as <code>st --default-config</code>)</summary>
 
 ```toml
+# editor = "vim" # preferred editor for interactive edits (e.g. `stax pr --edit`); falls back to $EDITOR
+
 [branch]
 # format = "{user}/{date}/{message}"
 # user = "cesar"
 # date_format = "%m-%d"
 # replacement = "-"
+# lowercase = true # lowercase generated branch names (commit messages keep their casing)
 # stale_days = 30 # days without commits before `stax sweep` calls a branch stale
 
 [git]
@@ -53,6 +79,7 @@ single_stack = "on"    # "on" | "off"
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
 # native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
 # stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
+# commit_messages_in_body = true # include a `## Summary` commit-message list in the default PR body
 
 [ci]
 # alert = false
@@ -72,16 +99,21 @@ single_stack = "on"    # "on" | "off"
 
 [restack]
 # preflight_auto_repair = true # automatically use merge-base when stored parent
-                               # boundary would replay a much larger range
+                               # boundary would replay a much larger range, or skip
+                               # leading commits already squash-merged into the parent
 # preflight_warn = true        # print a notice when that automatic repair happens
+
+[sync]
+# confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
+                        # (branches checked out in a linked worktree still prompt)
 
 [skills]
 # harnesses = ["claude", "codex"] # agent harnesses that receive skill files
-#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+#   valid ids: claude, codex, cursor, hermes, opencode, pi. Unset = auto (detected + already installed).
 
 [ai]
-# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
-# model = "claude-opus-4-8"
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" | "hermes" — global default
+# model = "claude-opus-5"
 
 # Per-feature overrides — optional, fall back to [ai] above
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai
@@ -92,7 +124,7 @@ single_stack = "on"    # "on" | "off"
 
 [ai.standup]    # st standup --ai
 # agent = "gemini"
-# model = "gemini-2.5-pro"
+# model = "gemini-3.8-flash"
 
 [ai.resolve]    # st resolve
 # agent = "claude"
@@ -218,6 +250,15 @@ date_format = "%m-%d"
 
 The legacy `prefix` field still works when `format` is unset.
 
+### Branch name casing
+
+Generated branch names are lowercased by default, so `st create -am "Bump Fastlane Version"` produces the branch `bump-fastlane-version` while committing the message exactly as typed. Set `lowercase = false` to keep the original casing:
+
+```toml
+[branch]
+lowercase = false
+```
+
 ## Stale-branch threshold
 
 ```toml
@@ -277,7 +318,7 @@ Use `native_stack = "link"` to always attempt registration even when the repo's 
 
 `stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
 
-`st doctor` reports the installed `gh-stack` version, marks versions below v0.1.0 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`. `native_stack = "off"` also disables `st merge --stack`'s atomic `gh stack merge` delegation (see below), falling back to the forge-API stack merge for every run.
+`st doctor` reports the installed `gh-stack` version, marks versions below v0.2.1 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`. `native_stack = "off"` also disables `st merge --stack`'s atomic `gh stack merge` delegation (see below), falling back to the forge-API stack merge for every run.
 
 ### Atomic stack merge (`gh stack merge`)
 
@@ -365,3 +406,29 @@ not an authentication problem.
 ```bash
 st auth status
 ```
+
+## HTTP proxies
+
+Stax routes forge API traffic through the proxy named by the standard
+environment variables, in this order: `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`
+(both upper and lower case). `NO_PROXY` exclusions and `user:password@` proxy
+credentials are honoured, so the same values that work for `git` and `curl`
+work here.
+
+Nothing needs to be configured in `config.toml` — an exported proxy variable is
+enough:
+
+```bash
+export HTTPS_PROXY=http://proxy.example:8080
+export NO_PROXY=localhost,127.0.0.1,.internal.example
+```
+
+When a proxy variable is set, GitHub API calls run on a proxy-aware HTTP client
+(the GitHub client library stax builds on cannot speak to a proxy on its own)
+that verifies TLS against the operating system trust store, which also covers
+proxies that terminate TLS with a corporate CA. When no proxy variable is set,
+nothing changes.
+
+If the API is unreachable, stax says whether a proxy was in play and which
+variable named it (credentials redacted), so a connect timeout is not mistaken
+for an auth problem.

@@ -1,3 +1,4 @@
+use crate::github::pr::ReadinessPolicy;
 use crate::{commands, config::Config, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -157,12 +158,6 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
-        Commands::Cli { command } => {
-            let result = match command {
-                CliSubcommand::Upgrade => commands::cli::run_upgrade(),
-            };
-            return result;
-        }
         Commands::Update { force } => {
             commands::cli::run_update(*force)?;
             commands::skills::propose_skills_update()?;
@@ -222,6 +217,33 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
+        Commands::User { command } => {
+            let result = match command {
+                None => commands::user::run_default(),
+                Some(UserSubcommand::BranchPrefix { set, unset }) => {
+                    commands::user::branch_prefix(set.clone(), *unset)
+                }
+                Some(UserSubcommand::BranchDate { enable, disable }) => {
+                    commands::user::branch_date(*enable, *disable)
+                }
+                Some(UserSubcommand::BranchReplacement {
+                    set,
+                    set_dash,
+                    set_underscore,
+                }) => commands::user::branch_replacement(set.clone(), *set_dash, *set_underscore),
+                Some(UserSubcommand::Editor { set, unset }) => {
+                    commands::user::editor(set.clone(), *unset)
+                }
+                Some(UserSubcommand::Tips { enable, disable }) => {
+                    commands::user::tips(*enable, *disable)
+                }
+                Some(UserSubcommand::SubmitBody { enable, disable }) => {
+                    commands::user::submit_body(*enable, *disable)
+                }
+            };
+            update::show_update_notification();
+            return result;
+        }
         _ => {}
     }
 
@@ -272,6 +294,7 @@ pub fn run() -> Result<()> {
             method,
             no_delete,
             no_wait,
+            ignore_failed_ci,
             timeout,
             when_ready,
             remote,
@@ -284,6 +307,11 @@ pub fn run() -> Result<()> {
         } => {
             let default_method = if stack { "merge" } else { "squash" };
             let merge_method = method.as_deref().unwrap_or(default_method).parse()?;
+            let readiness = if ignore_failed_ci {
+                ReadinessPolicy::ignoring_failed_ci()
+            } else {
+                ReadinessPolicy::strict()
+            };
             if queue {
                 commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
             } else if remote {
@@ -292,6 +320,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -306,6 +335,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -318,6 +348,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     timeout,
                     interval,
+                    readiness,
                     no_delete,
                     no_sync,
                     yes,
@@ -331,6 +362,7 @@ pub fn run() -> Result<()> {
                     merge_method,
                     no_delete,
                     no_wait,
+                    readiness,
                     timeout,
                     no_sync,
                     yes,
@@ -356,6 +388,7 @@ pub fn run() -> Result<()> {
                 merge_method,
                 timeout,
                 interval,
+                ReadinessPolicy::strict(),
                 no_delete,
                 no_sync,
                 yes,
@@ -378,6 +411,7 @@ pub fn run() -> Result<()> {
             no_stash,
             dry_run,
             json,
+            get,
         } => {
             if prune {
                 eprintln!("{}", commands::sync::prune_deprecation_warning());
@@ -396,6 +430,7 @@ pub fn run() -> Result<()> {
                     auto_stash_pop,
                     stash_policy,
                     json,
+                    get,
                 })
             } else {
                 commands::sync::run(
@@ -413,16 +448,25 @@ pub fn run() -> Result<()> {
                     json,
                     &[],
                     false,
+                    get,
                 )
             }
         }
         Commands::Sweep {
             delete,
             include_stale,
+            include_closed,
             force,
             stale_days,
             json,
-        } => commands::sweep::run(delete, include_stale, force, stale_days, json),
+        } => commands::sweep::run(
+            delete,
+            include_stale,
+            include_closed,
+            force,
+            stale_days,
+            json,
+        ),
         Commands::Restack {
             all,
             stop_here,
@@ -457,6 +501,8 @@ pub fn run() -> Result<()> {
             no_prompt,
             auto_stash_pop,
             all_stacks,
+            delete_merged,
+            get,
         } => commands::refresh::run(
             no_pr,
             no_submit,
@@ -467,6 +513,8 @@ pub fn run() -> Result<()> {
             no_prompt,
             auto_stash_pop,
             all_stacks,
+            delete_merged,
+            get,
         ),
         Commands::Checkout {
             branch,
@@ -510,7 +558,6 @@ pub fn run() -> Result<()> {
             restack,
         } => commands::modify::run(message, all, quiet, no_verify, restack),
         Commands::Auth { .. } => unreachable!(), // Handled above
-        Commands::Cli { .. } => unreachable!(),  // Handled above
         Commands::Update { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above
@@ -518,6 +565,7 @@ pub fn run() -> Result<()> {
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor { .. } => unreachable!(), // Handled above
         Commands::Skills { .. } => unreachable!(), // Handled above
+        Commands::User { .. } => unreachable!(),   // Handled above
         Commands::Trunk { branch } => {
             if let Some(name) = branch {
                 commands::set_trunk::run(&name)
@@ -571,6 +619,24 @@ pub fn run() -> Result<()> {
             plain,
             interval,
         ),
+        Commands::Board {
+            limit,
+            tab,
+            interval,
+            plain,
+        } => {
+            let interactive = check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
+            if plain || !interactive.available {
+                print_interactive_fallback(
+                    interactive.reason.as_deref(),
+                    "board dashboard",
+                    "printing static PR and issue tables",
+                );
+                commands::board::run_plain(limit)
+            } else {
+                commands::board::run_tui(limit, tab.into(), interval)
+            }
+        }
         Commands::Issue { command } => match command {
             Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
             None => print_subcommand_help("issue"),
@@ -658,6 +724,7 @@ pub fn run() -> Result<()> {
         } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast, parallel, jobs),
         Commands::Demo => unreachable!(),        // Handled above
         Commands::UpdateCheck => unreachable!(), // Handled before setup/config work
+        Commands::Stats { json, current, ci } => commands::stats::run(json, current, ci),
         Commands::Standup {
             json,
             all,
@@ -751,9 +818,11 @@ pub fn run() -> Result<()> {
                 child,
                 shell_output,
             } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
-            BranchCommands::Track { parent, all_prs } => {
-                commands::branch::track::run(parent, all_prs)
-            }
+            BranchCommands::Track {
+                parent,
+                all,
+                all_prs,
+            } => commands::branch::track::run(parent, all, all_prs),
             BranchCommands::Untrack { branch } => commands::branch::untrack::run(branch),
             BranchCommands::Reparent {
                 branch,

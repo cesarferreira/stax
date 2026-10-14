@@ -1,29 +1,29 @@
 {
   "claude": [
-    { "id": "claude-opus-4-8",   "description": "Opus 4.8 · most capable · recommended" },
+    { "id": "claude-opus-5",    "description": "Opus 5 · most capable · recommended" },
     { "id": "claude-sonnet-5",   "description": "Sonnet 5 · balanced · fast" },
     { "id": "claude-haiku-4-5",  "description": "Haiku 4.5 · fastest · cheapest" },
-    { "id": "claude-fable-5",    "description": "Fable 5 · deepest reasoning · premium" },
-    { "id": "claude-opus-4-7",   "description": "Opus 4.7 · previous gen" },
+    { "id": "claude-fable-5-1",  "description": "Fable 5.1 · deepest reasoning · premium" },
+    { "id": "claude-opus-4-8",   "description": "Opus 4.8 · previous gen" },
     { "id": "claude-sonnet-4-6", "description": "Sonnet 4.6 · previous gen" }
   ],
   "codex": [
-    { "id": "gpt-5.5",       "description": "GPT-5.5 · latest · balanced" },
-    { "id": "gpt-5.5-fast",  "description": "GPT-5.5 Fast · fast · balanced" },
-    { "id": "gpt-5.4",       "description": "GPT-5.4 · latest · balanced" },
-    { "id": "gpt-5.4-pro",   "description": "GPT-5.4 Pro · most capable · premium" },
-    { "id": "gpt-5.4-mini",  "description": "GPT-5.4 Mini · fast · balanced" },
-    { "id": "gpt-5.4-nano",  "description": "GPT-5.4 Nano · fastest · cheapest" },
-    { "id": "gpt-5.3-codex", "description": "GPT-5.3 Codex · code-focused · prev gen" }
+    { "id": "gpt-6-astra",          "description": "GPT-6 Astra · most capable · recommended" },
+    { "id": "gpt-5.6-sol",          "description": "GPT-5.6 Sol · flagship" },
+    { "id": "gpt-5.6-terra",        "description": "GPT-5.6 Terra · balanced" },
+    { "id": "gpt-5.6-luna",         "description": "GPT-5.6 Luna · fastest · cheapest" },
+    { "id": "gpt-5.5",              "description": "GPT-5.5 · previous gen" },
+    { "id": "gpt-5.3-codex-spark",  "description": "GPT-5.3 Codex Spark · near-instant · preview" }
   ],
   "gemini": [
-    { "id": "gemini-2.5-pro",        "description": "Gemini 2.5 Pro · most capable" },
-    { "id": "gemini-2.5-flash",      "description": "Gemini 2.5 Flash · fast · cheap" },
-    { "id": "gemini-2.5-flash-lite", "description": "Gemini 2.5 Flash-Lite · fastest · cheapest" }
+    { "id": "gemini-3.8-flash",      "description": "Gemini 3.8 Flash · most capable · recommended" },
+    { "id": "gemini-3.7-flash",      "description": "Gemini 3.7 Flash · previous Flash" },
+    { "id": "gemini-3.5-flash-lite", "description": "Gemini 3.5 Flash-Lite · fastest · cheapest" },
+    { "id": "gemini-2.5-pro",        "description": "Gemini 2.5 Pro · previous Pro family" }
   ],
   "opencode": [
-    { "id": "opencode/gpt-5.5",      "description": "GPT-5.5 via OpenCode" },
-    { "id": "opencode/gpt-5.5-fast", "description": "GPT-5.5 Fast via OpenCode" },
-    { "id": "opencode/gpt-5.1-codex", "description": "GPT-5.1 Codex via OpenCode" }
+    { "id": "opencode/gpt-5.6-sol",   "description": "GPT-5.6 Sol via OpenCode" },
+    { "id": "opencode/gpt-5.6-terra", "description": "GPT-5.6 Terra via OpenCode" },
+    { "id": "opencode/gpt-5.6-luna",  "description": "GPT-5.6 Luna via OpenCode" }
   ]
 }

@@ -1,4 +1,5 @@
 mod app;
+pub mod board;
 mod event;
 pub mod ready;
 pub mod split;

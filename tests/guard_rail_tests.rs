@@ -13,7 +13,7 @@ use common::{OutputAssertions, TestRepo};
 #[test]
 fn undo_quiet_refuses_dirty_working_tree() {
     let repo = TestRepo::new();
-    repo.create_stack(&["A", "B"]);
+    repo.create_stack(&["a", "b"]);
 
     repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
     repo.run_stax(&["undo", "--yes"]).assert_success();
@@ -28,7 +28,7 @@ fn undo_quiet_refuses_dirty_working_tree() {
 #[test]
 fn redo_quiet_refuses_dirty_working_tree() {
     let repo = TestRepo::new();
-    repo.create_stack(&["A", "B"]);
+    repo.create_stack(&["a", "b"]);
 
     repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
     repo.run_stax(&["undo", "--yes"]).assert_success();
@@ -43,9 +43,9 @@ fn redo_quiet_refuses_dirty_working_tree() {
 #[test]
 fn restack_quiet_refuses_dirty_working_tree() {
     let repo = TestRepo::new();
-    repo.create_stack(&["A", "B"]);
+    repo.create_stack(&["a", "b"]);
 
-    repo.run_stax(&["checkout", "A"]).assert_success();
+    repo.run_stax(&["checkout", "a"]).assert_success();
     repo.create_file("dirty.txt", "uncommitted");
 
     repo.run_stax(&["restack", "--quiet"])

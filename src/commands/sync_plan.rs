@@ -3,7 +3,8 @@ use crate::commands::sync::{
     count_commits_between, diff_line_stats_between, find_merged_branches,
     find_partially_merged_notes, find_upstream_gone_branches, imported_branches_for_cleanup,
     init_forge_client, is_ancestor, local_branch_exists, plan_blocking_worktree_cleanup,
-    print_cleanup_candidates, resolve_fallback_parent_skipping_doomed, resolve_ref_oid,
+    print_cleanup_candidates, print_retained_closed_prs, resolve_fallback_parent_skipping_doomed,
+    resolve_ref_oid, retained_closed_prs,
 };
 use crate::config::Config;
 use crate::engine::branch_detect::has_unique_commits_since_any_base;
@@ -29,6 +30,7 @@ pub struct SyncPlanOptions {
     pub auto_stash_pop: bool,
     pub stash_policy: StashPolicy,
     pub json: bool,
+    pub get: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +317,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         auto_stash_pop,
         stash_policy,
         json,
+        get,
     } = options;
 
     // --json suppresses all human stdout (machine-readable output replaces it)
@@ -379,11 +382,13 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
 
     // --- Probe remote (ls-remote; read-only, no FETCH_HEAD writes) ---
     let mut use_cached_remote = false;
+    let mut remote_heads_by_branch: Option<std::collections::HashMap<String, String>> = None;
     let (remote_head_oid, remote_branch_set): (Option<String>, HashSet<String>) =
         match remote::ls_remote_head_oids(&workdir, &remote_name) {
             Ok(heads) => {
                 let trunk_oid = heads.get(&trunk).cloned();
                 let branch_count = heads.len();
+                remote_heads_by_branch = Some(heads.clone());
                 let names: HashSet<String> = heads.into_keys().collect();
                 if !quiet {
                     println!(
@@ -444,6 +449,63 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         render_trunk_plan(&trunk, &trunk_plan);
     }
 
+    if get && !quiet && !json {
+        println!();
+        println!("{}", "Get (stack branches vs remote)".bold());
+
+        let scope_order: Vec<String> =
+            if current != trunk && stack.branches.contains_key(current.as_str()) {
+                stack.current_stack(&current)
+            } else {
+                Vec::new()
+            };
+
+        if scope_order.is_empty() {
+            println!("  {}", "No stack branches in scope.".dimmed());
+        } else {
+            match &remote_heads_by_branch {
+                Some(remote_heads) => {
+                    for branch in &scope_order {
+                        let local_oid = resolve_ref_oid(&workdir, branch);
+                        let remote_oid = remote_heads.get(branch);
+                        match (local_oid.as_deref(), remote_oid.map(String::as_str)) {
+                            (_, None) => {
+                                println!(
+                                    "  {} {} {}",
+                                    "○".dimmed(),
+                                    branch.cyan(),
+                                    "no remote branch".dimmed()
+                                );
+                            }
+                            (Some(local), Some(remote)) if local == remote => {
+                                println!(
+                                    "  {} {} {}",
+                                    "✓".green(),
+                                    branch.cyan(),
+                                    "up to date".dimmed()
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "  {} {} {}",
+                                    "→".cyan(),
+                                    branch.cyan().bold(),
+                                    "would reconcile (diverged)".dimmed()
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    println!(
+                        "  {}",
+                        "Could not reach remote — --get preview unavailable".dimmed()
+                    );
+                }
+            }
+        }
+    }
+
     let restack_would_fail = matches!(
         trunk_plan,
         TrunkPlan::Diverged { .. } | TrunkPlan::ObjectsAbsent { .. }
@@ -459,6 +521,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     // Accumulator for JSON plan output (populated always; consumed only when json=true).
     let mut plan_data = crate::commands::sync_json::SyncPlanData {
         merged_candidates: Vec::new(),
+        closed_prs: Vec::new(),
         partially_merged: Vec::new(),
         upstream_gone_protected: Vec::new(),
         upstream_gone_deletable: Vec::new(),
@@ -487,6 +550,10 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     }
 
     if !delete_merged {
+        plan_data.closed_prs = retained_closed_prs(&stack, &[]);
+        if !quiet {
+            print_retained_closed_prs(&stack, &plan_data.closed_prs);
+        }
         if !quiet {
             println!(
                 "  {}",
@@ -502,6 +569,11 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             &remote_branch_set,
             false,
         )?;
+        let merged_names: Vec<String> = merged.iter().map(|info| info.branch.clone()).collect();
+        plan_data.closed_prs = retained_closed_prs(&stack, &merged_names);
+        if !quiet {
+            print_retained_closed_prs(&stack, &plan_data.closed_prs);
+        }
         let exempt_imported = imported_branches_for_cleanup(&repo, &stack)?;
         let partially_merged_notes = find_partially_merged_notes(
             &repo,
@@ -637,6 +709,9 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             let mut deletable: Vec<String> = Vec::new();
 
             for branch in &gone {
+                if plan_data.closed_prs.contains(branch) {
+                    continue;
+                }
                 if branch == &trunk {
                     continue;
                 }

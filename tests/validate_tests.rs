@@ -96,3 +96,69 @@ fn test_validate_detects_orphaned_metadata() {
         stdout
     );
 }
+
+fn metadata_ref(branch: &str) -> String {
+    format!("refs/branch-metadata/{branch}")
+}
+
+/// Overwrite `branch`'s metadata so `parentBranchRevision` is `lie_revision`
+/// (SHA string, not derived from the real parent), while leaving
+/// `parentBranchName` unchanged. Mirrors what a bad snapshot/undo could leave
+/// behind: a recorded revision that matches some real commit but is no longer
+/// actually reachable from the branch.
+fn rewrite_parent_revision_lie(repo: &TestRepo, branch: &str, lie_revision: &str) {
+    let show = repo.git(&["show", &metadata_ref(branch)]);
+    show.assert_success();
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&show)).expect("valid metadata JSON");
+    metadata["parentBranchRevision"] = serde_json::Value::String(lie_revision.to_string());
+
+    let file = tempfile::NamedTempFile::new().expect("metadata file");
+    std::fs::write(file.path(), metadata.to_string()).expect("metadata contents");
+    let hash = repo.git(&[
+        "hash-object",
+        "-w",
+        file.path().to_str().expect("metadata path"),
+    ]);
+    hash.assert_success();
+    repo.git(&[
+        "update-ref",
+        &metadata_ref(branch),
+        TestRepo::stdout(&hash).trim(),
+    ])
+    .assert_success();
+}
+
+#[test]
+fn test_validate_detects_stale_parent_revision_that_is_not_an_ancestor() {
+    // Regression test for issue #822: an interrupted sync-restack (undone)
+    // could leave a branch's parentBranchRevision pointing at a SHA that
+    // matches trunk's current tip by string comparison, but is no longer an
+    // ancestor of the branch (the rebase that would have made it one was
+    // rolled back). A bare SHA comparison in needs_restack() reported this as
+    // clean forever. validate must catch it via the ancestry check instead.
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    repo.create_stack(&["feature-a"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature-change.txt", "feature work");
+    repo.commit("Feature commit");
+
+    repo.run_stax(&["t"]); // back to trunk
+    repo.create_file("trunk-change.txt", "new trunk content");
+    repo.commit("Trunk change");
+    let trunk_tip = repo.get_commit_sha("main");
+
+    // The lie: claim feature-a is already based on trunk's new tip, without
+    // actually rebasing it there.
+    rewrite_parent_revision_lie(&repo, &branch, &trunk_tip);
+
+    let output = repo.run_stax(&["validate"]);
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("need restack") || stdout.contains("WARN"),
+        "Expected validate to catch the ancestry lie instead of reporting clean, got: {}",
+        stdout
+    );
+}

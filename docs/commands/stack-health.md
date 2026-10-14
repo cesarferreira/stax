@@ -2,6 +2,44 @@
 
 Commands to validate, repair, and test your stack metadata.
 
+## `st stats`
+
+Single-screen, local-only snapshot of stacking health: stack shape, PR mix,
+restack/parent/dirty health, worktree lanes, local branch hygiene, and a
+next-action hint. Read-only and safe to run at any time.
+
+```bash
+st stats              # all tracked branches
+st stats --current    # scope to the current stack only
+st stats --json        # machine-readable output
+st stats --ci           # add an opt-in CI roll-up (network call, reuses the standup CI pattern)
+```
+
+- **Stack shape** — tracked branch count, number of independent stacks, deepest
+  stack, and average stack height.
+- **PR mix** — open/draft/ready/no-PR/frozen counts across the scoped branches.
+- **Health** — branches needing restack, branches with missing parent
+  metadata, and (repo-wide, not scoped by `--current`) dirty linked worktrees.
+- **Worktrees** — linked worktree count and idle pool slots.
+- **Attention** — up to a few highlighted items: stacks needing restack,
+  branches without a PR, branches with missing parent metadata, and dirty/clean
+  worktree lanes.
+- **Biggest stacks** — the largest (by height) independent stacks, with
+  commits-ahead and PR range. Shown only when there are at least two stacks to
+  compare.
+- **PR mix** chart — a bar chart of ready/draft/no-PR, shown only when at least
+  two of those categories are non-zero.
+- **Hygiene** — merged-but-local, upstream-gone, and stale branch counts (same
+  classification as `st sweep`), with a hint to run `st sweep --delete`.
+- **Next** — one or two suggested follow-up commands (e.g. `st restack --all`
+  then `st ss`, or `st sweep`).
+
+Counters with a zero value are omitted rather than printed as `0`, and the
+health row collapses to `✓ all clear` when nothing needs attention.
+
+`--ci` is opt-in because it makes a network call; without it (or without forge
+auth configured), the CI line is omitted and `st stats` still exits `0`.
+
 ## `st validate`
 
 Check that all branch metadata is consistent.
@@ -73,9 +111,27 @@ was run on the branch instead of restack — both can produce conflicts on files
 you never edited. The repair happens automatically; after a successful restack,
 metadata is refreshed to the current parent tip as usual.
 
+### Squash-merged parents
+
+A squash merge turns the PR's commits into one new commit with a different SHA.
+If a branch still carries the original commits, git cannot tell they are already
+on the parent, so a plain restack replays them and conflicts on the files the
+squash touched. Preflight catches this: it compares the patch-id of the branch's
+cumulative diff (`merge-base..<commit>`, newest commit first) with the commits the
+parent gained since the merge-base. On a match, stax rebases from that commit and
+prints:
+
+```text
+  preflight: 'feature-x' has 14 commit(s) already merged into 'main' as 5eca245385e9; rebasing only the commits after them
+```
+
+This runs for branches whose parent gained at most 200 commits and that have at
+most 100 commits of their own; larger ranges fall back to the stored boundary.
+It is not done by `st validate`, which only checks metadata structure.
+
 Silence the notice with `[restack] preflight_warn = false` in
 `~/.config/stax/config.toml` or with `--quiet`. Disable the automatic correction
-with `[restack] preflight_auto_repair = false`.
+(both repairs above) with `[restack] preflight_auto_repair = false`.
 
 ## `st run <cmd>` (alias: `st test <cmd>`)
 

@@ -25,6 +25,8 @@ st create --below -am "fix: patch CVE-2026-0001"
 `--below` auto-stashes prepared tracked and untracked changes before moving to the lower base, then reapplies them on the inserted branch. With `-am`, those changes are staged and committed on the new lower branch.
 When `-m` or `--ai` derives a branch name that already exists, Stax stops instead of creating a suffixed duplicate; pass an explicit different name or checkout/reparent the existing branch.
 
+Branch names are lowercased — `st create -am "Bump Fastlane Version"` creates `bump-fastlane-version` and commits `Bump Fastlane Version` unchanged. Set [`branch.lowercase = false`](../configuration/index.md#branch-name-casing) to keep the original casing.
+
 ## Submit and merge
 
 | Command | What it does |
@@ -49,34 +51,37 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
 
-On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. `gh-stack` v0.0.8+ supports normal GitHub CLI authentication, including token environment variables; stax keeps its token-stripping OAuth fallback only for known older versions. `st doctor` always reports the installed version and marks versions below v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `st merge --stack` delegation; the legacy-OAuth warning itself still only applies below v0.0.8). `st stack unlink <stack-number>` delegates to v0.0.8's remote unstack operation without requiring local tracking; omit the number to target the active locally tracked stack. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
+On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. `gh-stack` v0.0.8+ supports normal GitHub CLI authentication, including token environment variables; stax keeps its token-stripping OAuth fallback only for known older versions. `st doctor` always reports the installed version and marks versions below v0.2.1 as out of date (v0.1.0 added `gh stack merge` for atomic `st merge --stack` delegation and v0.2.1 fixes custom SSH host aliases; the legacy-OAuth warning itself still only applies below v0.0.8). `st stack unlink <stack-number>` delegates to v0.0.8's remote unstack operation without requiring local tracking; omit the number to target the active locally tracked stack. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
 
 ## Sync, restack, update
 
 | Command | What it does |
 |---|---|
-| `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
+| `st rs` | Pull trunk, clean merged branches, report closed PR branches without deleting them, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
-| `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
+| `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone, except known closed-but-unmerged PRs |
+| `st rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward or rebase the local branch onto it — use after another machine rebased and force-pushed your stack |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
-| `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json` |
+| `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json`; `[sync] confirm_delete = false` deletes listed branches without asking |
 | `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
 | `st rs --dry-run --json` | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`) instead of human text |
 | `st rs --json` | Run sync and emit the result as a versioned JSON document (`kind: "sync"`, schema version 1); implies non-interactive; failures still emit JSON and exit non-zero |
 | `st rs --json --force` | Same as `--json` but also auto-confirms branch deletions |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
-| `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs; **does not** show the interactive Sync plan prompt (you already chose this workflow) |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs; **does not** show the interactive Sync plan prompt (you already chose this workflow) (pass `--delete-merged` to opt into `sync`-style cleanup) |
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; requires a clean tree unless `--auto-stash-pop` is set, and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
+| `st refresh --get` | Also reconcile each branch of the current stack against its own remote ref before restacking (see [multi-machine](../workflows/multi-machine.md)); add `--force` to let the remote win outright |
 
 ## Branch housekeeping
 
 | Command | What it does |
 |---|---|
-| `st sweep` | Classify all local branches: merged, upstream-gone, stale, active (read-only) |
-| `st sweep --delete` | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
+| `st sweep` | Classify all local branches: merged, closed-pr, upstream-gone, stale, active (read-only) |
+| `st sweep --delete` | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation; keep closed PRs |
+| `st sweep --delete --include-closed` | Explicitly discard branches with closed, unmerged PRs after confirmation |
 | `st sweep --delete --include-stale` | Also delete stale branches (older than threshold) |
 | `st sweep --delete --force` | Skip confirmation prompt |
 | `st sweep --stale-days 60` | Override stale threshold (default 30, or `branch.stale_days` in config) |

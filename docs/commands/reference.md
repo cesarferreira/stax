@@ -24,24 +24,30 @@ st --trace status --json >/dev/null
 | `st stack unlink [<stack-number>]` | | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
-| `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
+| `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), report closed-but-unmerged PR branches without deleting them, reparent children, and move you to the next branch of the stack if yours was deleted |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
-| `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone, except known closed-but-unmerged PRs |
+| `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
 | `st sync --stash` | `rs --stash` | Stash the current working tree before sync starts without prompting; works with `--quiet` and `--json`; does NOT auto-confirm branch deletions; conflicts with `--no-stash` at parse time |
 | `st sync --no-stash` | `rs --no-stash` | Fail if the working tree is dirty; overrides `--force`; conflicts with `--stash` at parse time |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
 | `st sync --dry-run --json` | | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`, `schema_version: 1`, `dry_run: true`) instead of human text |
 | `st sync --json` | | Emit the sync result as a single JSON document (`kind: "sync"`, `schema_version: 1`); implies non-interactive; failures emit JSON + non-zero exit; conflicts with `--continue` |
-| `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
-| `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
+| `st sweep` | | Classify all local branches as merged / closed-pr / upstream-gone / stale / active (read-only by default) |
+| `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation; retain closed PR branches |
+| `st sweep --delete --include-closed` | | Also delete closed-but-unmerged PR branches, with confirmation |
 | `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
 | `st sweep --json` | | Machine-readable branch classification (conflicts with `--delete`) |
-| `st refresh` | | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack |
+| `st stats` | | Single-screen, local-only snapshot of stacking health (stack shape, PR mix, health, worktrees, hygiene, next action); `--current` scopes to the current stack |
+| `st stats --json` | | Machine-readable `RepoStats` document |
+| `st stats --ci` | | Add an opt-in CI roll-up (network call, reuses the standup CI pattern); omitted (and non-fatal) without forge auth |
+| `st refresh` | `r` | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack (pass `--delete-merged` to opt into `sync`-style cleanup) |
 | `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
 | `st refresh --all-stacks` | | Refresh every stack in the repo (fetch/trunk sync once, then restack + submit each stack); stops at the first conflict |
+| `st refresh --get` | | Reconcile each current-stack branch against its own remote ref before restacking (cross-machine convergence); `--force` resets to the remote tip |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
 | `st cascade` | | Restack the stack and submit updates, without fetching trunk (offline-friendly) |
 | `st diff` | | Show per-branch diffs vs parent |
@@ -85,6 +91,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st rename` | | Rename current branch |
 | `st move [target]` | `mv` | Move the current branch and descendants onto a new parent (`st upstack onto` parity alias; picker when omitted) |
 | `st branch track` | | Track an existing branch |
+| `st branch track --all` | | Track every untracked non-trunk local branch under its nearest cycle-safe strict local ancestor |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea); sets upstream on branches it fetches |
 | `st branch untrack` | `ut` | Remove stax metadata |
 | `st branch reparent` | | Change parent |
@@ -95,6 +102,18 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
 | `st absorb` | | Distribute staged changes to the correct stack branches (file-level) |
+
+`st branch track --all` is local and metadata-only: it does not contact a forge,
+fetch or change remotes/upstreams, load remote configuration, or switch branches.
+It snapshots the untracked non-trunk local branches before writing metadata and
+leaves existing tracked metadata and the trunk untouched. For each target, it
+chooses the cycle-safe strict local ancestor with the fewest commits between
+that ancestor and the target, breaking equal-distance ties lexically by branch
+name. Non-trunk branches at the same commit are never selected as one another's
+parent. When no cycle-safe strict local ancestor exists, including for unrelated
+histories, the branch is parented to trunk; trunk remains the fallback root even
+when it points at the same commit. `--all` conflicts with `--parent` and
+`--all-prs`.
 
 ### Up/down scopes
 
@@ -151,6 +170,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
 | `st pr list --ready` | Interactive PR readiness TUI for unmerged tracked PRs; remotely merged PRs disappear on live refresh (`--current`/`--stack` limits to the current stack, `--plain` for a static table) |
 | `st ready` | Same as `st pr list --ready` — interactive TUI with CI, review approval, and merge state; filtering merged PRs does not clean up local branches (`--current`, `--stack`, `--all`, `--plain`, `--json`, `--interval`) |
+| `st board` / `st home` | Interactive repository dashboard — PULL REQUESTS / ISSUES tabs, a detail pane (branch, files/+/−, CI checks, labels, body, comment count), inline diff and comment viewers, label add/remove, draft toggle, and confirm-then-merge (squash, API-only). GitHub only — errors on other forges. `--limit`, `--tab prs\|issues`, `--interval` (default 60s), `--plain` for static PR/issue tables |
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
 | `st draft --stack` | Mark every PR in the current stack as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
@@ -172,13 +192,13 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st auth` | Configure GitHub token (`--from-gh`, `--token <token>`, `status`) |
 | `st config` | Show current configuration |
+| `st user` | View or set personal preferences (`branch-prefix`, `branch-date`, `branch-replacement`, `editor`, `tips`, `submit-body`) |
 | `st config --set-ai` | Interactively set AI agent/model (global or per-feature) |
 | `st config --reset-ai` | Clear saved AI defaults and re-prompt (`--no-prompt` to clear only) |
 | `st --default-config` | Print annotated config template (all options and allowed values) |
 | `st --skill` | Print bundled AI agent skill document (SKILL.md format with frontmatter) |
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
-| `st cli upgrade` | Detect install method and run the matching upgrade |
-| `st update` | Upgrade the stax CLI (same as `st cli upgrade`), then check installed AI agent skill files and offer to refresh them. Skips the CLI upgrade if already on the latest version — pass `--force` to upgrade anyway |
+| `st update` | Detect install method and run the matching upgrade, then check installed AI agent skill files and offer to refresh them. Skips the CLI upgrade if already on the latest version — pass `--force` to upgrade anyway |
 | `st doctor` | Check repo health |
 | `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config, stale AI skills for selected harnesses, and optional `gh-stack` install) |
 | `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --all`, `update --skills <list>`, `update --dry-run`) |
@@ -186,7 +206,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |
 
-`st skills update` fetches the remote body and compares each fully rendered harness file byte-for-byte, rewriting instructions that differ even when the installed package-version marker matches. It leaves byte-identical files untouched; `--dry-run` reports the same decision without writing. `st skills list` is intentionally local-only: its current/stale indicator compares the installed package-version marker with this stax binary and does not verify fetched content.
+`st skills update` fetches the remote body and compares each fully rendered harness file byte-for-byte, rewriting instructions that differ even when the installed package-version marker matches. It leaves byte-identical files untouched; `--dry-run` reports the same decision without writing. `st skills list` is intentionally local-only: its current/stale indicator compares the installed package-version marker with this stax binary and does not verify fetched content. When a symlink at the skill directory or file position no longer resolves, `st skills update` removes it and replaces it with a real path (working symlinks are left intact and written through); if a harness cannot be written for any other reason it is reported and skipped so the remaining harnesses still update, and the command exits non-zero afterwards.
 
 ### `st tmux`
 
@@ -320,6 +340,7 @@ st completions elvish
 - `--timeout <minutes>` — positive whole minutes (default: 30); zero is rejected
 - `--interval <seconds>` — positive whole seconds (default: 15) for `--when-ready`, `--remote`, `--queue`, and `--stack --when-ready`; zero is rejected
 - `--no-wait` / `--no-sync` / `--no-delete` / `--quiet`
+- `--ignore-failed-ci` — merge even when CI checks have failed; still blocks on draft, changes-requested, conflicts, and closed. Incompatible with `--queue`. Use when only optional checks failed and branch protection does not require them.
 
 For `--queue`, the timeout is a real deadline: stax caps the final sleep to the remaining budget and does not start another forge status poll once the deadline is reached.
 
@@ -329,8 +350,9 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 - `--delete-upstream-gone`
 - `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
 - `--stash` / `--no-stash` — dirty-tree handling before sync starts: `--stash` auto-stashes without prompting (works with `--quiet`/`--json`; does NOT auto-confirm branch deletions); `--no-stash` fails on a dirty tree and overrides `--force`; the two conflict at parse time; the dirty-tree error message names `--stash`. In dry-run mode both flags are accepted but ignored (stderr warning emitted).
-- **Interactive Sync plan** — applies to **`st sync` / `st rs`** only (not **`st refresh`**, which skips this prompt). After fetch, stax refreshes PR metadata, then prints one **Sync plan** (trunk moves, merged/upstream-gone branches with PR numbers when known, optional `--restack` preview) and asks how to proceed. When deletions are listed: continue and delete all (non-blocking), per-branch prompts, or cancel (`Aborted.`, no undo receipt). When only trunk/restack changes are pending: **Proceed with restack** / **Cancel**, or **Continue sync** / **Cancel sync** when no restack is requested. Skipped when `--quiet`, `--json`, `--force`, or when there is nothing to confirm.
+- **Interactive Sync plan** — applies to **`st sync` / `st rs`** only (not **`st refresh`**, which skips this prompt). After fetch, stax refreshes PR metadata, then prints one **Sync plan** (trunk moves, merged/upstream-gone branches with PR numbers when known, optional `--restack` preview) and asks how to proceed. When deletions are listed: continue and delete all (non-blocking), per-branch prompts, or cancel (`Aborted.`, no undo receipt). When only trunk/restack changes are pending: **Proceed with restack** / **Cancel**, or **Continue sync** / **Cancel sync** when no restack is requested. Skipped when `--quiet`, `--json`, `--force`, or when there is nothing to confirm. Set `[sync] confirm_delete = false` to delete listed branches without the prompt; a branch checked out in a linked worktree still asks what to do.
 - `--prune` — **deprecated**; accepted for compatibility and emits a stderr warning; use `--full` to fetch `--prune` all remote-tracking refs
+- `--full` — classic `git fetch --prune <remote>` for all remote-tracking refs; unlike the default trunk-only fetch it does not pass `--no-tags`, so tags reachable from fetched refs are downloaded too. Slower on large repos.
 - `--dry-run` (alias `--plan`) — read-only preview: probes the remote with ls-remote (no fetch, no FETCH_HEAD write), patches PR states in-memory, classifies the trunk transition, reports merged/upstream-gone candidates and per-branch disposition, previews the restack scope with conflict predictions; always exits 0. `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` are accepted but ignored (stderr warning emitted for each). `--continue` conflicts and is rejected by clap.
 - `--json` — emit the sync result as a single JSON document on stdout (schema version 1). Implies non-interactive (`quiet=true`); does **not** imply `--force` (branches that need confirmation are recorded in `skipped_branches` and left intact). Conflicts with `--continue` (rejected by clap). Failures still emit the JSON envelope with `success: false` and exit non-zero. `--verbose` is ignored (stderr warning emitted). `--dry-run --json` emits `kind: "sync_plan"` with `dry_run: true` and always exits 0.
 - JSON schema (`kind: "sync"`, `schema_version: 1`; action/kind strings are extensible — consumers should treat unknown values as forwards-compatible additions):
@@ -359,6 +381,7 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 | `skipped_branches[].name` | `string` | Branch name |
 | `skipped_branches[].reason` | `string` | Why deletion was skipped (e.g. `"not confirmed"`) |
 | `protected_branches[]` | `array` | Absent when empty; upstream-gone branches skipped due to unique local commits |
+| `closed_prs[]` | `array` | Absent when empty; tracked closed-but-unmerged PR branch names retained by sync (also present in `sync_plan`) |
 | `partially_merged[]` | `array` | Absent when empty; branches with a signal of merging but with uncommitted local commits |
 | `partially_merged[].name` | `string` | Branch name |
 | `partially_merged[].reason` | `string` | `pr_merged` · `pr_closed` · `history_merged` |
@@ -394,6 +417,7 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 - Sync is transactional and undoable via `st undo`. A single receipt covers trunk fast-forwards, deleted branch heads, deleted metadata refs, reparented children's metadata, and the optional restack phase. A no-op sync (nothing changed) writes no receipt so the previous undoable operation remains on the undo stack.
 - Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.
+- When cleanup deletes the branch you are on, sync continues on the next branch of that stack — the first unmerged descendant, in `st next` order (branch-name order on forks) — instead of dropping you on trunk, so `st refresh` goes on to restack and submit the rest of the stack. It stays on trunk when nothing is left above, and when that branch is checked out in another worktree it prints a notice and stays on trunk. The confirmation prompt names the branch it will check out.
 - When sync itself leaves exceptional work behind, it reports skipped cleanup with its reason, trunk update failures, and cleanup-driven checkout changes. It prints one prioritized next command: a diverged trunk gets non-destructive guidance to inspect and reconcile it with its remote; other trunk failures suggest `st trunk`; blocked cleanup suggests `st sweep`. Routine restack health remains visible in `st ls` and the TUI instead of appearing after every sync.
 - When `--restack` is requested, sync fails closed if its fetch did not succeed or the local trunk did not reach the fetched remote-trunk commit. It restores any sync auto-stash and exits non-zero before imported-branch refresh, merged-branch cleanup, or restacking can rewrite feature refs. `st refresh` inherits this guard and exits before its submit phase, so it does not push or update PRs after either failure.
 - Deletion output lines for locally deleted branches (merged or upstream-gone) append the branch's tip SHA (first 7 characters, dimmed) so you can reference the exact commit that was removed.
@@ -486,6 +510,17 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 - `--ci` checks only the selected branches and may add network latency; combine it with `--all` to check all tracked branches.
 - GitHub authored reviews come from one time-bounded, maximum-100 GraphQL query. GitLab and Gitea mark that signal unsupported rather than scanning every MR/PR.
 - JSON preserves `reviews_given` and `needs_attention.ci_failing`; use `signals.<name>.status` (`available`, `unsupported`, `unavailable`, or `not_requested`) to interpret empty arrays.
+
+### `st stats`
+
+- `--current` scopes to the current stack (ancestors + current + descendants); when the current branch is untracked, the scope is empty and the command still exits `0`.
+- `--json` emits a single `RepoStats` document with top-level keys: `scope` (`"all"` or `"current"`), `trunk`, `current`, `repo` (project slug, omitted with no forge remote), `trunk_ahead` / `trunk_behind` (omitted with no remote-tracking branch), `stack_shape`, `pr_mix`, `health`, `worktrees`, `ci` (omitted unless `--ci` produced counts), `ci_unavailable_reason` (present when `--ci` was requested but unavailable), `attention`, `biggest_stacks`, `hygiene`, `next_actions`.
+- `stack_shape`: `tracked`, `independent`, `deepest`, `avg_height`.
+- `pr_mix`: `open` (includes drafts), `draft`, `ready` (`open - draft`), `no_pr`, `merged`, `closed`, `frozen`.
+- `health`: `need_restack`, `missing_parent`, `dirty_worktrees` (repo-wide, not scoped by `--current`; `null` when the dirty check was skipped for having too many worktrees).
+- `worktrees`: `linked`, `idle_slots`.
+- `hygiene`: `merged_but_local`, `upstream_gone`, `stale`, `stale_days` — same ancestry-based classification `st sweep` uses.
+- `--ci` is opt-in because it makes a network call; without forge auth configured, `ci` is omitted and `ci_unavailable_reason` explains why. `st stats` always exits `0` regardless of CI availability.
 
 ### `st pr` / `st issue`
 

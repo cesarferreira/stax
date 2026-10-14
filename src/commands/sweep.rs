@@ -18,6 +18,7 @@ const DEFAULT_STALE_DAYS: u64 = 30;
 pub fn run(
     delete: bool,
     include_stale: bool,
+    include_closed: bool,
     force: bool,
     stale_days: Option<u64>,
     json: bool,
@@ -64,6 +65,10 @@ pub fn run(
             Some(state) if state.eq_ignore_ascii_case("merged")
         );
         let pr_upstream_deleted = info.pr_number.is_some()
+            && !matches!(
+                info.pr_state.as_deref(),
+                Some(state) if state.eq_ignore_ascii_case("closed")
+            )
             && (gone_branch_set.contains(branch)
                 || remote_heads
                     .as_ref()
@@ -77,12 +82,32 @@ pub fn run(
     }
 
     let merged_set: HashSet<String> = merged_infos.iter().map(|m| m.branch.clone()).collect();
+    // A closed PR is not evidence of integration, even if its remote head
+    // disappeared. Keep it out of default cleanup and stale classification.
+    let closed_set: HashSet<String> = stack
+        .branches
+        .iter()
+        .filter(|(branch, info)| {
+            *branch != &trunk
+                && *branch != &current
+                && !merged_set.contains(*branch)
+                && matches!(
+                    info.pr_state.as_deref(),
+                    Some(state) if state.eq_ignore_ascii_case("closed")
+                )
+        })
+        .map(|(branch, _)| branch.clone())
+        .collect();
 
     // Merged takes precedence over upstream-gone; trunk/current are never candidates.
     let mut gone_set: HashSet<String> = HashSet::new();
     let mut protected_gone_set: HashSet<String> = HashSet::new();
     for branch in gone_branches {
-        if branch == trunk || branch == current || merged_set.contains(&branch) {
+        if branch == trunk
+            || branch == current
+            || merged_set.contains(&branch)
+            || closed_set.contains(&branch)
+        {
             continue;
         }
 
@@ -96,6 +121,7 @@ pub fn run(
     // 3. Stale (old commits, not merged or gone)
     let already_classified: HashSet<String> = merged_set
         .iter()
+        .chain(closed_set.iter())
         .chain(gone_set.iter())
         .chain(protected_gone_set.iter())
         .cloned()
@@ -118,12 +144,16 @@ pub fn run(
                 && b != &current
                 && !merged_set.contains(b)
                 && !gone_set.contains(b)
+                && !closed_set.contains(b)
                 && !stale_set.contains(b)
         })
         .collect();
 
-    let total_classified =
-        merged_set.len() + gone_set.len() + stale_set.len() + active_branches.len();
+    let total_classified = merged_set.len()
+        + closed_set.len()
+        + gone_set.len()
+        + stale_set.len()
+        + active_branches.len();
 
     // --- JSON output ---
     if json {
@@ -132,6 +162,7 @@ pub fn run(
                 .iter()
                 .map(|m| m.branch.clone())
                 .collect::<Vec<_>>(),
+            &closed_set.iter().cloned().collect::<Vec<_>>(),
             &gone_set.iter().cloned().collect::<Vec<_>>(),
             &stale_infos,
             &active_branches,
@@ -187,6 +218,21 @@ pub fn run(
                 merge_label.dimmed(),
                 tracked_marker,
             );
+        }
+        println!();
+    }
+
+    // Closed PR branches are retained unless explicitly included in deletion.
+    if !closed_set.is_empty() {
+        let mut sorted: Vec<&String> = closed_set.iter().collect();
+        sorted.sort();
+        println!(
+            "{} {}",
+            format!("  closed-pr  ({})", sorted.len()).yellow().bold(),
+            "— closed without merge; retained by default".dimmed()
+        );
+        for branch in sorted {
+            println!("    {} {}", "○".yellow(), branch.yellow());
         }
         println!();
     }
@@ -259,6 +305,7 @@ pub fn run(
     // Summary / hints
     print_summary(
         &merged_set,
+        &closed_set,
         &gone_set,
         &stale_set,
         effective_stale_days,
@@ -271,6 +318,9 @@ pub fn run(
             merged_set.iter().chain(gone_set.iter()).cloned().collect();
         if include_stale {
             to_delete.extend(stale_set.iter().cloned());
+        }
+        if include_closed {
+            to_delete.extend(closed_set.iter().cloned());
         }
         to_delete.retain(|b| b != &current && b != &trunk);
         to_delete.sort();
@@ -369,6 +419,7 @@ struct SweepJson {
 
 fn print_json(
     merged: &[String],
+    closed: &[String],
     gone: &[String],
     stale: &[StaleBranchInfo],
     active: &[String],
@@ -381,6 +432,14 @@ fn print_json(
             name: b.clone(),
             status: "merged",
             tracked: stack.branches.contains_key(b),
+            days_old: None,
+        });
+    }
+    for b in closed {
+        branches.push(SweepJsonBranch {
+            name: b.clone(),
+            status: "closed-pr",
+            tracked: true,
             days_old: None,
         });
     }
@@ -422,13 +481,14 @@ fn print_json(
 
 fn print_summary(
     merged: &HashSet<String>,
+    closed: &HashSet<String>,
     gone: &HashSet<String>,
     stale: &HashSet<String>,
     stale_days: u64,
     delete_mode: bool,
 ) {
     let deletable = merged.len() + gone.len();
-    if deletable == 0 && stale.is_empty() {
+    if deletable == 0 && stale.is_empty() && closed.is_empty() {
         println!("{}", "All branches are active.".green());
         return;
     }
@@ -445,6 +505,14 @@ fn print_summary(
             "stax sweep --delete".bold(),
             deletable.to_string().bold(),
             if deletable == 1 { "" } else { "es" },
+        ));
+    }
+    if !closed.is_empty() {
+        hints.push(format!(
+            "add {} to also delete {} closed PR branch{}",
+            "--include-closed".bold(),
+            closed.len().to_string().bold(),
+            if closed.len() == 1 { "" } else { "es" },
         ));
     }
     if !stale.is_empty() {

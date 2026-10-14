@@ -255,6 +255,54 @@ fn test_split_file_extracts_matching_paths_into_new_parent_branch() {
     );
 }
 
+/// Issue #830: after `split --file`, the original branch's tip is amended
+/// in place (files removed) rather than rebased onto the newly created split
+/// branch -- its underlying commit chain never actually moves onto the new
+/// branch. The recorded `parentBranchRevision` must reflect that: either a
+/// real ancestor of the (amended) branch, or the previously recorded value.
+#[test]
+fn test_split_file_records_ancestry_valid_boundary_for_original_branch() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+    repo.run_stax(&["create", "boundary-feature"])
+        .assert_success();
+
+    repo.create_file("keep.txt", "keep");
+    repo.create_file("move.txt", "move");
+    repo.commit("add keep and move");
+
+    let feature_branch = repo.current_branch();
+    let metadata_ref = format!("refs/branch-metadata/{}", feature_branch);
+    let read_boundary = |repo: &TestRepo| -> String {
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(output.status.success());
+        let metadata: serde_json::Value = serde_json::from_str(&TestRepo::stdout(&output)).unwrap();
+        metadata["parentBranchRevision"]
+            .as_str()
+            .expect("parentBranchRevision missing")
+            .to_string()
+    };
+    let recorded_boundary = read_boundary(&repo);
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_success();
+
+    let boundary = read_boundary(&repo);
+    let ancestry_check = repo.git(&["merge-base", "--is-ancestor", &boundary, &feature_branch]);
+    assert!(
+        ancestry_check.status.success(),
+        "Recorded boundary {} is not an ancestor of {} (issue #830)",
+        boundary,
+        feature_branch
+    );
+    assert_eq!(
+        boundary, recorded_boundary,
+        "Expected the pre-existing boundary to be preserved -- the split branch's tip \
+         is never actually in the amended original branch's ancestry"
+    );
+}
+
 #[test]
 fn test_split_file_on_multi_commit_branch_fails() {
     let repo = TestRepo::new();
@@ -291,5 +339,124 @@ fn test_split_file_on_multi_commit_branch_fails() {
         !branches.iter().any(|b| b.contains("feature-split")),
         "No split branch should be created on hard-fail, got branches: {:?}",
         branches
+    );
+}
+
+/// Helper: read the newest op receipt under `.git/stax/ops` as JSON.
+fn latest_receipt(repo: &TestRepo) -> serde_json::Value {
+    let ops_dir = repo.path().join(".git/stax/ops");
+    let mut entries: Vec<_> = std::fs::read_dir(&ops_dir)
+        .expect("read ops dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    entries.sort_by_key(|e| {
+        e.metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    });
+    let newest = entries.last().expect("expected at least one op receipt");
+    let content = std::fs::read_to_string(newest.path()).expect("read receipt");
+    serde_json::from_str(&content).expect("invalid receipt JSON")
+}
+
+/// Issue #835: `split --file` must record both branches' metadata refs in the
+/// op receipt so `stax undo` can reverse the split.
+#[test]
+fn test_split_file_records_metadata_refs_in_the_op_receipt() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+    repo.run_stax(&["create", "feature"]).assert_success();
+
+    repo.create_file("keep.txt", "keep");
+    repo.create_file("move.txt", "move");
+    repo.commit("add keep and move");
+
+    let feature_branch = repo.current_branch();
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_success();
+
+    let split_branch = repo
+        .find_branch_containing("feature-split")
+        .expect("expected split branch to be created");
+
+    let receipt = latest_receipt(&repo);
+    let local_refs = receipt["local_refs"]
+        .as_array()
+        .expect("local_refs should be an array");
+
+    let feature_meta = local_refs
+        .iter()
+        .find(|e| e["branch"].as_str() == Some(&format!("{}@meta", feature_branch)))
+        .expect("expected feature branch metadata ref in receipt");
+    assert!(feature_meta["oid_before"].is_string());
+    assert!(feature_meta["oid_after"].is_string());
+    assert_ne!(feature_meta["oid_before"], feature_meta["oid_after"]);
+
+    let split_meta = local_refs
+        .iter()
+        .find(|e| e["branch"].as_str() == Some(&format!("{}@meta", split_branch)))
+        .expect("expected split branch metadata ref in receipt");
+    assert!(split_meta["oid_before"].is_null());
+    assert!(split_meta["oid_after"].is_string());
+}
+
+/// Issue #835: since `split --file` now snapshots both branches into the op
+/// receipt, `stax undo` should fully reverse it.
+#[test]
+fn test_split_file_undo_restores_the_original_branch() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+    repo.run_stax(&["create", "feature"]).assert_success();
+
+    repo.create_file("keep.txt", "keep");
+    repo.create_file("move.txt", "move");
+    repo.commit("add keep and move");
+
+    let feature_branch = repo.current_branch();
+    let head_before = repo.head_sha();
+    let metadata_ref = format!("refs/branch-metadata/{}", feature_branch);
+    let meta_output_before = repo.git(&["show", &metadata_ref]);
+    let metadata_before = TestRepo::stdout(&meta_output_before);
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_success();
+
+    let split_branch = repo
+        .find_branch_containing("feature-split")
+        .expect("expected split branch to be created");
+
+    let undo_output = repo.run_stax(&["undo", "--yes"]);
+    undo_output.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == &split_branch),
+        "split branch should be gone after undo, got branches: {:?}",
+        branches
+    );
+    let split_meta_ref = repo.git(&[
+        "rev-parse",
+        "--verify",
+        &format!("refs/branch-metadata/{}", split_branch),
+    ]);
+    assert!(
+        !split_meta_ref.status.success(),
+        "split branch metadata ref should be gone after undo"
+    );
+
+    assert_eq!(
+        repo.head_sha(),
+        head_before,
+        "original branch head should be restored after undo"
+    );
+    let meta_output_after = repo.git(&["show", &metadata_ref]);
+    let metadata_after = TestRepo::stdout(&meta_output_after);
+    assert_eq!(
+        metadata_before, metadata_after,
+        "original branch metadata should be restored after undo"
     );
 }

@@ -1,10 +1,12 @@
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
+
+const DETAIL_MAX_CHARS: usize = 72;
 
 #[derive(Clone, Copy)]
 enum TimerOutput {
@@ -23,9 +25,22 @@ enum TimerOutput {
 pub struct LiveTimer {
     bar: ProgressBar,
     message: String,
+    detail: Arc<Mutex<String>>,
     stop_flag: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     output: TimerOutput,
+}
+
+/// Shared status line drawn under a [`LiveTimer`] while it is spinning.
+#[derive(Clone)]
+pub struct LiveDetail {
+    text: Arc<Mutex<String>>,
+}
+
+impl LiveDetail {
+    pub fn set(&self, detail: &str) {
+        *lock_detail(&self.text) = sanitize_progress_detail(detail);
+    }
 }
 
 impl LiveTimer {
@@ -50,12 +65,24 @@ impl LiveTimer {
         let stop_clone = Arc::clone(&stop_flag);
         let bar_clone = bar.clone();
         let label = message.to_string();
+        let detail = Arc::new(Mutex::new(String::new()));
+        let detail_for_thread = Arc::clone(&detail);
 
         let thread = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let elapsed = bar_clone.elapsed();
                 let time_str = format!("{:.3}s", elapsed.as_secs_f64());
-                bar_clone.set_message(format!("{:<35} {}", label, time_str.dimmed()));
+                let detail_text = lock_detail(&detail_for_thread).clone();
+                let detail_rendered = if detail_text.is_empty() {
+                    String::new()
+                } else {
+                    detail_text.dimmed().to_string()
+                };
+                bar_clone.set_message(format_timer_message(
+                    &label,
+                    &time_str.dimmed().to_string(),
+                    &detail_rendered,
+                ));
                 std::thread::sleep(Duration::from_millis(50));
             }
         });
@@ -65,9 +92,17 @@ impl LiveTimer {
         Self {
             bar,
             message: message.to_string(),
+            detail,
             stop_flag,
             thread: Some(thread),
             output,
+        }
+    }
+
+    /// Handle for updating the child line under this timer from another thread.
+    pub fn detail_handle(&self) -> LiveDetail {
+        LiveDetail {
+            text: Arc::clone(&self.detail),
         }
     }
 
@@ -206,9 +241,46 @@ impl Drop for LiveTimer {
     }
 }
 
+/// Spinner row, plus an indented child when `detail` is non-empty.
+///
+/// The child is part of the live redraw and is cleared when the timer finishes.
+pub(crate) fn format_timer_message(label: &str, elapsed: &str, detail: &str) -> String {
+    let headline = format!("{label:<35} {elapsed}");
+    let detail = detail.trim();
+    if detail.is_empty() {
+        headline
+    } else {
+        format!("{headline}\n    └─ {detail}")
+    }
+}
+
+/// Collapse a live status line onto one terminal row.
+pub(crate) fn sanitize_progress_detail(detail: &str) -> String {
+    let collapsed = detail
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.chars().count() <= DETAIL_MAX_CHARS {
+        return collapsed;
+    }
+    let mut truncated = collapsed
+        .chars()
+        .take(DETAIL_MAX_CHARS.saturating_sub(3))
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
+fn lock_detail(detail: &Mutex<String>) -> std::sync::MutexGuard<'_, String> {
+    detail.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LiveTimer;
+    use super::{LiveTimer, format_timer_message, lock_detail};
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
 
@@ -223,5 +295,41 @@ mod tests {
             stop_flag.load(Ordering::Relaxed),
             "dropping a live timer must signal its worker thread to stop"
         );
+    }
+
+    #[test]
+    fn timer_message_is_one_row_without_detail() {
+        assert_eq!(
+            format_timer_message("Restack feature", "65.776s", ""),
+            "Restack feature                     65.776s"
+        );
+    }
+
+    #[test]
+    fn timer_message_adds_an_indented_child_line() {
+        assert_eq!(
+            format_timer_message(
+                "Restack feature",
+                "65.776s",
+                "Rebasing commit 12/31 · Fix Kotlin compiler warnings"
+            ),
+            "Restack feature                     65.776s\n    └─ Rebasing commit 12/31 · Fix Kotlin compiler warnings"
+        );
+    }
+
+    #[test]
+    fn detail_handle_stores_a_single_sanitized_line() {
+        let timer = LiveTimer::new("Restack feature");
+        timer.detail_handle().set(
+            "Rebasing commit 1/2 · hello\nworld\u{0007} and then a very long subject that should not wrap the live progress row",
+        );
+
+        let stored = lock_detail(&timer.detail).clone();
+        assert_eq!(
+            stored,
+            "Rebasing commit 1/2 · hello world and then a very long subject that s..."
+        );
+        assert!(stored.chars().count() <= 72);
+        drop(timer);
     }
 }

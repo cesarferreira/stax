@@ -7,8 +7,12 @@ use std::process::Command;
 use crate::remote::ForgeType;
 
 /// Main config (safe to commit to dotfiles)
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
+    /// Preferred editor for interactive text edits (e.g. `stax pr --edit`).
+    /// Falls back to `$EDITOR` when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
     #[serde(default)]
     pub branch: BranchConfig,
     #[serde(default)]
@@ -32,13 +36,38 @@ pub struct Config {
     #[serde(default)]
     pub restack: RestackConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub board: BoardConfig,
+}
+
+/// Preferences for the `stax board` dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardConfig {
+    /// Show only PRs/issues authored by the current user by default.
+    /// Toggled at runtime with `a`; the choice is persisted here.
+    #[serde(default = "default_board_mine_only")]
+    pub mine_only: bool,
+}
+
+impl Default for BoardConfig {
+    fn default() -> Self {
+        Self {
+            mine_only: default_board_mine_only(),
+        }
+    }
+}
+
+fn default_board_mine_only() -> bool {
+    true
 }
 
 /// Which agent harnesses receive stax skill files.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillsConfig {
-    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`).
+    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`, `hermes`).
     /// Unset = auto (detected harnesses plus any that already have a skill file).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harnesses: Option<Vec<String>>,
@@ -57,7 +86,7 @@ struct TrustedNetworkRepoRemoteConfig {
 }
 
 /// User-configurable restack behaviour.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestackConfig {
     /// Automatically use `merge-base(parent, branch)` as the rebase boundary
     /// when the stored `parentBranchRevision` would replay a much larger range
@@ -80,7 +109,25 @@ impl Default for RestackConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// User-configurable sync behaviour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Ask before deleting merged or upstream-gone branches during an
+    /// interactive sync (default: true). Branches checked out in a linked
+    /// worktree still prompt.
+    #[serde(default = "default_true")]
+    pub confirm_delete: bool,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            confirm_delete: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BranchConfig {
     /// Prefix for new branches (e.g., "cesar/")
     /// DEPRECATED: Use `format` instead. Kept for backward compatibility.
@@ -97,6 +144,10 @@ pub struct BranchConfig {
     /// Character to replace spaces and special chars (default: "-")
     #[serde(default = "default_replacement")]
     pub replacement: String,
+    /// Lowercase generated branch names (default: true). Commit messages are
+    /// never affected — only the branch name derived from them.
+    #[serde(default = "default_branch_lowercase")]
+    pub lowercase: bool,
     /// Branch name format template. Placeholders:
     /// - {user}: Git username (from config.branch.user or git user.name)
     /// - {date}: Current date (formatted by date_format)
@@ -113,7 +164,7 @@ pub struct BranchConfig {
     pub stale_days: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
     /// Git remote name (default: "origin")
     #[serde(default = "default_remote_name")]
@@ -139,7 +190,7 @@ pub struct RemoteConfig {
     pub fork_remote: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
@@ -157,9 +208,25 @@ pub struct SubmitConfig {
     /// PR exists, all PRs in the stack get links synced normally.
     #[serde(default)]
     pub single_stack: SingleStackMode,
+    /// Whether the default PR body (used when no template is picked) includes
+    /// a `## Summary` bullet list of commit messages (default: true).
+    #[serde(default = "default_true")]
+    pub commit_messages_in_body: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+impl Default for SubmitConfig {
+    fn default() -> Self {
+        Self {
+            stack_links: StackLinksMode::default(),
+            native_stack: NativeStackMode::default(),
+            stack_links_when_native: StackLinksWhenNative::default(),
+            single_stack: SingleStackMode::default(),
+            commit_messages_in_body: default_true(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CiConfig {
     /// Play a sound when `stax ci --watch` exits after CI completion.
     #[serde(default)]
@@ -207,14 +274,14 @@ pub enum SingleStackMode {
     Off,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
     /// Whether to show contextual tips/suggestions (default: true)
     #[serde(default = "default_tips")]
     pub tips: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     /// Linked-worktree marker in stack views: "auto", "tree" (Nerd Font), or "wt" (ASCII).
     #[serde(default = "default_worktree_glyph")]
@@ -245,9 +312,9 @@ pub struct AiFeatureConfig {
     pub body: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
-    /// AI agent to use: "claude", "codex", "gemini", "opencode", or "pi" (default: auto-detect)
+    /// AI agent to use: "claude", "codex", "gemini", "opencode", "pi", or "hermes" (default: auto-detect)
     #[serde(default)]
     pub agent: Option<String>,
     /// Model to use with the AI agent (default: agent's own default)
@@ -319,7 +386,7 @@ impl AiConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Whether to use `gh auth token` as a fallback auth source (default: true)
     #[serde(default = "default_use_gh_cli")]
@@ -332,7 +399,7 @@ pub struct AuthConfig {
     pub gh_hostname: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeConfig {
     /// Directory for stax-managed worktrees. Relative paths resolve from the main
     /// checkout. Empty means the default external root: ~/.stax/worktrees/<repo>.
@@ -354,7 +421,7 @@ pub struct WorktreeConfig {
     pub hooks: WorktreeHooksConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WorktreeHooksConfig {
     /// Blocking hook run after creating a worktree and before launch
     #[serde(default)]
@@ -385,7 +452,7 @@ impl Default for WorktreeConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitConfig {
     /// Auto-enable git rerere on init (default: true)
     #[serde(default = "default_true")]
@@ -444,6 +511,7 @@ impl Default for BranchConfig {
             date: false,
             date_format: default_date_format(),
             replacement: default_replacement(),
+            lowercase: default_branch_lowercase(),
             format: None,
             user: None,
             stale_days: default_stale_days(),
@@ -492,6 +560,10 @@ impl Default for AuthConfig {
 
 fn default_replacement() -> String {
     "-".to_string()
+}
+
+fn default_branch_lowercase() -> bool {
+    true
 }
 
 fn default_worktree_root_dir() -> String {
@@ -709,6 +781,63 @@ impl Config {
         let path = Self::path()?;
         let mut config = Self::load_path_or_default(&path)?;
         config.skills.harnesses = Some(harnesses.to_vec());
+        config.save()
+    }
+
+    /// Persist the `stax board` "mine only" preference (global config only).
+    pub fn set_board_mine_only(mine_only: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.board.mine_only = mine_only;
+        config.save()
+    }
+
+    /// Persist the branch prefix preference (global config only).
+    pub fn set_branch_prefix(prefix: Option<String>) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.prefix = prefix;
+        config.save()
+    }
+
+    /// Persist whether new branch names include a date (global config only).
+    pub fn set_branch_date(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.date = enabled;
+        config.save()
+    }
+
+    /// Persist the branch name replacement character (global config only).
+    pub fn set_branch_replacement(replacement: String) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.branch.replacement = replacement;
+        config.save()
+    }
+
+    /// Persist the preferred editor for interactive text edits (global config only).
+    pub fn set_editor(editor: Option<String>) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.editor = editor;
+        config.save()
+    }
+
+    /// Persist whether contextual tips/suggestions are shown (global config only).
+    pub fn set_tips(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.ui.tips = enabled;
+        config.save()
+    }
+
+    /// Persist whether the default PR body includes a commit-message summary
+    /// (global config only).
+    pub fn set_submit_commit_messages_in_body(enabled: bool) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.submit.commit_messages_in_body = enabled;
         config.save()
     }
 
@@ -978,6 +1107,15 @@ impl Config {
         name: &str,
         prefix_override: Option<&str>,
     ) -> String {
+        let formatted = self.build_branch_name(name, prefix_override);
+        if self.branch.lowercase {
+            formatted.to_lowercase()
+        } else {
+            formatted
+        }
+    }
+
+    fn build_branch_name(&self, name: &str, prefix_override: Option<&str>) -> String {
         // Sanitize the message/name first
         let sanitized_name = self.sanitize_branch_segment(name);
 

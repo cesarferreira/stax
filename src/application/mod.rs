@@ -21,8 +21,8 @@ pub(crate) use branch_name::{
     BranchNameContext, BranchNameError, BranchNameResult, format_branch_name,
 };
 pub use interaction::{
-    ActionAvailability, InteractionState, descendants_of, interaction_state, linear_stack_order,
-    move_parent_candidates,
+    ActionAvailability, InteractionState, descendants_of, interaction_state,
+    interaction_state_from_transaction, linear_stack_order, move_parent_candidates,
 };
 pub use model::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, DiffLine,

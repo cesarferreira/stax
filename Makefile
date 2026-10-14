@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
+.PHONY: build build-release release ensure-git-cliff ensure-cargo-release install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -26,7 +26,7 @@ build-release:
 	cargo build --release
 
 # Publish a new release (usage: make release or make release LEVEL=patch)
-release: ensure-git-cliff
+release: ensure-git-cliff ensure-cargo-release
 	cargo release $(LEVEL) --execute --no-confirm
 
 # Ensure git-cliff (changelog generator, used by cargo-release's pre-release hook)
@@ -35,6 +35,14 @@ ensure-git-cliff:
 	@command -v git-cliff >/dev/null 2>&1 || { \
 		echo "git-cliff not found; installing v$(GIT_CLIFF_VERSION) via cargo..."; \
 		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked; \
+	}
+
+# Ensure cargo-release (the `cargo release` subcommand that drives version bump,
+# tag, and push) is available, so releasing does not require a manual install.
+ensure-cargo-release:
+	@command -v cargo-release >/dev/null 2>&1 || { \
+		echo "cargo-release not found; installing via cargo..."; \
+		cargo install cargo-release --locked; \
 	}
 
 # Install to ~/.cargo/bin
@@ -73,7 +81,7 @@ test-local-fast:
 		./scripts/native-tests.sh; \
 	else \
 		threads="$${NEXTEST_TEST_THREADS:-num-cpus}"; \
-		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
+		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u all_proxy -u https_proxy -u http_proxy -u no_proxy STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
 	fi
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
@@ -116,7 +124,7 @@ test-local-ramdisk: ramdisk-up
 	if [ -z "$$threads" ]; then \
 		threads="num-cpus"; \
 	fi; \
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(RAMDISK_MOUNT)/tmp" TMPDIR="$(RAMDISK_MOUNT)/tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
+	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u NO_PROXY -u all_proxy -u https_proxy -u http_proxy -u no_proxy STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(RAMDISK_MOUNT)/tmp" TMPDIR="$(RAMDISK_MOUNT)/tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
 
 # Build the pre-baked Linux test image (nextest + mold linker).
 test-image:

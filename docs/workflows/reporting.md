@@ -92,13 +92,13 @@ Progress feedback is shown for the default card and Slack styles while context c
 
 ### Prerequisites
 
-- An AI agent installed on `PATH`: `claude`, `codex`, `gemini`, `opencode`, or `pi`
+- An AI agent installed on `PATH`: `claude`, `codex`, `gemini`, `opencode`, `pi`, or `hermes`
 - For `--jit`: [`jit`](https://github.com/cesarferreira/jit) on `PATH`
 - Agent configured in `~/.config/stax/config.toml`:
 
 ```toml
 [ai]
-agent = "claude"   # or "codex", "gemini", "opencode", "pi"
+agent = "claude"   # or "codex", "gemini", "opencode", "pi", "hermes"
 ```
 
 Or pass `--agent` directly.

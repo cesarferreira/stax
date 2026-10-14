@@ -458,9 +458,21 @@ impl GitLabClient {
         commit_title: Option<&str>,
         sha: Option<&str>,
     ) -> Result<()> {
+        let fetched_sha;
+        let sha = match sha {
+            Some(sha) => sha,
+            None => {
+                fetched_sha = self.get_pr_head_sha(number).await?;
+                fetched_sha.as_str()
+            }
+        };
+        if sha.is_empty() {
+            bail!("GitLab merge request !{} is missing its head SHA", number);
+        }
+
         let request = MergeMrRequest {
             merge_commit_message: commit_title,
-            sha,
+            sha: Some(sha),
             squash: matches!(method, MergeMethod::Squash),
         };
         let _: serde_json::Value = put_json(
@@ -991,7 +1003,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn merge_pr_rebase_retains_non_stack_behavior() {
+    async fn merge_pr_fetches_sha_when_not_supplied() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "iid": 7,
+                "title": "Feature",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-a",
+                "target_branch": "main",
+                "sha": "abc123"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/merge",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .merge_pr(7, MergeMethod::Merge, None, None)
+            .await
+            .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method.as_str(), "GET");
+        assert_eq!(requests[1].method.as_str(), "PUT");
+        let payload: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(payload["sha"], "abc123");
+    }
+
+    #[tokio::test]
+    async fn merge_pr_uses_supplied_sha_without_fetch() {
         ensure_crypto_provider();
         unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
         let server = MockServer::start().await;
@@ -1015,6 +1068,38 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(payload["sha"], "abc123");
         assert_eq!(payload["squash"], false);
+    }
+
+    #[tokio::test]
+    async fn merge_pr_fails_before_put_when_head_sha_is_missing() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "iid": 7,
+                "title": "Feature",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-a",
+                "target_branch": "main",
+                "sha": null
+            })))
+            .mount(&server)
+            .await;
+
+        let error = GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .merge_pr(7, MergeMethod::Merge, None, None)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("missing its head SHA"));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method.as_str(), "GET");
     }
 
     #[tokio::test]

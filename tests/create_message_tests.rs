@@ -49,3 +49,46 @@ fn test_create_with_name_and_message_commits_with_that_message() {
         TestRepo::stderr(&show)
     );
 }
+
+#[test]
+fn test_create_with_message_lowercases_branch_but_not_commit_message() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    repo.create_file("fastlane.txt", "gem 'fastlane'\n");
+    repo.run_stax(&["create", "-a", "-m", "Bump Fastlane Version"])
+        .assert_success();
+
+    assert_eq!(repo.current_branch(), "bump-fastlane-version");
+
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert_eq!(TestRepo::stdout(&subject).trim(), "Bump Fastlane Version");
+}
+
+#[test]
+fn test_create_lowercases_explicit_branch_name() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    repo.run_stax(&["create", "My-Feature"]).assert_success();
+
+    assert_eq!(repo.current_branch(), "my-feature");
+}
+
+#[test]
+fn test_create_preserves_case_when_lowercase_disabled() {
+    let repo = TestRepo::new();
+    let home = std::path::PathBuf::from(repo.clean_home());
+    std::fs::write(
+        home.join(".config").join("stax").join("config.toml"),
+        "[branch]\nlowercase = false\n",
+    )
+    .expect("write stax config");
+    repo.run_stax(&["status"]).assert_success();
+
+    repo.create_file("fastlane.txt", "gem 'fastlane'\n");
+    repo.run_stax(&["create", "-a", "-m", "Bump Fastlane Version"])
+        .assert_success();
+
+    assert_eq!(repo.current_branch(), "Bump-Fastlane-Version");
+}
