@@ -219,7 +219,7 @@ case "$1 $2" in
       echo "not authenticated" >&2
       exit 4
     fi
-    echo "gh stack github/gh-stack v0.1.0"
+    echo "gh stack github/gh-stack v0.2.1"
     exit 0
     ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
@@ -241,7 +241,7 @@ exit 1
     let stdout = TestRepo::stdout(&output);
     assert!(
         stdout.contains("gh-stack extension installed")
-            && stdout.contains("v0.1.0")
+            && stdout.contains("v0.2.1")
             && stdout.contains("up to date"),
         "doctor should report the current installed extension, stdout was:\n{stdout}"
     );
@@ -251,7 +251,7 @@ exit 1
     );
     assert!(
         !stdout.contains("no usable OAuth-authenticated `gh` account"),
-        "v0.1.0 should use the env-only authentication, stdout was:\n{stdout}"
+        "v0.2.1 should use the env-only authentication, stdout was:\n{stdout}"
     );
 }
 
@@ -543,11 +543,11 @@ exit 1
 }
 
 #[test]
-fn version_status_accepts_v0_1_0_as_recommended() {
+fn version_status_accepts_v0_2_1_as_recommended() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
 if [ "$1 $2" = "extension list" ]; then
-  echo "gh-stack github/gh-stack v0.1.0"
+  echo "gh-stack github/gh-stack v0.2.1"
   exit 0
 fi
 exit 1
@@ -559,7 +559,30 @@ exit 1
     assert_eq!(
         status,
         stax::github::gh_stack::VersionStatus::MeetsRecommended {
-            installed: "0.1.0".to_string()
+            installed: "0.2.1".to_string()
+        }
+    );
+}
+
+#[test]
+fn version_status_flags_v0_2_0_as_below_recommended() {
+    // v0.2.0 predates the custom SSH host alias fix in v0.2.1.
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack v0.2.0"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(
+        status,
+        stax::github::gh_stack::VersionStatus::BelowRecommended {
+            installed: "0.2.0".to_string()
         }
     );
 }
@@ -568,8 +591,8 @@ exit 1
 fn version_status_flags_v0_0_8_as_below_recommended() {
     // v0.0.8 uses the public Stacks REST API (normal gh auth) but predates
     // `gh stack merge` (added in v0.1.0), so it must not be misreported as
-    // meeting the recommendation now that the recommendation tracks merge
-    // support rather than the auth boundary.
+    // meeting the recommendation now that the recommendation is newer than
+    // the auth boundary.
     let fake = fake_gh_dir(
         r#"#!/bin/sh
 if [ "$1 $2" = "extension list" ]; then
@@ -758,6 +781,43 @@ exit 1
     assert_eq!(
         fs::read_to_string(env_dump_file).unwrap(),
         "GH_TOKEN=ghp_current\nGITHUB_TOKEN=github_current\n"
+    );
+}
+
+#[test]
+fn link_stack_disables_gh_stack_update_notifier() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.2.1"; exit 0 ;;
+  "stack link")
+    echo "GH_STACK_NO_UPDATE_NOTIFIER=${GH_STACK_NO_UPDATE_NOTIFIER:-unset}" > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("notifier-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let outcome = stax::github::gh_stack::link_stack_with_env(
+        &[10, 20],
+        "main",
+        "origin",
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+        ],
+    );
+
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::LinkOutcome::Linked { stack_number: None }
+    );
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_STACK_NO_UPDATE_NOTIFIER=1\n"
     );
 }
 

@@ -284,7 +284,8 @@ fork_remote = "fork"               # name of a pre-configured git remote for the
 # CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
 # stax strips those overrides before `gh stack` and falls back to a keyring OAuth
 # account. `stax doctor` always shows the installed version, marks anything below
-# v0.1.0 as out of date (v0.1.0 adds `gh stack merge` for atomic `merge --stack`),
+# v0.2.1 as out of date (v0.1.0 added `gh stack merge` for atomic `merge --stack`;
+# v0.2.1 fixes custom SSH host aliases),
 # can upgrade it with `stax doctor --fix`, and probes legacy OAuth (versions
 # below v0.0.8 only) only when token overrides exist.
 # Native GitHub Stack updates are append-only. If relinking would remove or insert

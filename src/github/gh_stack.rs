@@ -2,15 +2,20 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Disables gh-stack's background upgrade notifier (v0.2.0+).
+const UPDATE_NOTIFIER_DISABLE_ENV: &str = "GH_STACK_NO_UPDATE_NOTIFIER";
 const FEATURE_ENABLED_KEY: &str = "stax.nativeStack.enabled";
 
 /// v0.0.8 moved gh-stack to the public Stacks REST API, which supports the
 /// normal GitHub CLI authentication sources. v0.1.0 adds `gh stack merge`,
 /// which lands an entire native GitHub Stack atomically in one call — `st
 /// merge --stack` delegates to it when the installed extension supports it.
+/// v0.2.1 fixes `gh stack link`/`submit` failing for repos whose `origin`
+/// uses a custom SSH host alias (e.g. `git@github.com-work:org/repo`), which
+/// stax relies on for native-stack registration, and honors `api_host`.
 /// Older link-capable versions still work, but need stax's legacy OAuth
 /// fallback when PAT overrides are present.
-const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 1, 0);
+const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 2, 1);
 
 /// Version at which gh-stack moved to the public Stacks REST API and normal
 /// GitHub CLI authentication. Token stripping in `gh_stack_command` stays
@@ -519,6 +524,10 @@ fn gh_command(env: &[(&str, &str)]) -> Command {
 /// versions that already support normal authentication.
 fn gh_stack_command(env: &[(&str, &str)]) -> Command {
     let mut command = gh_command(env);
+    // v0.2.0+ prints an upgrade nudge to stderr; stax classifies gh-stack
+    // output by message text and reports its own upgrade guidance via
+    // `st doctor`, so keep the notifier out of captured output.
+    command.env(UPDATE_NOTIFIER_DISABLE_ENV, "1");
     let is_known_legacy = installed_gh_stack_version(env)
         .and_then(|version| parse_semver(&version))
         .is_some_and(|version| version < PUBLIC_STACKS_API_VERSION);
