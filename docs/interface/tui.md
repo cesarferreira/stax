@@ -30,8 +30,8 @@ The main `st` TUI is focused on stacks and patches. Worktree management lives in
 | `r` | Restack selected branch |
 | `R` (Shift+r) | Restack all branches in stack |
 | `s` | Submit stack |
-| `p` | Open selected branch PR |
-| `o` | Enter reorder mode |
+| `o` | Open selected branch PR in your browser |
+| `O` (Shift+o) | Enter reorder mode |
 | `n` | Create branch |
 | `e` | Rename current branch |
 | `d` | Delete branch |

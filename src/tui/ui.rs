@@ -312,14 +312,17 @@ fn build_normal_shortcuts(app: &App) -> Line<'static> {
             ("n", "new", Color::Green)
         } else if branch.needs_restack {
             ("r", "restack", Color::Yellow)
-        } else if branch.pr_number.is_some() {
-            ("p", "PR", Color::Cyan)
         } else {
             ("s", "submit", Color::Green)
         };
 
         spans.push(key_hint(label, color));
         spans.push(Span::raw(format!(" {}  ", action)));
+
+        if !branch.is_trunk && branch.pr_number.is_some() {
+            spans.push(key_hint("o", Color::Cyan));
+            spans.push(Span::raw(" PR  "));
+        }
     }
 
     spans.push(key_hint("/", Color::Cyan));
@@ -377,15 +380,15 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  r        Restack selected branch"),
         Line::from("  R        Restack all branches"),
         Line::from("  s        Submit stack (push + create PRs)"),
-        Line::from("  p        Open PR in browser"),
+        Line::from("  o        Open PR in browser"),
         Line::from("  n        Create new branch"),
         Line::from("  e        Rename current branch"),
         Line::from("  d        Delete selected branch"),
-        Line::from("  o        Reorder stack (swap siblings)"),
+        Line::from("  O        Reorder stack (swap siblings)"),
         Line::from("  m        Move branch onto a new parent"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Reorder Mode (press 'o' to enter)",
+            "Reorder Mode (press 'O' to enter)",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from("  Shift+↑/K  Move branch up in stack"),

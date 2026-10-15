@@ -177,12 +177,12 @@ fn primary_action_span(branch: &BranchDisplay) -> Span<'static> {
         || branch.ci_state.as_deref() == Some("error")
     {
         (
-            "Press p to inspect the PR and fix CI".to_string(),
+            "Press o to inspect the PR and fix CI".to_string(),
             Color::Red,
         )
     } else if branch.pr_number.is_some() {
         (
-            "Press p to open the PR in your browser".to_string(),
+            "Press o to open the PR in your browser".to_string(),
             Color::Cyan,
         )
     } else {
@@ -195,21 +195,21 @@ fn primary_action_span(branch: &BranchDisplay) -> Span<'static> {
 fn branch_actions(branch: &BranchDisplay) -> String {
     if !branch.is_current {
         if branch.pr_number.is_some() {
-            "Enter checkout  •  p open PR".to_string()
+            "Enter checkout  •  o open PR".to_string()
         } else {
             "Enter checkout".to_string()
         }
     } else if branch.is_trunk {
         "n create branch  •  / search".to_string()
     } else {
-        let mut actions = vec!["s submit".to_string(), "o reorder".to_string()];
+        let mut actions = vec!["s submit".to_string(), "O reorder".to_string()];
 
         if branch.needs_restack {
             actions.insert(0, "r restack".to_string());
         }
 
         if branch.pr_number.is_some() {
-            actions.push("p open PR".to_string());
+            actions.push("o open PR".to_string());
         }
 
         actions.push("e rename".to_string());
