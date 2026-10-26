@@ -5,7 +5,7 @@ RAMDISK_SIZE_MB ?= 2048
 RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
-GIT_CLIFF_VERSION ?= 2.13.1
+GIT_CLIFF_VERSION ?= 2.14.2
 TEST_IMAGE_HASH := $(shell git hash-object Dockerfile | cut -c1-12)
 STAX_TEST_IMAGE ?= stax-test:$(TEST_IMAGE_HASH)
 CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
@@ -30,12 +30,16 @@ release: ensure-git-cliff ensure-cargo-release
 	cargo release $(LEVEL) --execute --no-confirm
 
 # Ensure git-cliff (changelog generator, used by cargo-release's pre-release hook)
-# is available via cargo, so releasing does not depend on an OS-level install.
+# is the pinned version, reinstalling via cargo when it is missing or different.
 ensure-git-cliff:
-	@command -v git-cliff >/dev/null 2>&1 || { \
-		echo "git-cliff not found; installing v$(GIT_CLIFF_VERSION) via cargo..."; \
-		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked; \
-	}
+	@installed="$$(git-cliff --version 2>/dev/null | awk '{print $$2}')"; \
+	if [ -z "$$installed" ]; then \
+		echo "git-cliff not found; installing v$(GIT_CLIFF_VERSION) via cargo..." >&2; \
+		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --force; \
+	elif [ "$$installed" != "$(GIT_CLIFF_VERSION)" ]; then \
+		echo "git-cliff v$$installed does not match pinned v$(GIT_CLIFF_VERSION); installing via cargo..." >&2; \
+		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked --force; \
+	fi
 
 # Ensure cargo-release (the `cargo release` subcommand that drives version bump,
 # tag, and push) is available, so releasing does not require a manual install.

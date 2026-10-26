@@ -34,4 +34,4 @@ PR references like `(#123)` become links to the GitHub repo. The automated `chor
 - `make release` defaults to a minor bump. Use `LEVEL=patch`, `LEVEL=minor`, or `LEVEL=major` to control the semver bump.
 - For a dry run, invoke `cargo release <level> --no-confirm` directly without `--execute`; cargo-release skips the version bump, tag, and push. git-cliff still rewrites `CHANGELOG.md` in place — run `git checkout CHANGELOG.md` to discard it.
 - Preview the upcoming entry without touching the file: `git-cliff --unreleased --tag v<next-version>`.
-- `make release` installs `cargo-release` and `git-cliff` via `cargo install` automatically if they're missing, so there's no manual prerequisite step.
+- `make release` installs `cargo-release` via `cargo install` if it is missing, and installs or reinstalls `git-cliff` at the version pinned by `GIT_CLIFF_VERSION` in the Makefile when it is missing or a different version. Override the pin for one run with `make release GIT_CLIFF_VERSION=x.y.z`.
