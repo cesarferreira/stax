@@ -2,11 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.118.1] - 2026-10-26
+
+### 🐛 Bug Fixes
+
+- *(branch)* Honor lowercase config in mutations ([#902](https://github.com/cesarferreira/stax/issues/902))
+
+### 🧪 Testing
+
+- *(refresh)* Cover --get scope with all stacks ([#893](https://github.com/cesarferreira/stax/issues/893))
+
+### ⚙️ Miscellaneous Tasks
+
+- Silence yanked clipboard-win and stale git-cliff release notices ([#935](https://github.com/cesarferreira/stax/issues/935))
 ## [0.118.0] - 2026-10-25
 
 ### 💼 Other
 
 - Added preflight
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.117.0] - 2026-10-16
 
 ### 🚀 Features
