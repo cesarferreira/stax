@@ -365,6 +365,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st branch track --all` | Adopt every untracked non-trunk local branch into stacks using its nearest cycle-safe strict local ancestor |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
+| `st submit --no-restack` | Submit using current local branch heads instead of temporary rebased publish heads |
 | `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
 | `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st branch submit --fork` | On a denied-for-lack-of-write-access push, retry from a GitHub fork of the upstream repo (single branch; set `[remote] auto_fork = true` for always-on) |

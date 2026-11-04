@@ -76,6 +76,9 @@ pub(crate) struct SubmitOptions {
     /// Skip pre-push hooks when pushing branches
     #[arg(long = "no-verify", short = 'n')]
     pub(crate) no_verify: bool,
+    /// Push local branch heads without preparing temporary restacks
+    #[arg(long)]
+    pub(crate) no_restack: bool,
     /// Deprecated: kept for CLI compatibility (currently a no-op)
     #[arg(long, hide = true)]
     pub(crate) force: bool,
@@ -153,6 +156,7 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             no_fetch: submit.no_fetch,
             prefetched: false,
             no_verify: submit.no_verify,
+            no_restack: submit.no_restack,
             force: submit.force,
             yes: submit.yes,
             no_prompt: submit.no_prompt,

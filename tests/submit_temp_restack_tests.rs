@@ -15,7 +15,7 @@
 
 use crate::common;
 
-use common::TestRepo;
+use common::{OutputAssertions, TestRepo};
 
 /// Build `main -> base -> empty -> tip`, then move `main` forward so the whole
 /// stack needs a restack. `empty` deliberately carries no commits of its own.
@@ -134,6 +134,139 @@ fn assert_worktree_registrations_unchanged(repo: &TestRepo, before: &str) {
 fn assert_ancestor(repo: &TestRepo, ancestor: &str, descendant: &str, message: &str) {
     let out = repo.git(&["merge-base", "--is-ancestor", ancestor, descendant]);
     assert!(out.status.success(), "{message}");
+}
+
+fn metadata_refs(repo: &TestRepo) -> String {
+    TestRepo::stdout(&repo.git(&[
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/branch-metadata",
+    ]))
+}
+
+fn remote_branch_oid(repo: &TestRepo, branch: &str) -> String {
+    TestRepo::stdout(&repo.git(&["ls-remote", "--heads", "origin", branch]))
+        .split_whitespace()
+        .next()
+        .unwrap_or_else(|| panic!("missing remote branch {branch}"))
+        .to_string()
+}
+
+fn assert_no_restack_scope_pushes_local_heads(
+    scope: &[&str],
+    current_index: usize,
+    submitted_indices: &[usize],
+) {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "no-restack-root"]);
+    assert!(bc.status.success(), "bc root: {}", TestRepo::stderr(&bc));
+    repo.create_file("shared.txt", "from branch");
+    repo.commit("Root edits shared");
+    let root = repo.current_branch();
+
+    let bc = repo.run_stax(&["bc", "no-restack-child"]);
+    assert!(bc.status.success(), "bc child: {}", TestRepo::stderr(&bc));
+    repo.create_file("child.txt", "child");
+    repo.commit("Child commit");
+    let child = repo.current_branch();
+
+    let bc = repo.run_stax(&["bc", "no-restack-grandchild"]);
+    assert!(
+        bc.status.success(),
+        "bc grandchild: {}",
+        TestRepo::stderr(&bc)
+    );
+    repo.create_file("grandchild.txt", "grandchild");
+    repo.commit("Grandchild commit");
+    let grandchild = repo.current_branch();
+    let branches = [root, child, grandchild];
+
+    repo.git(&["push", "origin", &branches[0], &branches[1], &branches[2]])
+        .assert_success();
+    repo.git(&["checkout", &branches[current_index]])
+        .assert_success();
+    repo.create_file("scope-update.txt", "newer local head");
+    repo.commit("Advance submitted branch after initial push");
+    let previous_remote_oid = remote_branch_oid(&repo, &branches[current_index]);
+
+    for index in submitted_indices {
+        if *index == current_index {
+            continue;
+        }
+        repo.git(&["push", "origin", &format!(":{}", branches[*index])])
+            .assert_success();
+    }
+
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("shared.txt", "from trunk");
+    repo.commit("Trunk conflicts with root");
+    repo.git(&["checkout", &branches[current_index]])
+        .assert_success();
+
+    let branch_tips_before = branches
+        .iter()
+        .map(|branch| repo.get_commit_sha(branch))
+        .collect::<Vec<_>>();
+    assert_ne!(
+        previous_remote_oid, branch_tips_before[current_index],
+        "fixture must leave an existing remote ref at an older OID"
+    );
+    let metadata_before = metadata_refs(&repo);
+    let worktrees_before = worktree_registrations(&repo);
+
+    let mut args = scope.to_vec();
+    // --no-template forces the legacy submit path even with --no-pr, which is
+    // the path that normally prepares temporary publish refs.
+    args.extend([
+        "--no-restack",
+        "--no-fetch",
+        "--no-pr",
+        "--no-template",
+        "--no-prompt",
+        "--yes",
+    ]);
+    let combined = submit_stack_with(&repo, &args);
+
+    assert!(
+        !combined.contains("Preparing restack") && !combined.contains("temporary restack"),
+        "--no-restack must omit temporary-restack preparation output, got:\n{combined}"
+    );
+    assert_eq!(metadata_refs(&repo), metadata_before);
+    assert_worktree_registrations_unchanged(&repo, &worktrees_before);
+    assert!(
+        TestRepo::stdout(&repo.git(&["for-each-ref", "refs/stax/submit"])).is_empty(),
+        "--no-restack must not leave temporary publish refs"
+    );
+
+    for (index, branch) in branches.iter().enumerate() {
+        assert_eq!(
+            repo.get_commit_sha(branch),
+            branch_tips_before[index],
+            "submit changed local tip for {branch}"
+        );
+    }
+    for index in submitted_indices {
+        assert_eq!(
+            remote_branch_oid(&repo, &branches[*index]),
+            branch_tips_before[*index],
+            "{} did not publish its unchanged local head",
+            branches[*index]
+        );
+    }
+}
+
+#[test]
+fn no_restack_pushes_local_heads_for_every_submit_scope() {
+    for (scope, current_index, submitted_indices) in [
+        (&["stack", "submit"][..], 2, &[0, 1, 2][..]),
+        (&["branch", "submit"][..], 1, &[1][..]),
+        (&["upstack", "submit"][..], 1, &[1, 2][..]),
+        (&["downstack", "submit"][..], 1, &[0, 1][..]),
+    ] {
+        assert_no_restack_scope_pushes_local_heads(scope, current_index, submitted_indices);
+    }
 }
 
 /// Thesis part 1: the preparation phase must not be silent.
