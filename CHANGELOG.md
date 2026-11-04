@@ -2,11 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.118.1] - 2026-10-26
+## [0.118.2] - 2026-11-04
+
+### 🚀 Features
+
+- *(submit)* Add --no-restack to publish local heads ([#937](https://github.com/cesarferreira/stax/issues/937))
 
 ### 🐛 Bug Fixes
 
 - *(branch)* Honor lowercase config in mutations ([#902](https://github.com/cesarferreira/stax/issues/902))
+
+### 💼 Other
+
+- Added preflight
 
 ### 🧪 Testing
 
@@ -14,15 +22,8 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Release
 - Silence yanked clipboard-win and stale git-cliff release notices ([#935](https://github.com/cesarferreira/stax/issues/935))
-## [0.118.0] - 2026-10-25
-
-### 💼 Other
-
-- Added preflight
-
-### ⚙️ Miscellaneous Tasks
-
 - Release
 ## [0.117.0] - 2026-10-16
 
@@ -2290,46 +2291,13 @@ All notable changes to this project will be documented in this file.
 - Now when stax rs deletes a merged branch, it will:
 ## [0.3.0] - 2025-12-27
 
-### 💼 Other
-
-- Clearer message when deleting merged branches
-- Updated comments on PRs
-- Rename branch command
-- New-readme
-- Re-added screenshot
-- Updated readme
-- Added tests to rename
-- Tui
-- Reorder panes
-- Edit works properly
-- Details view
-- Updated SS
-- Remote comparisons
-- Stack reorder
-- Reordering preview
-- Updated readme
-- Updated readme
-- Added screenshots
-## [0.2.1] - 2025-12-27
-
-### 🐛 Bug Fixes
-
-- Fix release
-- Fixed pipeline
-
-### 💼 Other
-
-- Improved test accuracy
-- Workflow trigger
-- Added locked openssl for cross compilation
-- Bumped octocrab
-## [0.2.0] - 2025-12-26
-
 ### 🐛 Bug Fixes
 
 - Fix tracking
 - Fixing bco
 - Fix for icon in remote branches
+- Fix release
+- Fixed pipeline
 
 ### 💼 Other
 
@@ -2415,6 +2383,28 @@ All notable changes to this project will be documented in this file.
 - Improved bco
 - Tags publish
 - Bumped version
+- Improved test accuracy
+- Workflow trigger
+- Added locked openssl for cross compilation
+- Bumped octocrab
+- Clearer message when deleting merged branches
+- Updated comments on PRs
+- Rename branch command
+- New-readme
+- Re-added screenshot
+- Updated readme
+- Added tests to rename
+- Tui
+- Reorder panes
+- Edit works properly
+- Details view
+- Updated SS
+- Remote comparisons
+- Stack reorder
+- Reordering preview
+- Updated readme
+- Updated readme
+- Added screenshots
 
 ### 📚 Documentation
 
