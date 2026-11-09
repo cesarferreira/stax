@@ -553,12 +553,11 @@ impl SyncContext {
         );
 
         if self.full {
-            let fetch_args: Vec<&str> = vec!["fetch", "--prune", self.remote_name.as_str()];
-            output = Command::new("git")
-                .args(&fetch_args)
-                .current_dir(&self.workdir)
-                .output()
-                .context("Failed to fetch")?;
+            output = crate::git::command::output(
+                &self.workdir,
+                &["fetch", "--prune", self.remote_name.as_str()],
+            )
+            .context("Failed to fetch")?;
             remote_branches_for_merged = if self.delete_merged {
                 Some(
                     repo.remote_branch_names(&self.remote_name)
@@ -575,13 +574,9 @@ impl SyncContext {
             let remote_ls = self.remote_name.clone();
 
             let fetch_handle = std::thread::spawn(move || {
-                Command::new("git")
-                    .arg("fetch")
-                    .arg("--no-tags")
-                    .arg(remote_fetch)
-                    .args(fetch_refs)
-                    .current_dir(&workdir_fetch)
-                    .output()
+                let mut fetch_args = vec!["fetch", "--no-tags", remote_fetch.as_str()];
+                fetch_args.extend(fetch_refs.iter().map(String::as_str));
+                crate::git::command::output(&workdir_fetch, &fetch_args)
             });
 
             let ls_handle =
@@ -605,13 +600,9 @@ impl SyncContext {
             }
             remote_branches_for_merged = Some(heads);
         } else if self.delete_merged {
-            output = Command::new("git")
-                .arg("fetch")
-                .arg("--no-tags")
-                .arg(self.remote_name.as_str())
-                .args(&fetch_refs)
-                .current_dir(&self.workdir)
-                .output()
+            let mut fetch_args = vec!["fetch", "--no-tags", self.remote_name.as_str()];
+            fetch_args.extend(fetch_refs.iter().map(String::as_str));
+            output = crate::git::command::output(&self.workdir, &fetch_args)
                 .context("Failed to fetch")?;
             let heads = remote_heads_for_extra_fetch.expect("remote heads checked for extra refs");
             if output.status.success() {
@@ -624,13 +615,9 @@ impl SyncContext {
             }
             remote_branches_for_merged = Some(heads);
         } else {
-            output = Command::new("git")
-                .arg("fetch")
-                .arg("--no-tags")
-                .arg(self.remote_name.as_str())
-                .args(&fetch_refs)
-                .current_dir(&self.workdir)
-                .output()
+            let mut fetch_args = vec!["fetch", "--no-tags", self.remote_name.as_str()];
+            fetch_args.extend(fetch_refs.iter().map(String::as_str));
+            output = crate::git::command::output(&self.workdir, &fetch_args)
                 .context("Failed to fetch")?;
             remote_branches_for_merged = None;
         }
