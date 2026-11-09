@@ -55,6 +55,7 @@
 
 [sync]
 # confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
+# ci_history_interval_days = 3 # record merged-branch CI timings during sync at most once per N days (0 = every sync)
 
 [skills]
 # harnesses = ["claude", "codex"] # which agent harnesses get skill files

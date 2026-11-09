@@ -117,12 +117,21 @@ pub struct SyncConfig {
     /// worktree still prompt.
     #[serde(default = "default_true")]
     pub confirm_delete: bool,
+    /// Record merged-branch CI timings during sync at most once per this many
+    /// days (default: 3). `0` records on every sync.
+    #[serde(default = "default_ci_history_interval_days")]
+    pub ci_history_interval_days: u64,
+}
+
+fn default_ci_history_interval_days() -> u64 {
+    3
 }
 
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
             confirm_delete: true,
+            ci_history_interval_days: default_ci_history_interval_days(),
         }
     }
 }

@@ -8974,6 +8974,196 @@ mod forge_mock_tests {
         }
     }
 
+    fn ci_history_stamp_path(repo: &TestRepo) -> PathBuf {
+        repo.path().join(".git/stax/ci-history-sync.json")
+    }
+
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs()
+    }
+
+    fn write_ci_history_stamp(repo: &TestRepo, last_recorded_at: u64) {
+        let path = ci_history_stamp_path(repo);
+        fs::create_dir_all(path.parent().expect("stamp parent")).expect("create stax dir");
+        fs::write(
+            &path,
+            format!("{{\"last_recorded_at\": {last_recorded_at}}}\n"),
+        )
+        .expect("write stamp");
+    }
+
+    fn read_ci_history_stamp(repo: &TestRepo) -> Option<u64> {
+        let raw = fs::read_to_string(ci_history_stamp_path(repo)).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        value["last_recorded_at"].as_u64()
+    }
+
+    fn ci_history_refs(repo: &TestRepo) -> String {
+        TestRepo::stdout(&repo.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/stax/ci-history",
+        ]))
+    }
+
+    fn append_sync_interval_config(home: &Path, interval_days: u64) {
+        let config_path = home.join(".config").join("stax").join("config.toml");
+        let mut config = fs::read_to_string(&config_path).expect("read config");
+        config.push_str(&format!(
+            "\n[sync]\nci_history_interval_days = {interval_days}\n"
+        ));
+        fs::write(&config_path, config).expect("write config");
+    }
+
+    #[tokio::test]
+    async fn sync_records_ci_history_and_writes_stamp() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert!(!ci_history_refs(&repo).trim().is_empty());
+        let stamp = read_ci_history_stamp(&repo).expect("stamp written after recording");
+        assert!(
+            stamp.abs_diff(unix_now()) <= 120,
+            "stamp {stamp} is not near now"
+        );
+        assert!(
+            !repo
+                .list_branches()
+                .contains(&"feature-ci-history-trace".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_throttles_ci_history_when_recently_recorded() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+        let recent = unix_now() - 60;
+        write_ci_history_stamp(&repo, recent);
+
+        let output = run_stax_with_env(&repo, home.path(), &["--trace", "rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let stdout = TestRepo::stdout(&output);
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            !stdout.contains("Record CI history"),
+            "throttled sync must not record:\n{stdout}"
+        );
+        assert!(!has_phase_duration(&stderr, "fetch_ci_statuses"));
+        assert!(!has_phase_duration(&stderr, "record_ci_history"));
+        assert!(
+            has_phase_duration(&stderr, "record_ci_history_throttled"),
+            "missing throttle phase:\n{stderr}"
+        );
+        let requests = server.received_requests().await.unwrap_or_default();
+        assert!(
+            requests.iter().all(|r| {
+                !r.url.path().contains("/check-runs") && !r.url.path().contains("/statuses")
+            }),
+            "throttled sync must not fetch CI"
+        );
+        assert!(ci_history_refs(&repo).trim().is_empty());
+        assert_eq!(read_ci_history_stamp(&repo), Some(recent));
+        assert!(
+            !repo
+                .list_branches()
+                .contains(&"feature-ci-history-trace".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_records_ci_history_when_stamp_is_stale() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+        let stale = unix_now() - 4 * 86_400;
+        write_ci_history_stamp(&repo, stale);
+
+        let output = run_stax_with_env(&repo, home.path(), &["rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert!(!ci_history_refs(&repo).trim().is_empty());
+        let stamp = read_ci_history_stamp(&repo).expect("stamp");
+        assert!(
+            stamp > stale,
+            "stamp should advance past {stale}, got {stamp}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_records_ci_history_when_stamp_is_in_the_future() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+        write_ci_history_stamp(&repo, unix_now() + 30 * 86_400);
+
+        let output = run_stax_with_env(&repo, home.path(), &["rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert!(!ci_history_refs(&repo).trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_ci_history_interval_zero_records_every_sync() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        append_sync_interval_config(home.path(), 0);
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+        write_ci_history_stamp(&repo, unix_now());
+
+        let output = run_stax_with_env(&repo, home.path(), &["rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert!(!ci_history_refs(&repo).trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_ci_history_fetch_failure_does_not_stamp() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/test/repo/commits/{branch_sha}/check-runs"
+            )))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert!(TestRepo::stdout(&output).contains("skipped (couldn't fetch)"));
+        assert!(
+            !ci_history_stamp_path(&repo).exists(),
+            "failed fetch must not stamp"
+        );
+        assert!(
+            !repo
+                .list_branches()
+                .contains(&"feature-ci-history-trace".to_string())
+        );
+    }
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum StackMergeForge {
         GitHub,
@@ -17727,6 +17917,172 @@ exit 1
             }),
             "Sync PR metadata refresh must not scan the repo-wide open PR list"
         );
+    }
+
+    fn branch_metadata_oid(repo: &TestRepo, branch: &str) -> String {
+        TestRepo::stdout(&repo.git(&["rev-parse", &format!("refs/branch-metadata/{branch}")]))
+            .trim()
+            .to_string()
+    }
+
+    fn branch_metadata_json(repo: &TestRepo, branch: &str) -> serde_json::Value {
+        let raw = TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{branch}")]));
+        serde_json::from_str(&raw).expect("metadata JSON")
+    }
+
+    fn stax_receipt_count(repo: &TestRepo) -> usize {
+        let ops_dir = repo.path().join(".git/stax/ops");
+        std::fs::read_dir(&ops_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    fn pull_request_gets(requests: &[wiremock::Request], pr: u64) -> usize {
+        let wanted = format!("/repos/test/repo/pulls/{pr}");
+        requests
+            .iter()
+            .filter(|r| r.method.as_str() == "GET" && r.url.path() == wanted)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn sync_refreshes_each_pr_once() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-refresh-once");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 530, Some(false));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/530"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(530, &branch, "main", "aaaa")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--force"]);
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+        let requests = mock_server.received_requests().await.unwrap_or_default();
+        assert_eq!(
+            pull_request_gets(&requests, 530),
+            1,
+            "sync must refresh each tracked PR once"
+        );
+        assert_eq!(
+            TestRepo::stdout(&output)
+                .matches("Refresh PR metadata")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_survives_missing_pr_with_a_single_request() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-refresh-404");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 531, Some(false));
+        let before = branch_metadata_oid(&repo, &branch);
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/531"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let requests = mock_server.received_requests().await.unwrap_or_default();
+        assert_eq!(pull_request_gets(&requests, 531), 1);
+        assert_eq!(branch_metadata_oid(&repo, &branch), before);
+    }
+
+    #[tokio::test]
+    async fn sync_still_applies_live_pr_state_change() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-live-change");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 532, Some(true));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/532"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(532, &branch, "main", "aaaa")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let receipts_before = stax_receipt_count(&repo);
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        assert_eq!(
+            branch_metadata_json(&repo, &branch)["prInfo"]["isDraft"],
+            serde_json::json!(false)
+        );
+        assert!(
+            stax_receipt_count(&repo) > receipts_before,
+            "a metadata change must be recorded in a receipt"
+        );
+
+        let undo = run_stax_with_env(&repo, home.path(), &["undo", "--yes"]);
+        assert!(undo.status.success(), "{}", TestRepo::stderr(&undo));
+        assert_eq!(
+            branch_metadata_json(&repo, &branch)["prInfo"]["isDraft"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_skips_unchanged_pr_metadata_rewrite() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-unchanged-meta");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 533, Some(false));
+        let oid_before = branch_metadata_oid(&repo, &branch);
+        let receipts_before = stax_receipt_count(&repo);
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/533"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(533, &branch, "main", "aaaa")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["--trace", "sync", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            !stderr.contains(&format!("update-ref refs/branch-metadata/{branch}")),
+            "unchanged metadata must not be rewritten:\n{stderr}"
+        );
+        assert_eq!(branch_metadata_oid(&repo, &branch), oid_before);
+        assert_eq!(stax_receipt_count(&repo), receipts_before);
     }
 
     /// When a PR is closed (not merged) via `gh pr close`, sync should update

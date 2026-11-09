@@ -791,6 +791,42 @@ async fn ci_surfaces_later_page_github_failure() {
     server.verify().await;
 }
 
+#[tokio::test]
+async fn ci_surfaces_statuses_failure_when_check_runs_succeed() {
+    ensure_crypto_provider();
+    let server = MockServer::start().await;
+    let repo = TestRepo::new();
+    setup_github_repo(&repo, &server.uri());
+    let (branch, sha) = tracked_branch(&repo, "feature");
+
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/test-owner/test-repo/commits/{sha}/check-runs"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 1,
+            "check_runs": [check_run("build", "completed", Some("success"))]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/test-owner/test-repo/commits/{sha}/statuses"
+        )))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_json(serde_json::json!({ "message": "server error" })),
+        )
+        .mount(&server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci"], &auth_env());
+    output
+        .assert_failure()
+        .assert_stderr_contains(&format!("Failed to fetch CI checks for branch '{branch}'"))
+        .assert_stderr_contains("Failed to fetch commit statuses");
+}
+
 #[test]
 fn ci_requires_forge_auth() {
     let repo = TestRepo::new();

@@ -106,6 +106,10 @@ single_stack = "on"    # "on" | "off"
 [sync]
 # confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
                         # (branches checked out in a linked worktree still prompt)
+# ci_history_interval_days = 3 # record CI timings of merged branches during sync at most once
+                               # per N days (0 = every sync). Sync skipped by the throttle does
+                               # not sample the branches it deletes; `st ci` and `st merge`
+                               # still record on their own. Used only for `st ci` ETAs.
 
 [skills]
 # harnesses = ["claude", "codex"] # agent harnesses that receive skill files

@@ -19,6 +19,9 @@ can overlap and their sum can exceed command wall time.
 When sync cleans up merged branches, it also reports `fetch_ci_statuses`
 (forge API calls) and `record_ci_history` (local history writes) separately.
 The `Record CI history` progress row still covers both phases.
+Merged-branch CI history recording is throttled by `[sync] ci_history_interval_days`
+(default 3). A throttled sync skips both phases and emits
+`record_ci_history_throttled` instead.
 
 ## Stack operations
 

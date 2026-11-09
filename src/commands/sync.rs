@@ -1,4 +1,4 @@
-use crate::cache::CiCache;
+use crate::cache::{CiCache, CiHistorySyncStamp, ci_history_recording_due};
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::commands::worktree::{
@@ -24,7 +24,7 @@ use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PR_METADATA_REFRESH_CONCURRENCY: usize = 8;
 
@@ -303,6 +303,7 @@ struct SyncContext {
     remote_name: String,
     remote_trunk_ref: String,
     stack: Stack,
+    pr_states_refreshed: bool,
     current: String,
     current_after_deletions: String,
     /// Branches this run detected as merged, including ones the user kept. Never a
@@ -403,6 +404,7 @@ impl SyncContext {
                 remote_name,
                 remote_trunk_ref,
                 stack,
+                pr_states_refreshed: false,
                 current,
                 current_after_deletions,
                 merged_this_run: HashSet::new(),
@@ -949,8 +951,23 @@ impl SyncContext {
             self.step_timings
                 .push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
             self.stack = Stack::load(repo)?;
+            self.pr_states_refreshed = true;
         }
         Ok(())
+    }
+
+    /// Second PR-state pass of a sync, after the trunk update.
+    ///
+    /// Between the first refresh and here stax makes no forge writes, `update_trunk`
+    /// writes only trunk, and `refresh_imported` writes only `refs/heads/*` (no
+    /// metadata), so the first pass's state is still current. Only the local stack
+    /// is reloaded; the network refresh runs here only if the first pass did not.
+    fn reconcile_pr_states_after_trunk_update(&mut self, repo: &GitRepo) -> Result<()> {
+        if self.pr_states_refreshed {
+            self.stack = Stack::load(repo)?;
+            return Ok(());
+        }
+        self.refresh_pr_states(repo)
     }
 
     /// Branches in restack order for the stack we started on (trunk excluded, frozen skipped).
@@ -1379,7 +1396,9 @@ impl SyncContext {
                 }
 
                 // Record CI history for merged branches before deleting them
-                if let Some((ref rt, ref client)) = forge_client {
+                if let Some((ref rt, ref client)) = forge_client
+                    && let Ok(cache_dir) = repo.common_git_dir()
+                {
                     record_ci_history_for_merged(
                         &repo,
                         rt,
@@ -1387,6 +1406,8 @@ impl SyncContext {
                         &merged_branch_names,
                         &self.stack,
                         self.quiet,
+                        &cache_dir,
+                        self.config.sync.ci_history_interval_days,
                     );
                 }
                 let mut deletion_decisions = Vec::new();
@@ -3173,7 +3194,7 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 
     ctx.refresh_imported(&repo)?;
 
-    ctx.refresh_pr_states(&repo)?;
+    ctx.reconcile_pr_states_after_trunk_update(&repo)?;
 
     let repo = ctx.cleanup_merged_branches(repo)?;
     // Re-check current branch since it may have changed during branch deletion
@@ -3346,28 +3367,28 @@ fn apply_live_pr_state(
             }
         }
 
-        // Only snapshot when the refresh actually rewrites the blob. Metadata is
-        // content-addressed, so an unchanged rewrite leaves the ref OID untouched --
-        // snapshotting it would turn a no-op sync into an undoable receipt and break
-        // the lazy-snapshot guard in `finish_transaction` (see
-        // sync_undo_tests::sync_that_changes_nothing_leaves_the_previous_receipt_undoable).
-        let metadata_changed = meta != before;
+        // Skip the write entirely when the parsed metadata is unchanged. An unchanged
+        // parse can still be a non-canonical blob (legacy/freephite key order, a missing
+        // `frozen`), so rewriting it would move the ref OID without a snapshot, and it
+        // costs two subprocesses per branch. Skipping keeps no-op syncs receipt-free
+        // (see sync_undo_tests::sync_that_changes_nothing_leaves_the_previous_receipt_undoable).
+        if meta != before {
+            if let Some(tx) = tx.as_deref_mut() {
+                tx.plan_metadata_ref(repo, branch_name)?;
+                tx.snapshot()?;
+            }
 
-        if metadata_changed && let Some(tx) = tx.as_deref_mut() {
-            tx.plan_metadata_ref(repo, branch_name)?;
-            tx.snapshot()?;
-        }
+            let _ = meta.write(repo.inner(), branch_name);
 
-        let _ = meta.write(repo.inner(), branch_name);
-
-        if metadata_changed && let Some(tx) = tx {
-            // Metadata refs are written by `git update-ref` (subprocess); libgit2's
-            // cached refdb may not see them, so resolve the after-OID the same way
-            // `cleanup_merged_branches` does (see `record_known_after`'s doc comment).
-            let meta_after = repo.workdir().ok().and_then(|workdir| {
-                resolve_ref_oid(workdir, &format!("refs/branch-metadata/{}", branch_name))
-            });
-            tx.record_known_metadata_after(branch_name, meta_after.as_deref());
+            if let Some(tx) = tx {
+                // Metadata refs are written by `git update-ref` (subprocess); libgit2's
+                // cached refdb may not see them, so resolve the after-OID the same way
+                // `cleanup_merged_branches` does (see `record_known_after`'s doc comment).
+                let meta_after = repo.workdir().ok().and_then(|workdir| {
+                    resolve_ref_oid(workdir, &format!("refs/branch-metadata/{}", branch_name))
+                });
+                tx.record_known_metadata_after(branch_name, meta_after.as_deref());
+            }
         }
     }
 
@@ -4717,7 +4738,14 @@ fn reparent_children_for_deletion(
     Ok(())
 }
 
-/// Record CI history for merged branches before they are deleted
+/// Record CI history for merged branches before they are deleted.
+///
+/// Throttled to once per `interval_days` (per repo, via `CiHistorySyncStamp`); the
+/// stamp advances only after a successful fetch. A throttled sync permanently skips
+/// samples for the branches it deletes. That is accepted: the history is a 20-run
+/// rolling window used only for averages and ETAs, and `st ci` / `st merge` record
+/// independently.
+#[allow(clippy::too_many_arguments)]
 fn record_ci_history_for_merged(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
@@ -4725,6 +4753,8 @@ fn record_ci_history_for_merged(
     merged_branches: &[String],
     stack: &Stack,
     quiet: bool,
+    cache_dir: &Path,
+    interval_days: u64,
 ) {
     // Only process branches that still exist locally (can get their commit SHA)
     let branches_to_check: Vec<String> = merged_branches
@@ -4734,6 +4764,19 @@ fn record_ci_history_for_merged(
         .collect();
 
     if branches_to_check.is_empty() {
+        return;
+    }
+
+    let throttle_started_at = Instant::now();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    if !ci_history_recording_due(CiHistorySyncStamp::load(cache_dir), now, interval_days) {
+        crate::git::command::trace_phase(
+            "record_ci_history_throttled",
+            throttle_started_at.elapsed(),
+        );
         return;
     }
 
@@ -4747,6 +4790,7 @@ fn record_ci_history_for_merged(
             let write_started_at = Instant::now();
             record_ci_history(repo, &statuses);
             crate::git::command::trace_phase("record_ci_history", write_started_at.elapsed());
+            let _ = CiHistorySyncStamp::record(cache_dir, now);
             LiveTimer::maybe_finish_timed(ci_timer);
         }
         Err(_) => {
@@ -5639,6 +5683,54 @@ mod tests {
                 .any(|e| e.branch == "branch-b@meta")
         );
     }
+    #[test]
+    fn apply_live_pr_state_keeps_noncanonical_unchanged_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let main_oid = init_repo_with_two_branches(path);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        repo.set_trunk("main").unwrap();
+        let noncanonical = format!(
+            "{{\"parentBranchRevision\":\"{main_oid}\",\"parentBranchName\":\"branch-a\"}}"
+        );
+        crate::git::refs::write_metadata(repo.inner(), "branch-b", &noncanonical).unwrap();
+
+        let stack = Stack::load(&repo).unwrap();
+        let cache_dir = repo.common_git_dir().unwrap();
+        std::fs::create_dir_all(path.join(".git/stax/ops")).unwrap();
+
+        let rev_parse = || {
+            let output = Command::new("git")
+                .args(["rev-parse", "refs/branch-metadata/branch-b"])
+                .current_dir(path)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        let before = rev_parse();
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+        let live_pr = ForgePrInfo {
+            number: 1,
+            state: "OPEN".to_string(),
+            is_draft: false,
+            base: "branch-a".to_string(),
+        };
+        apply_live_pr_state(
+            &repo,
+            &stack,
+            &cache_dir,
+            "branch-b",
+            &live_pr,
+            Some(&mut tx),
+        )
+        .unwrap();
+
+        assert_eq!(rev_parse(), before, "unchanged metadata must keep its OID");
+        assert!(!tx.is_snapshotted());
+    }
+
     fn stack_of(edges: &[(&str, &[&str])], merged: &[&str]) -> Stack {
         let mut branches = HashMap::new();
         for (name, children) in edges {
