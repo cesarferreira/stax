@@ -46,6 +46,8 @@ make test                    # full suite; see rules below
 - Do not run the full suite via `cargo test` in this repo.
 - For full-suite validation, always use `make test`.
 - On macOS, `make test` intentionally routes to the Docker fast path.
+- **On Linux, do not use Docker for tests.** `make test` already runs the suite natively via `make test-local-fast`, and the native Linux filesystem is the fast one. Use `make test-docker` on Linux only to reproduce CI's container environment.
+- If the interactive PTY tests (`test_sync_interactive_*`) time out natively on Linux, run `which -a script`. A non-system `script` (for example linuxbrew's) ahead of `/usr/bin/script` breaks them. Fix `PATH` instead of switching to Docker.
 - Use native paths only when explicitly needed:
   - `make test-native` (guarded nextest path; validates the file-descriptor limit)
   - `make test-local-ramdisk`
