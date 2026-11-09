@@ -111,6 +111,14 @@ single_stack = "on"    # "on" | "off"
                                # not sample the branches it deletes; `st ci` and `st merge`
                                # still record on their own. Used only for `st ci` ETAs.
 
+[undo]
+# auto_prune = true # during `st sync`, at most once a day, delete old successful undo
+                    # receipts and their backup refs
+# keep_last = 50    # always keep the newest N operations (minimum 1; the newest is the
+                    # `st undo` / `st redo` target)
+# keep_days = 14    # always keep operations younger than N days (0 = age never protects one)
+                    # Failed and in-progress operations are never pruned automatically.
+
 [skills]
 # harnesses = ["claude", "codex"] # agent harnesses that receive skill files
 #   valid ids: claude, codex, cursor, hermes, opencode, pi. Unset = auto (detected + already installed).

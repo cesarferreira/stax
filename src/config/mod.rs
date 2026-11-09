@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub sync: SyncConfig,
     #[serde(default)]
+    pub undo: UndoConfig,
+    #[serde(default)]
     pub skills: SkillsConfig,
     #[serde(default)]
     pub board: BoardConfig,
@@ -132,6 +134,41 @@ impl Default for SyncConfig {
         Self {
             confirm_delete: true,
             ci_history_interval_days: default_ci_history_interval_days(),
+        }
+    }
+}
+
+/// Retention of undo receipts and their backup refs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UndoConfig {
+    /// During `st sync`, at most once a day, delete old successful undo
+    /// receipts and their backup refs (default: true).
+    #[serde(default = "default_true")]
+    pub auto_prune: bool,
+    /// Always keep the newest N operations (default: 50). Values below 1 are
+    /// treated as 1.
+    #[serde(default = "default_undo_keep_last")]
+    pub keep_last: usize,
+    /// Always keep operations younger than this many days (default: 14).
+    /// `0` means age never protects an operation.
+    #[serde(default = "default_undo_keep_days")]
+    pub keep_days: u64,
+}
+
+fn default_undo_keep_last() -> usize {
+    50
+}
+
+fn default_undo_keep_days() -> u64 {
+    14
+}
+
+impl Default for UndoConfig {
+    fn default() -> Self {
+        Self {
+            auto_prune: true,
+            keep_last: default_undo_keep_last(),
+            keep_days: default_undo_keep_days(),
         }
     }
 }

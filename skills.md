@@ -58,7 +58,7 @@ stax split                     # Interactive branch split into stack
 
 stax continue|cont             # Continue after conflict resolution
 stax abort                     # Abort in-progress rebase/conflict flow
-stax undo [op-id]              # Undo last/specific operation — covers restack, submit, sync (trunk ff + deletions + reparents + restack phase)
+stax undo [op-id]              # Undo last/specific operation — covers restack, submit, sync (deletions + reparents + restack phase; trunk is recorded only with other changes or on reset/diverged, an ff-only sync is not recorded)
 stax redo [op-id]              # Redo last/specific undone operation
 
 stax pr                        # Open current branch PR
@@ -375,7 +375,7 @@ stax sync --get                    # Before restacking, fetch each branch of the
 # Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
 # If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
 # If cleanup deletes the branch you are on, sync checks out the next branch of that stack (first unmerged descendant, branch-name order on forks) instead of trunk, so `stax refresh` carries on with the rest of the stack; it stays on trunk if nothing is left above or the child is checked out in another worktree.
-# sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
+# sync is transactional: merged/gone branch deletions, reparented-child metadata, and the optional restack phase are covered by one receipt, which also records trunk when trunk was reset/diverged or the sync changed anything else. A no-op sync and a sync whose only change is a trunk fast-forward write no receipt, so the previous undoable operation remains on the undo stack. Old successful receipts and their backup refs are auto-pruned during sync, at most once a day (`[undo] keep_last`/`keep_days`/`auto_prune`; failed and in-progress ops are never pruned). Recover any sync run with `stax undo`.
 # --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; error message names --stash; stax sync --json --stash succeeds on a dirty tree (stashes before sync, restores after); --json conflicts with --continue.
 # trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 

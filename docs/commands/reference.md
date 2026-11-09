@@ -427,7 +427,7 @@ For `--queue`, the timeout is a real deadline: stax caps the final sleep to the 
 | `error.kind` | `string` | `dirty_working_tree` · `restack_conflict` · `error` |
 
 - On early-bail paths (e.g. dirty working tree in non-interactive mode) and on restack-conflict paths where finalize never runs, `trunk.action` is `"unknown"` — this is intentional.
-- Sync is transactional and undoable via `st undo`. A single receipt covers trunk fast-forwards, deleted branch heads, deleted metadata refs, reparented children's metadata, and the optional restack phase. A no-op sync (nothing changed) writes no receipt so the previous undoable operation remains on the undo stack.
+- Sync is transactional and undoable via `st undo`. A single receipt covers trunk fast-forwards, deleted branch heads, deleted metadata refs, reparented children's metadata, and the optional restack phase. A no-op sync (nothing changed) writes no receipt so the previous undoable operation remains on the undo stack, and so does a sync whose only change is a pure trunk fast-forward (no commits are lost, so no backup refs are created). Trunk is recorded when the same sync also changes something else, or when trunk was reset or had diverged. Sync also prunes old successful receipts and their backup refs at most once a day, per `[undo]` in the config.
 - Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.
 - When cleanup deletes the branch you are on, sync continues on the next branch of that stack — the first unmerged descendant, in `st next` order (branch-name order on forks) — instead of dropping you on trunk, so `st refresh` goes on to restack and submit the rest of the stack. It stays on trunk when nothing is left above, and when that branch is checked out in another worktree it prints a notice and stays on trunk. The confirmation prompt names the branch it will check out.
@@ -569,6 +569,7 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 ### `st undo` / `st redo`
 
 - `--yes` / `--no-push` / `--quiet`
+- Old successful operations are pruned during `st sync`; see [Undo and redo](../safety/undo-redo.md#retention) and the `[undo]` config (`auto_prune`, `keep_last`, `keep_days`).
 
 ### `st absorb`
 
