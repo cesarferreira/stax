@@ -530,6 +530,39 @@ impl SyncContext {
         tx.finish_ok()
     }
 
+    /// Throttled retention pruning of old undo receipts and their backup refs.
+    ///
+    /// Never fails the sync and stays silent unless `--verbose`.
+    fn maybe_prune_undo_history(&mut self, repo: &GitRepo) {
+        if !self.config.undo.auto_prune {
+            return;
+        }
+        let Ok(git_dir) = repo.git_dir() else {
+            return;
+        };
+        let started_at = Instant::now();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        let policy = crate::ops::prune::PrunePolicy::from(&self.config.undo);
+        match crate::ops::prune::maybe_prune(git_dir, &self.workdir, &policy, now) {
+            Ok(Some(report)) => {
+                self.step_timings
+                    .push(("prune undo history".to_string(), started_at.elapsed()));
+                if self.verbose && !self.quiet && report.pruned > 0 {
+                    eprintln!("  ▸ Pruned {} old undo operations", report.pruned);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                if self.verbose && !self.quiet {
+                    eprintln!("  ▸ Skipped pruning old undo operations: {e:#}");
+                }
+            }
+        }
+    }
+
     fn fetch_remote(&mut self, repo: &GitRepo) -> Result<()> {
         // 1. Fetch from remote
         // Default: trunk-only fetch + `ls-remote --heads` in parallel (fast on large repos).
@@ -786,10 +819,16 @@ impl SyncContext {
         Ok(())
     }
 
-    /// Snapshot the trunk branch in the sync transaction before we touch it.
+    /// Plan the trunk branch in the sync transaction before we touch it.
     ///
     /// Idempotent: returns immediately if already planned, or if local and
     /// remote already agree (nothing will change).
+    ///
+    /// A pure fast-forward is only planned, not backed up: it loses no commits, so on
+    /// its own it must not create a receipt or backup refs. If a later phase snapshots
+    /// the transaction, that snapshot backs up every planned ref, trunk included. If the
+    /// transaction is already snapshotted, trunk is backed up right away so the receipt
+    /// stays complete. Anything that is not a pure fast-forward snapshots immediately.
     fn plan_trunk_move(&mut self, repo: &GitRepo, dir: &Path) -> Result<()> {
         if self.trunk_planned {
             return Ok(());
@@ -801,9 +840,16 @@ impl SyncContext {
         if local_oid.is_some() && local_oid == remote_oid {
             return Ok(());
         }
+        let fast_forward = match (&local_oid, &remote_oid) {
+            (None, Some(_)) => true,
+            (Some(local), Some(remote)) => trunk_move_is_fast_forward(repo, local, remote),
+            _ => false,
+        };
         if let Some(ref mut tx) = self.tx {
             tx.plan_branch(repo, &trunk_name)?;
-            tx.snapshot()?;
+            if !fast_forward || tx.is_snapshotted() {
+                tx.snapshot()?;
+            }
         }
         self.trunk_planned = true;
         Ok(())
@@ -857,6 +903,11 @@ impl SyncContext {
                 "diverged (local has commits not on remote; rebase or reset trunk manually)",
             );
         } else {
+            // A hard reset discards trunk-worktree changes, so promote the deferred
+            // fast-forward entry to a real backup first.
+            if let Some(ref mut tx) = self.tx {
+                tx.snapshot()?;
+            }
             let reset_output = Command::new("git")
                 .args(["reset", "--hard", &self.remote_trunk_ref])
                 .current_dir(dir)
@@ -3217,6 +3268,8 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
     let current_after = ctx.current_after_deletions.clone();
     ctx.finish_transaction(&current_after)?;
 
+    ctx.maybe_prune_undo_history(&repo);
+
     ctx.finalize(trunk_stats_worker)?;
 
     Ok(())
@@ -5059,6 +5112,20 @@ fn restore_stashed_changes(repo: &GitRepo, stashed: bool, quiet: bool) -> Result
     Ok(())
 }
 
+/// True when moving trunk from `local` to `remote` only adds commits (equal, or
+/// `local` is an ancestor of `remote`). Any parse or lookup failure returns false so the
+/// caller falls back to snapshotting.
+fn trunk_move_is_fast_forward(repo: &GitRepo, local: &str, remote: &str) -> bool {
+    let (Ok(local), Ok(remote)) = (git2::Oid::from_str(local), git2::Oid::from_str(remote)) else {
+        return false;
+    };
+    local == remote
+        || repo
+            .inner()
+            .graph_descendant_of(remote, local)
+            .unwrap_or(false)
+}
+
 pub(super) fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
     Command::new("git")
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
@@ -5579,6 +5646,42 @@ mod tests {
             .output()
             .expect("git");
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn trunk_move_is_fast_forward_classifies_ancestry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let first = init_repo_with_two_branches(path);
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(&["checkout", "-b", "ahead"]);
+        std::fs::write(path.join("f.txt"), "b").unwrap();
+        run(&["commit", "-am", "second"]);
+        let ahead = run(&["rev-parse", "HEAD"]);
+        run(&["checkout", "branch-a"]);
+        std::fs::write(path.join("g.txt"), "c").unwrap();
+        run(&["add", "g.txt"]);
+        run(&["commit", "-m", "diverge"]);
+        let diverged = run(&["rev-parse", "HEAD"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        assert!(trunk_move_is_fast_forward(&repo, &first, &ahead));
+        assert!(trunk_move_is_fast_forward(&repo, &first, &first));
+        assert!(!trunk_move_is_fast_forward(&repo, &ahead, &first));
+        assert!(!trunk_move_is_fast_forward(&repo, &diverged, &ahead));
+        assert!(!trunk_move_is_fast_forward(&repo, "not-an-oid", &ahead));
+        assert!(!trunk_move_is_fast_forward(
+            &repo,
+            &first,
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
     }
 
     #[test]

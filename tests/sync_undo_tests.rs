@@ -278,28 +278,122 @@ fn sync_that_changes_nothing_leaves_the_previous_receipt_undoable() {
     );
 }
 
+// ─── Fast-forward-only sync and retention helpers ────────────────────────────
+
+/// Helper: count refs under `refs/stax/backups/`.
+fn backup_ref_count(repo: &TestRepo) -> usize {
+    let out = repo.git(&["for-each-ref", "--format=%(refname)", "refs/stax/backups/"]);
+    TestRepo::stdout(&out).lines().count()
+}
+
+/// Helper: list all refs under `refs/stax/backups/`.
+fn backup_refs(repo: &TestRepo) -> Vec<String> {
+    let out = repo.git(&["for-each-ref", "--format=%(refname)", "refs/stax/backups/"]);
+    TestRepo::stdout(&out)
+        .lines()
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Helper: id of the lexically newest receipt, if any.
+fn latest_receipt_id(repo: &TestRepo) -> Option<String> {
+    let ops_dir = repo.path().join(".git/stax/ops");
+    let mut ids: Vec<String> = std::fs::read_dir(&ops_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".json").map(|s| s.to_string())
+        })
+        .collect();
+    ids.sort();
+    ids.pop()
+}
+
+fn receipt_path(repo: &TestRepo, id: &str) -> std::path::PathBuf {
+    repo.path().join(format!(".git/stax/ops/{id}.json"))
+}
+
+fn read_receipt(repo: &TestRepo, id: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(receipt_path(repo, id)).expect("read receipt");
+    serde_json::from_str(&text).expect("parse receipt")
+}
+
+/// Helper: write the user stax config used by the child processes.
+fn write_undo_config(repo: &TestRepo, toml: &str) {
+    let home = std::path::PathBuf::from(repo.clean_home());
+    std::fs::write(home.join(".config").join("stax").join("config.toml"), toml)
+        .expect("write stax config");
+}
+
+/// Helper: a feature branch pushed to origin, left checked out (trunk not checked out).
+fn feature_pushed(repo: &TestRepo, name: &str) -> String {
+    repo.run_stax(&["bc", name]);
+    let feature = repo.current_branch();
+    repo.create_file(&format!("{name}.txt"), "feature");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &feature]);
+    feature
+}
+
+/// Helper: produce one real restack receipt and return the feature branch.
+/// Trunk is pushed so a later remote commit is a pure fast-forward.
+fn make_real_receipt(repo: &TestRepo) -> String {
+    repo.run_stax(&["bc", "feature-real"]);
+    let feature = repo.current_branch();
+    repo.create_file("feature-real.txt", "feature");
+    repo.commit("Feature commit");
+
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+    repo.git(&["push", "origin", "main"]);
+
+    repo.run_stax(&["checkout", &feature]);
+    let out = repo.run_stax(&["restack", "--quiet"]);
+    assert!(
+        out.status.success(),
+        "restack failed: {}",
+        TestRepo::stderr(&out)
+    );
+    feature
+}
+
+/// Helper: write a fabricated receipt (copied from `template_id`) plus a backup ref.
+fn fabricate_receipt(repo: &TestRepo, template_id: &str, id: &str, status: &str, with_ref: bool) {
+    let mut json = read_receipt(repo, template_id);
+    json["op_id"] = serde_json::Value::String(id.to_string());
+    json["status"] = serde_json::Value::String(status.to_string());
+    std::fs::write(
+        receipt_path(repo, id),
+        serde_json::to_string_pretty(&json).expect("serialize receipt"),
+    )
+    .expect("write fabricated receipt");
+    if with_ref {
+        let sha = repo.get_commit_sha("main");
+        let out = repo.git(&["update-ref", &format!("refs/stax/backups/{id}/main"), &sha]);
+        assert!(out.status.success(), "update-ref failed");
+    }
+}
+
+fn prune_stamp_path(repo: &TestRepo) -> std::path::PathBuf {
+    repo.path().join(".git/stax/ops-prune.json")
+}
+
 // ─── Test 4 ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn sync_undo_restores_trunk_after_fast_forward() {
+fn fast_forward_only_sync_off_trunk_writes_no_receipt_or_backup_refs() {
     let repo = TestRepo::new_with_remote();
-
-    // Capture trunk SHA before any remote changes.
     let trunk_sha_before = repo.get_commit_sha("main");
-
-    // Create feature and push it (not on trunk).
-    repo.run_stax(&["bc", "feature-ff"]);
-    let feature = repo.current_branch();
-    repo.create_file("feature.txt", "feature");
-    repo.commit("Feature commit");
-    repo.git(&["push", "-u", "origin", &feature]);
-
-    // Simulate a remote commit on trunk (so sync has to fast-forward trunk).
+    feature_pushed(&repo, "feature-ff");
     repo.simulate_remote_commit("remote-main.txt", "from remote", "Remote main commit");
 
-    // Checkout feature so we're NOT on trunk — this exercises the non-checkout
-    // path (bare git update-ref fast-forward), which is where plan_trunk_move is
-    // called in that code branch.
+    let receipts_before = receipt_count(&repo);
+    let backups_before = backup_ref_count(&repo);
+    let latest_before = latest_receipt_id(&repo);
+
+    // Feature is checked out, so trunk moves through the bare update-ref path.
     let sync_out = repo.run_stax(&["sync", "--force"]);
     assert!(
         sync_out.status.success(),
@@ -307,24 +401,341 @@ fn sync_undo_restores_trunk_after_fast_forward() {
         TestRepo::stderr(&sync_out)
     );
 
-    let trunk_sha_after_sync = repo.get_commit_sha("main");
     assert_ne!(
-        trunk_sha_before, trunk_sha_after_sync,
+        trunk_sha_before,
+        repo.get_commit_sha("main"),
         "trunk should have moved during sync"
     );
+    assert_eq!(receipt_count(&repo), receipts_before, "no receipt expected");
+    assert_eq!(
+        backup_ref_count(&repo),
+        backups_before,
+        "no backup refs expected"
+    );
+    assert_eq!(latest_receipt_id(&repo), latest_before);
+    let stdout = TestRepo::stdout(&sync_out);
+    assert!(
+        !stdout.contains("Backup refs created"),
+        "unexpected backup message: {stdout}"
+    );
+}
 
-    // Undo — should restore trunk to its pre-sync SHA.
-    let undo_out = repo.run_stax(&["undo", "--yes"]);
+#[test]
+fn fast_forward_only_sync_on_trunk_keeps_previous_receipt_latest() {
+    let repo = TestRepo::new_with_remote();
+    make_real_receipt(&repo);
+    repo.simulate_remote_commit("remote-main.txt", "from remote", "Remote main commit");
+    repo.run_stax(&["t"]);
+
+    let receipts_before = receipt_count(&repo);
+    let backups_before = backup_ref_count(&repo);
+    let latest_before = latest_receipt_id(&repo).expect("restack receipt");
+    let trunk_before = repo.get_commit_sha("main");
+
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+    let trunk_after_sync = repo.get_commit_sha("main");
+    assert_ne!(trunk_before, trunk_after_sync, "trunk should have moved");
+    assert_eq!(receipt_count(&repo), receipts_before);
+    assert_eq!(backup_ref_count(&repo), backups_before);
+    assert_eq!(
+        latest_receipt_id(&repo).as_deref(),
+        Some(latest_before.as_str())
+    );
+    assert!(!TestRepo::stdout(&sync_out).contains("Backup refs created"));
+
+    // Undo targets the previous operation (the restack), not trunk.
+    let undo_out = repo.run_stax(&["undo", "--yes", "--no-push"]);
     assert!(
         undo_out.status.success(),
         "undo failed: {}",
         TestRepo::stderr(&undo_out)
     );
-
-    let trunk_sha_after_undo = repo.get_commit_sha("main");
     assert_eq!(
-        trunk_sha_before, trunk_sha_after_undo,
-        "undo should restore trunk to its pre-sync SHA"
+        repo.get_commit_sha("main"),
+        trunk_after_sync,
+        "undo must not roll trunk back after a fast-forward-only sync"
+    );
+}
+
+#[test]
+fn fast_forward_only_sync_with_trunk_in_linked_worktree_writes_no_receipt() {
+    let repo = TestRepo::new_with_remote();
+    feature_pushed(&repo, "feature-wt");
+    repo.simulate_remote_commit("remote-main.txt", "from remote", "Remote main commit");
+
+    let wt_parent = tempfile::TempDir::new().expect("tempdir");
+    let wt = wt_parent.path().join("trunk-wt");
+    let add = repo.git(&["worktree", "add", wt.to_str().expect("utf8"), "main"]);
+    assert!(
+        add.status.success(),
+        "worktree add failed: {}",
+        TestRepo::stderr(&add)
+    );
+
+    let trunk_before = repo.get_commit_sha("main");
+    let receipts_before = receipt_count(&repo);
+    let backups_before = backup_ref_count(&repo);
+
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+
+    assert_ne!(
+        trunk_before,
+        repo.get_commit_sha("main"),
+        "trunk should advance"
+    );
+    assert!(
+        wt.join("remote-main.txt").exists(),
+        "trunk worktree should have been fast-forwarded"
+    );
+    assert_eq!(receipt_count(&repo), receipts_before);
+    assert_eq!(backup_ref_count(&repo), backups_before);
+    assert!(!TestRepo::stdout(&sync_out).contains("Backup refs created"));
+}
+
+#[test]
+fn sync_fast_forward_with_destructive_work_records_trunk_in_receipt() {
+    let repo = TestRepo::new_with_remote();
+    let trunk_sha_before = repo.get_commit_sha("main");
+    let feature = feature_pushed(&repo, "feature-rec");
+    repo.run_stax(&["t"]);
+    repo.merge_branch_on_remote(&feature);
+    repo.git(&["pull", "origin", "main"]);
+    repo.simulate_remote_commit("remote-trunk.txt", "from remote", "Remote trunk commit");
+    let trunk_sha_before_sync = repo.get_commit_sha("main");
+    assert_ne!(trunk_sha_before, trunk_sha_before_sync);
+    repo.run_stax(&["checkout", &feature]);
+
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+    assert!(TestRepo::stdout(&sync_out).contains("Backup refs created"));
+
+    let id = latest_receipt_id(&repo).expect("sync receipt");
+    let receipt = read_receipt(&repo, &id);
+    let main_entry = receipt["local_refs"]
+        .as_array()
+        .expect("local_refs")
+        .iter()
+        .find(|e| e["branch"] == "main")
+        .expect("trunk entry in receipt")
+        .clone();
+    assert_eq!(
+        main_entry["oid_before"].as_str(),
+        Some(trunk_sha_before_sync.as_str()),
+        "trunk entry must carry the pre-sync OID"
+    );
+    assert!(
+        resolve_ref(&repo, &format!("refs/stax/backups/{id}/main")).is_some(),
+        "trunk backup ref should exist"
+    );
+}
+
+#[test]
+fn sync_with_diverged_trunk_still_snapshots() {
+    let repo = TestRepo::new_with_remote();
+    feature_pushed(&repo, "feature-div");
+    repo.run_stax(&["t"]);
+    repo.create_file("local-only.txt", "local");
+    repo.commit("Local only trunk commit");
+    repo.simulate_remote_commit("remote-main.txt", "from remote", "Remote main commit");
+
+    let receipts_before = receipt_count(&repo);
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+    assert_eq!(
+        receipt_count(&repo),
+        receipts_before + 1,
+        "a diverged trunk keeps the conservative snapshot"
+    );
+}
+
+#[test]
+fn sync_resetting_dirty_linked_worktree_trunk_snapshots_first() {
+    let repo = TestRepo::new_with_remote();
+    repo.create_file("tracked.txt", "base\n");
+    repo.commit("Add tracked file");
+    repo.git(&["push", "origin", "main"]);
+    feature_pushed(&repo, "feature-reset");
+
+    let wt_parent = tempfile::TempDir::new().expect("tempdir");
+    let wt = wt_parent.path().join("trunk-wt");
+    let add = repo.git(&["worktree", "add", wt.to_str().expect("utf8"), "main"]);
+    assert!(
+        add.status.success(),
+        "worktree add failed: {}",
+        TestRepo::stderr(&add)
+    );
+    std::fs::write(wt.join("tracked.txt"), "dirty\n").expect("dirty tracked file");
+
+    repo.simulate_remote_commit("tracked.txt", "remote\n", "Remote edits tracked");
+    let receipts_before = receipt_count(&repo);
+
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+    assert_eq!(
+        receipt_count(&repo),
+        receipts_before + 1,
+        "reset of the trunk worktree must snapshot first"
+    );
+    assert!(TestRepo::stdout(&sync_out).contains("Backup refs created"));
+    let id = latest_receipt_id(&repo).expect("receipt");
+    let receipt = read_receipt(&repo, &id);
+    assert!(
+        receipt["local_refs"]
+            .as_array()
+            .expect("local_refs")
+            .iter()
+            .any(|e| e["branch"] == "main"),
+        "receipt should contain the trunk entry"
+    );
+}
+
+// ─── Retention ───────────────────────────────────────────────────────────────
+
+const OLD_A: &str = "20200101T000000Z-aaaaa1";
+const OLD_B: &str = "20200101T000000Z-aaaaa2";
+const OLD_FAILED: &str = "20200101T000000Z-aaaaa3";
+const OLD_PROGRESS: &str = "20200101T000000Z-aaaaa4";
+const ORPHAN: &str = "20200101T000000Z-ffffff";
+
+#[test]
+fn sync_prunes_old_successful_receipts_and_their_backup_refs() {
+    let repo = TestRepo::new_with_remote();
+    write_undo_config(&repo, "[undo]\nkeep_last = 1\nkeep_days = 30\n");
+    make_real_receipt(&repo);
+    let template = latest_receipt_id(&repo).expect("real receipt");
+
+    fabricate_receipt(&repo, &template, OLD_A, "success", true);
+    fabricate_receipt(&repo, &template, OLD_B, "success", true);
+    fabricate_receipt(&repo, &template, OLD_FAILED, "failed", true);
+    fabricate_receipt(&repo, &template, OLD_PROGRESS, "in_progress", true);
+    let sha = repo.get_commit_sha("main");
+    repo.git(&[
+        "update-ref",
+        &format!("refs/stax/backups/{ORPHAN}/main"),
+        &sha,
+    ]);
+
+    repo.simulate_remote_commit("remote-main.txt", "from remote", "Remote main commit");
+    let sync_out = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        sync_out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&sync_out)
+    );
+
+    assert!(!receipt_path(&repo, OLD_A).exists());
+    assert!(!receipt_path(&repo, OLD_B).exists());
+    assert!(receipt_path(&repo, OLD_FAILED).exists());
+    assert!(receipt_path(&repo, OLD_PROGRESS).exists());
+    assert!(
+        receipt_path(&repo, &template).exists(),
+        "newest receipt kept"
+    );
+
+    let refs = backup_refs(&repo);
+    assert!(!refs.iter().any(|r| r.contains(OLD_A)), "{refs:?}");
+    assert!(!refs.iter().any(|r| r.contains(OLD_B)), "{refs:?}");
+    assert!(refs.iter().any(|r| r.contains(OLD_FAILED)), "{refs:?}");
+    assert!(refs.iter().any(|r| r.contains(OLD_PROGRESS)), "{refs:?}");
+    assert!(
+        refs.iter().any(|r| r.contains(ORPHAN)),
+        "orphan ref must stay"
+    );
+
+    assert!(prune_stamp_path(&repo).exists(), "stamp should be written");
+
+    // The newest receipt is still undoable.
+    let undo_out = repo.run_stax(&["undo", "--yes", "--no-push"]);
+    assert!(
+        undo_out.status.success(),
+        "undo failed: {}",
+        TestRepo::stderr(&undo_out)
+    );
+}
+
+#[test]
+fn sync_prune_is_throttled_by_daily_stamp() {
+    let repo = TestRepo::new_with_remote();
+    write_undo_config(&repo, "[undo]\nkeep_last = 1\nkeep_days = 30\n");
+    make_real_receipt(&repo);
+    let template = latest_receipt_id(&repo).expect("real receipt");
+    fabricate_receipt(&repo, &template, OLD_A, "success", true);
+
+    let first = repo.run_stax(&["sync", "--force"]);
+    assert!(first.status.success(), "{}", TestRepo::stderr(&first));
+    assert!(!receipt_path(&repo, OLD_A).exists(), "first sync prunes");
+    assert!(prune_stamp_path(&repo).exists());
+
+    // Fresh stamp: a new old receipt survives the next sync.
+    fabricate_receipt(&repo, &template, OLD_B, "success", true);
+    let second = repo.run_stax(&["sync", "--force"]);
+    assert!(second.status.success(), "{}", TestRepo::stderr(&second));
+    assert!(
+        receipt_path(&repo, OLD_B).exists(),
+        "throttled sync must not prune"
+    );
+
+    // Stale stamp: due again.
+    std::fs::write(prune_stamp_path(&repo), r#"{"last_pruned_at": 1}"#).expect("write stamp");
+    let third = repo.run_stax(&["sync", "--force"]);
+    assert!(third.status.success(), "{}", TestRepo::stderr(&third));
+    assert!(!receipt_path(&repo, OLD_B).exists(), "due sync prunes");
+}
+
+#[test]
+fn sync_does_not_prune_when_auto_prune_disabled() {
+    let repo = TestRepo::new_with_remote();
+    write_undo_config(
+        &repo,
+        "[undo]\nauto_prune = false\nkeep_last = 1\nkeep_days = 0\n",
+    );
+    make_real_receipt(&repo);
+    let template = latest_receipt_id(&repo).expect("real receipt");
+    fabricate_receipt(&repo, &template, OLD_A, "success", true);
+
+    let out = repo.run_stax(&["sync", "--force"]);
+    assert!(out.status.success(), "{}", TestRepo::stderr(&out));
+    assert!(receipt_path(&repo, OLD_A).exists());
+    assert!(!prune_stamp_path(&repo).exists(), "no stamp when disabled");
+}
+
+#[test]
+fn sync_prune_keeps_corrupt_old_receipts() {
+    let repo = TestRepo::new_with_remote();
+    write_undo_config(&repo, "[undo]\nkeep_last = 1\nkeep_days = 0\n");
+    make_real_receipt(&repo);
+    let template = latest_receipt_id(&repo).expect("real receipt");
+    fabricate_receipt(&repo, &template, OLD_A, "success", false);
+    std::fs::write(receipt_path(&repo, OLD_B), "not json").expect("write corrupt receipt");
+
+    let out = repo.run_stax(&["sync", "--force"]);
+    assert!(out.status.success(), "{}", TestRepo::stderr(&out));
+    assert!(!receipt_path(&repo, OLD_A).exists());
+    assert!(
+        receipt_path(&repo, OLD_B).exists(),
+        "unparsable receipt is kept"
     );
 }
 
@@ -374,6 +785,24 @@ fn sync_undo_then_redo_replays_deletions_and_trunk() {
     assert_ne!(
         trunk_sha_before_sync, trunk_sha_after_sync,
         "trunk should have moved during sync"
+    );
+
+    // The receipt must still carry trunk with its pre-sync OID and a backup ref.
+    let receipt_id = latest_receipt_id(&repo).expect("sync receipt");
+    let receipt = read_receipt(&repo, &receipt_id);
+    let trunk_entry = receipt["local_refs"]
+        .as_array()
+        .expect("local_refs")
+        .iter()
+        .find(|e| e["branch"] == "main")
+        .expect("trunk entry in receipt");
+    assert_eq!(
+        trunk_entry["oid_before"].as_str(),
+        Some(trunk_sha_before_sync.as_str())
+    );
+    assert!(
+        resolve_ref(&repo, &format!("refs/stax/backups/{receipt_id}/main")).is_some(),
+        "trunk backup ref should exist"
     );
 
     // Undo — restore feature and roll back trunk.
@@ -436,9 +865,8 @@ fn sync_restack_undo_rolls_back_trunk_fast_forward() {
     repo.create_file("feature.txt", "feature");
     repo.commit("Feature commit");
 
-    // Return to main so sync can fast-forward it in the non-checkout path.
-    repo.run_stax(&["t"]);
-
+    // Stay on the feature branch: restack scope is the current stack, and trunk is
+    // fast-forwarded through the non-checkout path.
     // Capture trunk SHA before any sync activity.
     let trunk_sha_before_sync = repo.get_commit_sha("main");
 

@@ -5,7 +5,9 @@
 //! - Receipt persistence under `.git/stax/ops/`
 //! - Backup refs under `refs/stax/backups/<op-id>/`
 //! - Transaction wrapper for safe history rewriting
+//! - Retention pruning of old receipts/backup refs
 
+pub mod prune;
 pub mod receipt;
 pub mod tx;
 

@@ -189,6 +189,49 @@ pub(crate) fn ci_history_recording_due(
     }
 }
 
+/// Per-git-dir stamp of the last undo-history prune attempt done by `stax sync`.
+///
+/// Lives next to (not inside) `stax/ops/`, because every `*.json` there is a receipt.
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub(crate) struct OpsPruneStamp {
+    #[serde(default)]
+    last_pruned_at: u64,
+}
+
+impl OpsPruneStamp {
+    fn path(git_dir: &Path) -> PathBuf {
+        git_dir.join("stax").join("ops-prune.json")
+    }
+
+    /// Last prune unix time, or `None` when missing, unreadable, or zero.
+    pub(crate) fn load(git_dir: &Path) -> Option<u64> {
+        let path = Self::path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Shared).ok()?;
+        let stamp = load_json_unlocked::<Self>(&path).ok()?;
+        (stamp.last_pruned_at != 0).then_some(stamp.last_pruned_at)
+    }
+
+    pub(crate) fn record(git_dir: &Path, now_secs: u64) -> Result<()> {
+        let path = Self::path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        persist_json_atomic(
+            &path,
+            &Self {
+                last_pruned_at: now_secs,
+            },
+        )
+    }
+}
+
+/// Missing, future-dated, or zero stamps count as due.
+pub(crate) fn ops_prune_due(last: Option<u64>, now_secs: u64, interval_secs: u64) -> bool {
+    match last {
+        None => true,
+        Some(last) if last > now_secs => true,
+        Some(last) => now_secs - last >= interval_secs,
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct CiCache {
     pub branches: HashMap<String, BranchCacheEntry>,
@@ -891,6 +934,32 @@ mod tests {
 
         fs::write(&path, "{\"last_recorded_at\":0}").unwrap();
         assert_eq!(CiHistorySyncStamp::load(temp.path()), None);
+    }
+
+    #[test]
+    fn ops_prune_due_rules() {
+        let day = 86_400;
+        assert!(ops_prune_due(None, 1_000, day));
+        assert!(ops_prune_due(Some(2_000), 1_000, day));
+        assert!(ops_prune_due(Some(1_000), 1_000 + day, day));
+        assert!(!ops_prune_due(Some(1_000), 1_000 + day - 1, day));
+    }
+
+    #[test]
+    fn ops_prune_stamp_round_trips_and_tolerates_corruption() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(OpsPruneStamp::load(temp.path()), None);
+
+        OpsPruneStamp::record(temp.path(), 1_234).unwrap();
+        assert_eq!(OpsPruneStamp::load(temp.path()), Some(1_234));
+        assert!(!temp.path().join("stax").join("ops").exists());
+
+        let path = OpsPruneStamp::path(temp.path());
+        fs::write(&path, "not json").unwrap();
+        assert_eq!(OpsPruneStamp::load(temp.path()), None);
+
+        fs::write(&path, "{\"last_pruned_at\":0}").unwrap();
+        assert_eq!(OpsPruneStamp::load(temp.path()), None);
     }
 
     fn disk_diff(content: &str) -> DiskCachedDiff {

@@ -748,6 +748,9 @@ fn test_default_config() {
     assert!(config.auth.gh_hostname.is_none());
     assert!(config.sync.confirm_delete);
     assert_eq!(config.sync.ci_history_interval_days, 3);
+    assert!(config.undo.auto_prune);
+    assert_eq!(config.undo.keep_last, 50);
+    assert_eq!(config.undo.keep_days, 14);
 }
 
 #[test]
@@ -763,6 +766,26 @@ fn test_default_toml_serializes() {
     assert!(s.contains("[sync]"));
     assert!(s.contains("# confirm_delete = true"));
     assert!(s.contains("# ci_history_interval_days = 3"));
+    assert!(s.contains("[undo]"));
+    assert!(s.contains("# auto_prune = true"));
+    assert!(s.contains("# keep_last = 50"));
+    assert!(s.contains("# keep_days = 14"));
+}
+
+#[test]
+fn undo_config_parses() {
+    let config: Config =
+        toml::from_str("[undo]\nkeep_last = 0\nkeep_days = 0\nauto_prune = false\n").unwrap();
+    assert_eq!(config.undo.keep_last, 0);
+    assert_eq!(config.undo.keep_days, 0);
+    assert!(!config.undo.auto_prune);
+
+    let config: Config = toml::from_str("[undo]\nkeep_days = 3\n").unwrap();
+    assert!(config.undo.auto_prune);
+    assert_eq!(config.undo.keep_last, 50);
+    assert_eq!(config.undo.keep_days, 3);
+
+    assert!(toml::from_str::<Config>("[undo]\nkeep_last = -1\n").is_err());
 }
 
 #[test]
