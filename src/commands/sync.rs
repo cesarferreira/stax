@@ -4739,10 +4739,14 @@ fn record_ci_history_for_merged(
 
     let ci_timer = LiveTimer::maybe_new(!quiet, "Record CI history");
 
-    // Fetch CI statuses for merged branches
-    match fetch_ci_statuses(repo, rt, client, stack, &branches_to_check) {
+    let fetch_started_at = Instant::now();
+    let statuses = fetch_ci_statuses(repo, rt, client, stack, &branches_to_check);
+    crate::git::command::trace_phase("fetch_ci_statuses", fetch_started_at.elapsed());
+    match statuses {
         Ok(statuses) => {
+            let write_started_at = Instant::now();
             record_ci_history(repo, &statuses);
+            crate::git::command::trace_phase("record_ci_history", write_started_at.elapsed());
             LiveTimer::maybe_finish_timed(ci_timer);
         }
         Err(_) => {

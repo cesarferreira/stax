@@ -418,7 +418,8 @@ Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machi
 Run `make benchmark-status` for deterministic cold 10/50/100-branch scaling
 fixtures, or add global `--trace` to a command to see instrumented Git
 subprocess and wall-clock timings. For `st --trace rs`, Git fetch and the
-remote-head probe have separate timings, so a slow sync shows which step waited.
+remote-head probe have separate timings. Merged-branch cleanup also separates
+CI-status fetch time from local CI-history write time.
 
 | Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
 |----------------|----------|-----------------|----------------|

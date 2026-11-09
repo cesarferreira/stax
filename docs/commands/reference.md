@@ -16,6 +16,9 @@ st --trace rs
 For `rs`, the trace reports `git fetch` and `git ls-remote --heads`
 separately. They run in parallel during the default sync, so their durations
 can overlap and their sum can exceed command wall time.
+When sync cleans up merged branches, it also reports `fetch_ci_statuses`
+(forge API calls) and `record_ci_history` (local history writes) separately.
+The `Record CI history` progress row still covers both phases.
 
 ## Stack operations
 
