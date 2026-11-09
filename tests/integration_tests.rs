@@ -8767,6 +8767,213 @@ mod forge_mock_tests {
         run_stax_with_token_env(repo, home, "STAX_GITHUB_TOKEN", args)
     }
 
+    fn setup_merged_ci_history_branch(home: &Path) -> (TestRepo, TempDir, String) {
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home);
+        let branch = "feature-ci-history-trace";
+
+        let checkout = git_with_env(&repo, home, &["checkout", "-b", branch]);
+        assert!(checkout.status.success(), "{}", TestRepo::stderr(&checkout));
+        repo.create_file("ci-history.txt", "trace\n");
+        repo.commit("Add CI history fixture");
+        let branch_sha = repo.get_commit_sha(branch);
+        let track = run_stax_with_env(&repo, home, &["branch", "track", "--parent", "main"]);
+        assert!(track.status.success(), "{}", TestRepo::stderr(&track));
+
+        let checkout_main = git_with_env(&repo, home, &["checkout", "main"]);
+        assert!(
+            checkout_main.status.success(),
+            "{}",
+            TestRepo::stderr(&checkout_main)
+        );
+        let merge = git_with_env(&repo, home, &["merge", "--ff-only", branch]);
+        assert!(merge.status.success(), "{}", TestRepo::stderr(&merge));
+        let push = git_with_env(&repo, home, &["push", "origin", "main"]);
+        assert!(push.status.success(), "{}", TestRepo::stderr(&push));
+
+        (repo, remote_root, branch_sha)
+    }
+
+    async fn mount_ci_history_checks(server: &MockServer, branch_sha: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/test/repo/commits/{branch_sha}/check-runs"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": 1,
+                "check_runs": [{
+                    "id": 1,
+                    "name": "ci-trace",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": "https://ci.example.com/1",
+                    "started_at": "2026-11-09T10:00:00Z",
+                    "completed_at": "2026-11-09T10:01:00Z"
+                }]
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/test/repo/commits/{branch_sha}/statuses"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(server)
+            .await;
+    }
+
+    fn has_phase_duration(stderr: &str, phase: &str) -> bool {
+        let prefix = format!("[trace] phase {phase} ");
+        stderr.lines().any(|line| {
+            line.strip_prefix(&prefix)
+                .and_then(|value| value.strip_suffix("ms"))
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some()
+        })
+    }
+
+    #[tokio::test]
+    async fn sync_trace_splits_ci_fetch_and_history_writes() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        mount_ci_history_checks(&server, &branch_sha).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["--trace", "rs", "--force"]);
+        assert!(
+            output.status.success(),
+            "sync failed:\n{}\n{}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("Record CI history"),
+            "merged-branch fixture must reach CI history:\n{stdout}"
+        );
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            has_phase_duration(&stderr, "fetch_ci_statuses"),
+            "missing CI fetch phase:\n{stderr}"
+        );
+        assert!(
+            has_phase_duration(&stderr, "record_ci_history"),
+            "missing CI history write phase:\n{stderr}"
+        );
+
+        let refs = TestRepo::stdout(&repo.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/stax/ci-history",
+        ]));
+        let history_ref = refs.lines().next().expect("CI history ref");
+        let history = TestRepo::stdout(&repo.git(&["show", history_ref]));
+        let history: serde_json::Value = serde_json::from_str(&history).expect("history JSON");
+        assert_eq!(history["check_name"], "ci-trace");
+        assert_eq!(history["runs"][0]["duration_secs"], 60);
+        assert!(
+            !repo
+                .list_branches()
+                .contains(&"feature-ci-history-trace".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_trace_reports_ci_fetch_failure_without_history_write() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/repos/test/repo/commits/{branch_sha}/check-runs"
+            )))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["--trace", "rs", "--force"]);
+        assert!(
+            output.status.success(),
+            "sync should continue after CI fetch failure:\n{}\n{}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stderr = TestRepo::stderr(&output);
+        assert!(has_phase_duration(&stderr, "fetch_ci_statuses"));
+        assert!(!stderr.contains("[trace] phase record_ci_history"));
+        assert!(
+            TestRepo::stdout(&output).contains("skipped (couldn't fetch)"),
+            "missing best-effort warning:\n{}",
+            TestRepo::stdout(&output)
+        );
+        let refs = TestRepo::stdout(&repo.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/stax/ci-history",
+        ]));
+        assert!(refs.trim().is_empty(), "unexpected history refs: {refs}");
+        assert!(
+            !repo
+                .list_branches()
+                .contains(&"feature-ci-history-trace".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_trace_omits_ci_history_phases_without_merged_branches() {
+        ensure_crypto_provider();
+        let server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &server.uri());
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["--trace", "rs", "--force"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let stderr = TestRepo::stderr(&output);
+        assert!(!stderr.contains("[trace] phase fetch_ci_statuses"));
+        assert!(!stderr.contains("[trace] phase record_ci_history"));
+    }
+
+    #[tokio::test]
+    async fn sync_trace_ci_history_phases_stay_on_stderr_in_quiet_and_json() {
+        ensure_crypto_provider();
+        for (flag, json_output) in [("--quiet", false), ("--json", true)] {
+            let server = MockServer::start().await;
+            let home = super::test_tempdir();
+            write_test_config(home.path(), &server.uri());
+            let (repo, _remote_root, branch_sha) = setup_merged_ci_history_branch(home.path());
+            mount_ci_history_checks(&server, &branch_sha).await;
+
+            let output = run_stax_with_env(&repo, home.path(), &["--trace", "rs", flag, "--force"]);
+            assert!(
+                output.status.success(),
+                "sync {flag} failed:\n{}\n{}",
+                TestRepo::stdout(&output),
+                TestRepo::stderr(&output)
+            );
+            let stderr = TestRepo::stderr(&output);
+            assert!(has_phase_duration(&stderr, "fetch_ci_statuses"));
+            assert!(has_phase_duration(&stderr, "record_ci_history"));
+
+            let stdout = TestRepo::stdout(&output);
+            if json_output {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&stdout).expect("single valid JSON document");
+                assert_eq!(payload["kind"], "sync");
+            } else {
+                assert!(
+                    stdout.trim().is_empty(),
+                    "quiet sync printed stdout: {stdout}"
+                );
+            }
+        }
+    }
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum StackMergeForge {
         GitHub,

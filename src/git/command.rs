@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 static TRACE_ENABLED: AtomicBool = AtomicBool::new(false);
 static COMMAND_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -51,6 +51,15 @@ pub(crate) fn status(cwd: &Path, args: &[&str]) -> std::io::Result<ExitStatus> {
     timed(cwd, args, || {
         Command::new("git").args(args).current_dir(cwd).status()
     })
+}
+
+pub(crate) fn trace_phase(label: &str, elapsed: Duration) {
+    if TRACE_ENABLED.load(Ordering::Acquire) {
+        eprintln!(
+            "[trace] phase {label} {:.1}ms",
+            elapsed.as_secs_f64() * 1_000.0
+        );
+    }
 }
 
 fn timed<T>(
