@@ -184,8 +184,10 @@ impl GitHubClient {
         repo: &GitRepo,
         sha: &str,
     ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-        let (check_runs_overall, mut all_checks) = self.fetch_check_runs(repo, sha).await?;
-        let (statuses_overall, status_checks) = self.fetch_commit_statuses(repo, sha).await?;
+        let ((check_runs_overall, mut all_checks), (statuses_overall, status_checks)) = tokio::try_join!(
+            self.fetch_check_runs(repo, sha),
+            self.fetch_commit_statuses(repo, sha)
+        )?;
 
         all_checks.extend(status_checks);
 

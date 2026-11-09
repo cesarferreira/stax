@@ -139,6 +139,56 @@ pub struct BranchCacheEntry {
     pub updated_at: u64,
 }
 
+/// Per-repo stamp of the last successful merged-branch CI history recording
+/// done by `stax sync`.
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub(crate) struct CiHistorySyncStamp {
+    #[serde(default)]
+    last_recorded_at: u64,
+}
+
+impl CiHistorySyncStamp {
+    fn path(git_dir: &Path) -> PathBuf {
+        git_dir.join("stax").join("ci-history-sync.json")
+    }
+
+    /// Last recorded unix time, or `None` when missing, unreadable, or zero.
+    pub(crate) fn load(git_dir: &Path) -> Option<u64> {
+        let path = Self::path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Shared).ok()?;
+        let stamp = load_json_unlocked::<Self>(&path).ok()?;
+        (stamp.last_recorded_at != 0).then_some(stamp.last_recorded_at)
+    }
+
+    pub(crate) fn record(git_dir: &Path, now_secs: u64) -> Result<()> {
+        let path = Self::path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        persist_json_atomic(
+            &path,
+            &Self {
+                last_recorded_at: now_secs,
+            },
+        )
+    }
+}
+
+/// A missing, future-dated, or zero-interval stamp counts as due so clock
+/// skew can never block recording forever.
+pub(crate) fn ci_history_recording_due(
+    last: Option<u64>,
+    now_secs: u64,
+    interval_days: u64,
+) -> bool {
+    if interval_days == 0 {
+        return true;
+    }
+    match last {
+        None => true,
+        Some(last) if last > now_secs => true,
+        Some(last) => now_secs - last >= interval_days.saturating_mul(86_400),
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct CiCache {
     pub branches: HashMap<String, BranchCacheEntry>,
@@ -811,6 +861,37 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
     use tempfile::TempDir;
+
+    #[test]
+    fn ci_history_recording_due_rules() {
+        let day = 86_400;
+        assert!(ci_history_recording_due(Some(1_000), 1_000, 0));
+        assert!(ci_history_recording_due(None, 1_000, 3));
+        assert!(ci_history_recording_due(Some(2_000), 1_000, 3));
+        assert!(ci_history_recording_due(Some(1_000), 1_000 + 3 * day, 3));
+        assert!(!ci_history_recording_due(
+            Some(1_000),
+            1_000 + 3 * day - 1,
+            3
+        ));
+        assert!(!ci_history_recording_due(Some(1_000), 5_000, u64::MAX));
+    }
+
+    #[test]
+    fn ci_history_sync_stamp_round_trips_and_tolerates_corruption() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(CiHistorySyncStamp::load(temp.path()), None);
+
+        CiHistorySyncStamp::record(temp.path(), 1_234).unwrap();
+        assert_eq!(CiHistorySyncStamp::load(temp.path()), Some(1_234));
+
+        let path = CiHistorySyncStamp::path(temp.path());
+        fs::write(&path, "not json").unwrap();
+        assert_eq!(CiHistorySyncStamp::load(temp.path()), None);
+
+        fs::write(&path, "{\"last_recorded_at\":0}").unwrap();
+        assert_eq!(CiHistorySyncStamp::load(temp.path()), None);
+    }
 
     fn disk_diff(content: &str) -> DiskCachedDiff {
         DiskCachedDiff {

@@ -747,6 +747,7 @@ fn test_default_config() {
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
     assert!(config.sync.confirm_delete);
+    assert_eq!(config.sync.ci_history_interval_days, 3);
 }
 
 #[test]
@@ -761,6 +762,25 @@ fn test_default_toml_serializes() {
     assert!(s.contains("[worktree.hooks]"));
     assert!(s.contains("[sync]"));
     assert!(s.contains("# confirm_delete = true"));
+    assert!(s.contains("# ci_history_interval_days = 3"));
+}
+
+#[test]
+fn sync_ci_history_interval_days_parses() {
+    let config: Config = toml::from_str("[sync]\nci_history_interval_days = 0\n").unwrap();
+    assert_eq!(config.sync.ci_history_interval_days, 0);
+
+    let config: Config = toml::from_str("[sync]\nci_history_interval_days = 7\n").unwrap();
+    assert_eq!(config.sync.ci_history_interval_days, 7);
+
+    let config: Config = toml::from_str("[sync]\nconfirm_delete = false\n").unwrap();
+    assert_eq!(config.sync.ci_history_interval_days, 3);
+}
+
+#[test]
+fn sync_ci_history_interval_days_rejects_non_integer() {
+    assert!(toml::from_str::<Config>("[sync]\nci_history_interval_days = \"weekly\"\n").is_err());
+    assert!(toml::from_str::<Config>("[sync]\nci_history_interval_days = -1\n").is_err());
 }
 
 #[test]
