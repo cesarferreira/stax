@@ -10,7 +10,12 @@ token-shaped arguments are redacted.
 
 ```bash
 st --trace status --json >/dev/null
+st --trace rs
 ```
+
+For `rs`, the trace reports `git fetch` and `git ls-remote --heads`
+separately. They run in parallel during the default sync, so their durations
+can overlap and their sum can exceed command wall time.
 
 ## Stack operations
 

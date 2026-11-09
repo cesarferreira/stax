@@ -344,10 +344,7 @@ pub fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> 
 
 /// Remote branch names and object IDs from `git ls-remote --heads` (no object transfer).
 pub fn ls_remote_head_oids(workdir: &Path, remote: &str) -> Result<HashMap<String, String>> {
-    let output = Command::new("git")
-        .args(["ls-remote", "--heads", remote])
-        .current_dir(workdir)
-        .output()
+    let output = crate::git::command::output(workdir, &["ls-remote", "--heads", remote])
         .with_context(|| format!("Failed to run git ls-remote --heads {}", remote))?;
 
     if !output.status.success() {
