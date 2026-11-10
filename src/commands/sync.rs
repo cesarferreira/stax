@@ -506,6 +506,22 @@ impl SyncContext {
         Ok(SyncFlow::Continue)
     }
 
+    /// Run one sync phase, emitting a `[trace] phase` line for `--trace`.
+    ///
+    /// When `record` is true the duration is also added to the verbose timing
+    /// summary. Phases that already record their own rows pass `false` so they
+    /// are not listed twice.
+    fn timed_phase<T>(&mut self, label: &str, record: bool, run: impl FnOnce(&mut Self) -> T) -> T {
+        let started_at = Instant::now();
+        let result = run(self);
+        let elapsed = started_at.elapsed();
+        crate::git::command::trace_phase(&format!("sync:{label}"), elapsed);
+        if record {
+            self.step_timings.push((label.to_string(), elapsed));
+        }
+        result
+    }
+
     fn begin_transaction(&mut self, repo: &GitRepo) -> Result<()> {
         let tx = Transaction::begin(OpKind::Sync, repo, self.quiet)?;
         self.tx = Some(tx);
@@ -3221,18 +3237,19 @@ fn run_with_repo(
 }
 
 fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
-    ctx.begin_transaction(&repo)?;
+    ctx.timed_phase("begin transaction", true, |c| c.begin_transaction(&repo))?;
 
     if !ctx.quiet {
         println!("{}", "Syncing repository...".bold());
     }
 
-    ctx.fetch_remote(&repo)?;
+    ctx.timed_phase("fetch remote", false, |c| c.fetch_remote(&repo))?;
 
     // Match dry-run / cleanup: refresh live PR state before merged detection in the plan.
-    ctx.refresh_pr_states(&repo)?;
+    ctx.timed_phase("refresh PR states", false, |c| c.refresh_pr_states(&repo))?;
 
-    if ctx.confirm_sync_plan(&repo)? == SyncFlow::Stop {
+    if ctx.timed_phase("confirm sync plan", true, |c| c.confirm_sync_plan(&repo))? == SyncFlow::Stop
+    {
         if !ctx.quiet {
             println!("Aborted.");
         }
@@ -3249,38 +3266,56 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 
     let trunk_stats_worker = ctx.spawn_trunk_summary_worker();
 
-    ctx.update_trunk(&repo)?;
+    ctx.timed_phase("update trunk", false, |c| c.update_trunk(&repo))?;
 
-    ctx.ensure_trunk_ready_for_restack(&repo)?;
+    ctx.timed_phase("ensure trunk ready", true, |c| {
+        c.ensure_trunk_ready_for_restack(&repo)
+    })?;
 
-    ctx.refresh_imported(&repo)?;
+    ctx.timed_phase("refresh imported", true, |c| c.refresh_imported(&repo))?;
 
-    ctx.reconcile_pr_states_after_trunk_update(&repo)?;
+    ctx.timed_phase("reconcile PR states", true, |c| {
+        c.reconcile_pr_states_after_trunk_update(&repo)
+    })?;
 
-    let repo = ctx.cleanup_merged_branches(repo)?;
+    let repo = ctx.timed_phase("cleanup merged branches", false, |c| {
+        c.cleanup_merged_branches(repo)
+    })?;
     // Re-check current branch since it may have changed during branch deletion
     ctx.current_after_deletions = repo.current_branch()?;
 
-    ctx.cleanup_upstream_gone(&repo)?;
+    ctx.timed_phase("cleanup upstream-gone", false, |c| {
+        c.cleanup_upstream_gone(&repo)
+    })?;
 
-    ctx.retry_deferred_trunk_update(&repo)?;
+    ctx.timed_phase("retry deferred trunk update", false, |c| {
+        c.retry_deferred_trunk_update(&repo)
+    })?;
 
-    ctx.ensure_trunk_ready_for_restack(&repo)?;
+    ctx.timed_phase("ensure trunk ready (2)", true, |c| {
+        c.ensure_trunk_ready_for_restack(&repo)
+    })?;
 
-    ctx.checkout_next_branch_after_deletion(&repo);
+    ctx.timed_phase("checkout next branch", true, |c| {
+        c.checkout_next_branch_after_deletion(&repo)
+    });
 
-    ctx.get_phase(&repo)?;
+    ctx.timed_phase("get phase", true, |c| c.get_phase(&repo))?;
 
-    ctx.restack_phase(&repo)?;
+    ctx.timed_phase("restack phase", false, |c| c.restack_phase(&repo))?;
 
-    ctx.restore_stash(&repo)?;
+    ctx.timed_phase("restore stash", false, |c| c.restore_stash(&repo))?;
 
     let current_after = ctx.current_after_deletions.clone();
-    ctx.finish_transaction(&current_after)?;
+    ctx.timed_phase("finish transaction phase", false, |c| {
+        c.finish_transaction(&current_after)
+    })?;
 
-    ctx.maybe_prune_undo_history(&repo);
+    ctx.timed_phase("prune undo history phase", false, |c| {
+        c.maybe_prune_undo_history(&repo)
+    });
 
-    ctx.finalize(trunk_stats_worker)?;
+    ctx.timed_phase("finalize", false, |c| c.finalize(trunk_stats_worker))?;
 
     Ok(())
 }
