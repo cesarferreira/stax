@@ -1094,6 +1094,7 @@ impl SyncContext {
                 remote_branches,
                 false,
             )?;
+            let notes_started_at = Instant::now();
             let partially_merged_notes = find_partially_merged_notes(
                 repo,
                 &self.workdir,
@@ -1102,6 +1103,7 @@ impl SyncContext {
                 remote_branches,
                 &merged,
             )?;
+            crate::git::command::trace_phase("merged:partial_notes", notes_started_at.elapsed());
             self.planned_merged_detection = Some(PlannedMergedDetection {
                 merged: merged.clone(),
                 partially_merged: partially_merged_notes,
@@ -1431,6 +1433,7 @@ impl SyncContext {
                         remote_branches,
                         false,
                     )?;
+                    let notes_started_at = Instant::now();
                     let partially_merged_notes = find_partially_merged_notes(
                         &repo,
                         &self.workdir,
@@ -1439,6 +1442,10 @@ impl SyncContext {
                         remote_branches,
                         &merged,
                     )?;
+                    crate::git::command::trace_phase(
+                        "merged:partial_notes",
+                        notes_started_at.elapsed(),
+                    );
                     (merged, partially_merged_notes)
                 };
             let merged_branch_names: Vec<String> =
@@ -3822,19 +3829,21 @@ pub(super) fn find_merged_branches(
 ) -> Result<Vec<MergedBranchInfo>> {
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
+    let detect_started_at = Instant::now();
+    let mut phase_started_at = Instant::now();
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
-    let output = Command::new("git")
-        .args([
+    let output = crate::git::command::output(
+        workdir,
+        &[
             "for-each-ref",
             "--merged",
             &stack.trunk,
             "--format=%(refname:short)",
             "refs/heads",
-        ])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list merged branches")?;
+        ],
+    )
+    .context("Failed to list merged branches")?;
 
     let merged_output = String::from_utf8_lossy(&output.stdout);
 
@@ -3857,17 +3866,20 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    crate::git::command::trace_phase("merged:1_ancestor_of_trunk", phase_started_at.elapsed());
+    phase_started_at = Instant::now();
+
     // Method 1b: git branch --merged origin/trunk (handles stale/diverged local trunk)
-    let output = Command::new("git")
-        .args([
+    let output = crate::git::command::output(
+        workdir,
+        &[
             "for-each-ref",
             "--merged",
             &remote_trunk_ref,
             "--format=%(refname:short)",
             "refs/heads",
-        ])
-        .current_dir(workdir)
-        .output();
+        ],
+    );
 
     if let Ok(output) = output {
         let merged_output = String::from_utf8_lossy(&output.stdout);
@@ -3892,6 +3904,9 @@ pub(super) fn find_merged_branches(
             }
         }
     }
+
+    crate::git::command::trace_phase("merged:1b_ancestor_of_remote", phase_started_at.elapsed());
+    phase_started_at = Instant::now();
 
     // Method 2: Check PR state from metadata.
     // Only an explicitly merged PR is a strong enough signal for cleanup here.
@@ -3918,6 +3933,9 @@ pub(super) fn find_merged_branches(
             });
         }
     }
+
+    crate::git::command::trace_phase("merged:2_pr_state", phase_started_at.elapsed());
+    phase_started_at = Instant::now();
 
     // Method 4: Check if the tracked remote branch was deleted (GitHub deletes
     // branch after merge). This is cheaper and more robust than enumerating the
@@ -3955,12 +3973,13 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    crate::git::command::trace_phase("merged:4_remote_deleted", phase_started_at.elapsed());
+    phase_started_at = Instant::now();
+
     // Method 5: Find orphaned branches (tracked but no longer exist locally or remotely)
-    let local_output = Command::new("git")
-        .args(["branch", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list local branches")?;
+    let local_output =
+        crate::git::command::output(workdir, &["branch", "--format=%(refname:short)"])
+            .context("Failed to list local branches")?;
     let local_branches: std::collections::HashSet<String> =
         String::from_utf8_lossy(&local_output.stdout)
             .lines()
@@ -3989,12 +4008,19 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    crate::git::command::trace_phase("merged:5_orphaned", phase_started_at.elapsed());
+    phase_started_at = Instant::now();
+
     // Method 3: Patch-id provenance check — detects squash/rebase merges even
     // when trunk has advanced past the merge point (where a simple tree diff
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
     if skip_patch_id_provenance {
         merged.sort_by(|a, b| a.branch.cmp(&b.branch));
+        crate::git::command::trace_phase(
+            "merged:total(skip_patch_id)",
+            detect_started_at.elapsed(),
+        );
         return Ok(merged);
     }
 
@@ -4025,6 +4051,15 @@ pub(super) fn find_merged_branches(
             Err(_) => {}
         }
     }
+
+    crate::git::command::trace_phase(
+        &format!(
+            "merged:3a_cheap_check(need_patch_id={})",
+            need_patch_id.len()
+        ),
+        phase_started_at.elapsed(),
+    );
+    phase_started_at = Instant::now();
 
     if !need_patch_id.is_empty() {
         let mut by_merge_base: HashMap<String, Vec<String>> = HashMap::new();
@@ -4101,8 +4136,10 @@ pub(super) fn find_merged_branches(
         }
     }
 
+    crate::git::command::trace_phase("merged:3b_patch_id", phase_started_at.elapsed());
     // The passes above iterate `HashMap`s; sort so prompts and output are stable.
     merged.sort_by(|a, b| a.branch.cmp(&b.branch));
+    crate::git::command::trace_phase("merged:total", detect_started_at.elapsed());
     Ok(merged)
 }
 
