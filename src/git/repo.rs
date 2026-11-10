@@ -1828,6 +1828,8 @@ Use --auto-stash-pop or stash/commit changes first.",
         // reachable ancestor (e.g. after squash-merges or metadata drift).
         // Only fall back to plain `git rebase <onto>` when no upstream is provided.
         report(&format!("Rebasing onto {onto}"));
+        let fallback_upstream = self.clamp_upstream_to_merge_base(onto, branch, fallback_upstream);
+        let fallback_upstream = fallback_upstream.as_str();
         let rebase_result = if !fallback_upstream.trim().is_empty() {
             self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream, progress)
                 .with_context(|| {
@@ -1879,6 +1881,31 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
 
         Ok(RebaseOutcome { result, timings })
+    }
+
+    /// Never start a replay behind the merge-base of `onto` and `branch`.
+    ///
+    /// A stored boundary that is a proper ancestor of that merge-base points at
+    /// history `branch` already shares with `onto`. This happens when the branch
+    /// was rebased outside stax (`git rebase`, `git pull --rebase`, or finishing
+    /// a stax rebase with `git rebase --continue`), which leaves stax's recorded
+    /// boundary behind. Replaying from it re-applies commits that are already on
+    /// `onto` and conflicts on files the branch never touched. The merge-base is
+    /// always a correct boundary in that case. Any other value is returned as is.
+    fn clamp_upstream_to_merge_base(&self, onto: &str, branch: &str, upstream: &str) -> String {
+        let upstream = upstream.trim();
+        if upstream.is_empty() {
+            return String::new();
+        }
+        match self.merge_base_refs(onto, branch) {
+            Ok(merge_base)
+                if merge_base != upstream
+                    && self.is_ancestor(upstream, &merge_base).unwrap_or(false) =>
+            {
+                merge_base
+            }
+            _ => upstream.to_string(),
+        }
     }
 
     /// Rebase the target branch onto another branch, using the branch's owning worktree.
