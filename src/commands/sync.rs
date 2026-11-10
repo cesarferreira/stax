@@ -3830,20 +3830,44 @@ pub(super) fn find_merged_branches(
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
     let detect_started_at = Instant::now();
+
+    // The three git listings below are independent and read-only, and each costs
+    // hundreds of milliseconds on large repos, so run them concurrently. Results
+    // are consumed in the original order, so behavior is unchanged.
+    let (trunk_merged_output, remote_merged_output, local_branches_output) =
+        std::thread::scope(|scope| {
+            let remote_merged = scope.spawn(|| {
+                crate::git::command::output(
+                    workdir,
+                    &[
+                        "for-each-ref",
+                        "--merged",
+                        &remote_trunk_ref,
+                        "--format=%(refname:short)",
+                        "refs/heads",
+                    ],
+                )
+            });
+            let local_branches = scope.spawn(|| {
+                crate::git::command::output(workdir, &["branch", "--format=%(refname:short)"])
+            });
+            let trunk_merged = crate::git::command::output(
+                workdir,
+                &[
+                    "for-each-ref",
+                    "--merged",
+                    &stack.trunk,
+                    "--format=%(refname:short)",
+                    "refs/heads",
+                ],
+            );
+            (trunk_merged, remote_merged.join(), local_branches.join())
+        });
+    crate::git::command::trace_phase("merged:parallel_git_listings", detect_started_at.elapsed());
     let mut phase_started_at = Instant::now();
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
-    let output = crate::git::command::output(
-        workdir,
-        &[
-            "for-each-ref",
-            "--merged",
-            &stack.trunk,
-            "--format=%(refname:short)",
-            "refs/heads",
-        ],
-    )
-    .context("Failed to list merged branches")?;
+    let output = trunk_merged_output.context("Failed to list merged branches")?;
 
     let merged_output = String::from_utf8_lossy(&output.stdout);
 
@@ -3870,16 +3894,8 @@ pub(super) fn find_merged_branches(
     phase_started_at = Instant::now();
 
     // Method 1b: git branch --merged origin/trunk (handles stale/diverged local trunk)
-    let output = crate::git::command::output(
-        workdir,
-        &[
-            "for-each-ref",
-            "--merged",
-            &remote_trunk_ref,
-            "--format=%(refname:short)",
-            "refs/heads",
-        ],
-    );
+    // A failed or panicked remote-trunk listing is ignored, as before.
+    let output = remote_merged_output.unwrap_or_else(|_| Err(std::io::Error::other("panicked")));
 
     if let Ok(output) = output {
         let merged_output = String::from_utf8_lossy(&output.stdout);
@@ -3977,9 +3993,9 @@ pub(super) fn find_merged_branches(
     phase_started_at = Instant::now();
 
     // Method 5: Find orphaned branches (tracked but no longer exist locally or remotely)
-    let local_output =
-        crate::git::command::output(workdir, &["branch", "--format=%(refname:short)"])
-            .context("Failed to list local branches")?;
+    let local_output = local_branches_output
+        .map_err(|_| anyhow::anyhow!("local branch listing thread panicked"))?
+        .context("Failed to list local branches")?;
     let local_branches: std::collections::HashSet<String> =
         String::from_utf8_lossy(&local_output.stdout)
             .lines()
