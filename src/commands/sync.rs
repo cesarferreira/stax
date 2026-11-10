@@ -2953,7 +2953,21 @@ impl SyncContext {
         trunk_stats_worker: std::thread::JoinHandle<Result<Option<TrunkSummary>>>,
     ) -> Result<()> {
         let trunk_wait_started_at = Instant::now();
-        let trunk_summary = wait_for_trunk_summary(trunk_stats_worker)?;
+        // Machine-readable and quiet runs need the full stats; human output only
+        // waits briefly so a slow diff on a huge trunk move never stalls the end.
+        let max_wait = (!self.quiet && !self.json).then_some(TRUNK_SUMMARY_MAX_WAIT);
+        let trunk_summary = match wait_for_trunk_summary_bounded(trunk_stats_worker, max_wait)? {
+            TrunkSummaryWait::Ready(summary) => summary,
+            TrunkSummaryWait::TimedOut => {
+                crate::git::command::trace_phase(
+                    "trunk_summary_timed_out",
+                    trunk_wait_started_at.elapsed(),
+                );
+                Some(TrunkSummary::Updated {
+                    branch: self.stack.trunk.clone(),
+                })
+            }
+        };
         // Time spent blocked on the background worker after all other phases finished.
         self.step_timings.push((
             "trunk summary wait".to_string(),
@@ -5076,6 +5090,35 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
     lines
 }
 
+/// Longest a human-readable sync waits for the trunk diff stats before
+/// falling back to a stats-free summary.
+const TRUNK_SUMMARY_MAX_WAIT: Duration = Duration::from_secs(1);
+
+enum TrunkSummaryWait {
+    Ready(Option<TrunkSummary>),
+    TimedOut,
+}
+
+/// Wait for the trunk summary worker, giving up after `max_wait` when set.
+///
+/// A timed-out worker is detached: it only runs read-only git commands and
+/// ends with the process.
+fn wait_for_trunk_summary_bounded(
+    worker: std::thread::JoinHandle<Result<Option<TrunkSummary>>>,
+    max_wait: Option<Duration>,
+) -> Result<TrunkSummaryWait> {
+    if let Some(max_wait) = max_wait {
+        let deadline = Instant::now() + max_wait;
+        while !worker.is_finished() {
+            if Instant::now() >= deadline {
+                return Ok(TrunkSummaryWait::TimedOut);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    wait_for_trunk_summary(worker).map(TrunkSummaryWait::Ready)
+}
+
 fn wait_for_trunk_summary(
     worker: std::thread::JoinHandle<Result<Option<TrunkSummary>>>,
 ) -> Result<Option<TrunkSummary>> {
@@ -5448,6 +5491,54 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn bounded_wait_gives_up_on_slow_trunk_summary() {
+        let worker = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(1_000));
+            Ok(Some(TrunkSummary::UpToDate {
+                branch: "main".to_string(),
+            }))
+        });
+
+        let started_at = Instant::now();
+        let wait = wait_for_trunk_summary_bounded(worker, Some(Duration::from_millis(50)))
+            .expect("bounded wait should not fail");
+
+        assert!(matches!(wait, TrunkSummaryWait::TimedOut));
+        assert!(started_at.elapsed() < Duration::from_millis(800));
+    }
+
+    #[test]
+    fn bounded_wait_returns_fast_trunk_summary() {
+        let worker = std::thread::spawn(|| {
+            Ok(Some(TrunkSummary::UpToDate {
+                branch: "main".to_string(),
+            }))
+        });
+
+        let wait = wait_for_trunk_summary_bounded(worker, Some(Duration::from_secs(5)))
+            .expect("bounded wait should not fail");
+
+        assert!(matches!(
+            wait,
+            TrunkSummaryWait::Ready(Some(TrunkSummary::UpToDate { .. }))
+        ));
+    }
+
+    #[test]
+    fn unbounded_wait_keeps_slow_trunk_summary() {
+        let worker = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(Some(TrunkSummary::UpToDate {
+                branch: "main".to_string(),
+            }))
+        });
+
+        let wait = wait_for_trunk_summary_bounded(worker, None).expect("wait should not fail");
+
+        assert!(matches!(wait, TrunkSummaryWait::Ready(Some(_))));
     }
 
     #[test]
