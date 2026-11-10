@@ -1773,3 +1773,57 @@ fn application_restack_preflights_linked_target_before_stash() {
     assert!(String::from_utf8_lossy(&stash_list.stdout).is_empty());
     assert!(linked.join("dirty.txt").exists());
 }
+
+/// A stored boundary that sits *behind* the real merge-base (the branch was
+/// rebased with plain `git rebase`/`git pull --rebase`, or a stax rebase was
+/// finished with `git rebase --continue`) points at trunk history the branch
+/// already contains. Replaying from it re-applies trunk commits and conflicts on
+/// files the branch never touched. Every rebase must start at the merge-base
+/// instead, even with the restack-specific auto-repair turned off.
+#[test]
+fn test_rebase_never_replays_from_boundary_behind_merge_base() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    std::fs::write(
+        config_dir.path().join("config.toml"),
+        "[restack]\npreflight_auto_repair = false\n",
+    )
+    .expect("write config");
+
+    repo.create_file("shared.txt", "a\n");
+    repo.commit("add shared");
+    let stale_boundary = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "feat"]);
+    repo.create_file("feat.txt", "feat\n");
+    repo.commit("feat commit");
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("shared.txt", "b\n");
+    repo.commit("trunk edits shared");
+
+    // External rebase: the branch now sits on top of trunk, metadata is stale.
+    repo.git(&["checkout", "feat"]);
+    let rebase = repo.git(&["rebase", "main"]);
+    assert!(rebase.status.success(), "external rebase should succeed");
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("shared.txt", "c\n");
+    repo.commit("trunk edits shared again");
+
+    write_branch_metadata_raw(&repo, "feat", "main", &stale_boundary);
+    repo.set_trunk("main");
+    repo.git(&["checkout", "feat"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+    assert_eq!(
+        rev_list_count(&repo, "main..feat"),
+        1,
+        "only the branch's own commit may be replayed"
+    );
+}

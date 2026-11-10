@@ -905,3 +905,56 @@ fn replayed_commits_are_identical_to_a_real_rebase() {
         );
     }
 }
+
+/// A branch rebased with plain `git rebase` keeps a stale `parentBranchRevision`
+/// that points *behind* the real merge-base. Submit's temporary restack used to
+/// pass that stale value straight to `git rebase --onto`, replaying every trunk
+/// commit between the stale boundary and the merge-base (260 commits in a real
+/// monorepo) and conflicting on files the branch never touched. It must use the
+/// same boundary correction as `stax restack`.
+#[test]
+fn temp_restack_ignores_stored_boundary_behind_merge_base() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    repo.create_file("shared.txt", "a\n");
+    repo.commit("Add shared file");
+
+    let bc = repo.run_stax(&["bc", "feat"]);
+    assert!(bc.status.success(), "bc feat: {}", TestRepo::stderr(&bc));
+    repo.create_file("feat.txt", "feat");
+    repo.commit("Commit for feat");
+    let feat = repo.current_branch();
+
+    // Trunk moves forward and edits a file the branch never touches.
+    assert!(repo.git(&["checkout", "main"]).status.success());
+    repo.create_file("shared.txt", "b\n");
+    repo.commit("Trunk edits shared file");
+
+    // The branch is rebased externally, so metadata's boundary is now stale.
+    assert!(repo.git(&["checkout", &feat]).status.success());
+    let rebase = repo.git(&["rebase", "main"]);
+    assert!(
+        rebase.status.success(),
+        "external rebase: {}",
+        TestRepo::stderr(&rebase)
+    );
+
+    // Trunk edits the same file again. Replaying the first edit from the stale
+    // boundary would now conflict.
+    assert!(repo.git(&["checkout", "main"]).status.success());
+    repo.create_file("shared.txt", "c\n");
+    repo.commit("Trunk edits shared file again");
+    assert!(repo.git(&["checkout", &feat]).status.success());
+
+    submit_stack(&repo);
+
+    let published = repo.get_commit_sha(&format!("refs/remotes/origin/{feat}"));
+    let own_commits =
+        TestRepo::stdout(&repo.git(&["rev-list", "--count", &format!("main..{published}")]));
+    assert_eq!(
+        own_commits.trim(),
+        "1",
+        "only the branch's own commit may be replayed onto trunk"
+    );
+}
