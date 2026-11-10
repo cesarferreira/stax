@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff ensure-cargo-release install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
+.PHONY: build build-release release ensure-git-cliff ensure-cargo-release install install-release clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -52,6 +52,11 @@ ensure-cargo-release:
 # Install to ~/.cargo/bin
 install:
 	CARGO_INCREMENTAL=0 cargo install --path . --locked --bins --debug
+	STAX_DISABLE_UPDATE_CHECK=1 "$${CARGO_HOME:-$$HOME/.cargo}/bin/stax" shell-setup --refresh
+
+# Install an optimized release build to ~/.cargo/bin
+install-release:
+	cargo install --path . --locked --bins
 	STAX_DISABLE_UPDATE_CHECK=1 "$${CARGO_HOME:-$$HOME/.cargo}/bin/stax" shell-setup --refresh
 
 # Clean build artifacts
