@@ -7,6 +7,7 @@ use crate::commands::open::open_url_in_browser;
 use crate::config::{
     Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
 };
+use crate::engine::restack_preflight::choose_rebase_upstream;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
@@ -3212,6 +3213,7 @@ fn prepare_publish_sources_for_submit(
     if no_restack {
         return Ok((HashMap::new(), TemporaryPublishRefs::empty(workdir)));
     }
+    let config = Config::load_for_repo(workdir)?;
 
     let mut sources: HashMap<String, PublishSource> = HashMap::new();
     let temp_root = std::env::temp_dir().join(format!(
@@ -3292,12 +3294,19 @@ fn prepare_publish_sources_for_submit(
                     is_temporary: true,
                 },
             );
-            planned.push((
-                branch.clone(),
-                meta.parent_branch_revision.clone(),
-                onto_ref,
-                temp_ref,
-            ));
+            // Same boundary correction as `stax restack`: a stale stored
+            // revision (e.g. after an external `git rebase`) must not make the
+            // temporary restack replay trunk history the branch already has.
+            let upstream = choose_rebase_upstream(
+                repo,
+                &config,
+                branch,
+                &meta.parent_branch_name,
+                &meta.parent_branch_revision,
+                true,
+            )
+            .upstream;
+            planned.push((branch.clone(), upstream, onto_ref, temp_ref));
         }
     }
 
