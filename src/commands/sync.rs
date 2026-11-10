@@ -525,9 +525,13 @@ impl SyncContext {
         if !tx.is_snapshotted() {
             return Ok(());
         }
+        let started_at = Instant::now();
         tx.set_auto_stash_pop(self.auto_stash_pop);
         tx.set_head_branch_after(current_after);
-        tx.finish_ok()
+        let result = tx.finish_ok();
+        self.step_timings
+            .push(("finish transaction".to_string(), started_at.elapsed()));
+        result
     }
 
     /// Throttled retention pruning of old undo receipts and their backup refs.
@@ -2932,7 +2936,13 @@ impl SyncContext {
         &mut self,
         trunk_stats_worker: std::thread::JoinHandle<Result<Option<TrunkSummary>>>,
     ) -> Result<()> {
+        let trunk_wait_started_at = Instant::now();
         let trunk_summary = wait_for_trunk_summary(trunk_stats_worker)?;
+        // Time spent blocked on the background worker after all other phases finished.
+        self.step_timings.push((
+            "trunk summary wait".to_string(),
+            trunk_wait_started_at.elapsed(),
+        ));
         let trunk_reached_remote = trunk_reached_remote(
             &self.workdir,
             &self.stack.trunk,
@@ -5127,19 +5137,17 @@ fn trunk_move_is_fast_forward(repo: &GitRepo, local: &str, remote: &str) -> bool
 }
 
 pub(super) fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
-    Command::new("git")
-        .args(["merge-base", "--is-ancestor", ancestor, descendant])
-        .current_dir(workdir)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    crate::git::command::status(
+        workdir,
+        &["merge-base", "--is-ancestor", ancestor, descendant],
+    )
+    .map(|status| status.success())
+    .unwrap_or(false)
 }
 
 pub(super) fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize> {
-    let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", base, head)])
-        .current_dir(workdir)
-        .output()
+    let range = format!("{}..{}", base, head);
+    let output = crate::git::command::output(workdir, &["rev-list", "--count", &range])
         .context("Failed to count fetched trunk commits")?;
 
     if !output.status.success() {
@@ -5162,6 +5170,9 @@ pub(super) fn diff_line_stats_between(
     head: &str,
 ) -> Result<(usize, usize, usize)> {
     let range = format!("{}..{}", base, head);
+    // Not routed through `git::command::output` because it needs `LC_ALL=C` to
+    // keep the shortstat text parseable; report its time as a trace phase instead.
+    let started_at = Instant::now();
     let output = Command::new("git")
         .args([
             "diff",
@@ -5174,6 +5185,7 @@ pub(super) fn diff_line_stats_between(
         .current_dir(workdir)
         .output()
         .context("Failed to calculate fetched trunk line stats")?;
+    crate::git::command::trace_phase("trunk_diff_shortstat", started_at.elapsed());
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
