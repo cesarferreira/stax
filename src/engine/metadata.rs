@@ -118,6 +118,41 @@ impl BranchMetadata {
         ))
     }
 
+    /// The boundary this branch's metadata should record when the stored one is stale.
+    ///
+    /// The stored `parent_branch_revision` goes stale when the branch is rebased outside
+    /// stax (`git rebase`, `git pull --rebase`) or a stax rebase is finished with plain
+    /// `git rebase --continue`. It then sits *behind* `merge-base(parent, branch)`, in
+    /// history the branch already shares with its parent. The merge-base is always a
+    /// correct replacement. Returns `None` when the stored value is fine or cannot be
+    /// judged (no parent branch, empty or unparsable revision).
+    pub fn stale_boundary_repair(&self, repo: &Repository, branch: &str) -> Option<String> {
+        if self.source_remote.is_some() || self.parent_branch_revision.trim().is_empty() {
+            return None;
+        }
+        let stored = git2::Oid::from_str(self.parent_branch_revision.trim()).ok()?;
+        let parent = repo
+            .find_branch(&self.parent_branch_name, git2::BranchType::Local)
+            .ok()?
+            .get()
+            .peel_to_commit()
+            .ok()?
+            .id();
+        let tip = repo
+            .find_branch(branch, git2::BranchType::Local)
+            .ok()?
+            .get()
+            .peel_to_commit()
+            .ok()?
+            .id();
+        let merge_base = repo.merge_base(parent, tip).ok()?;
+        (merge_base != stored
+            && repo
+                .graph_descendant_of(merge_base, stored)
+                .unwrap_or(false))
+        .then(|| merge_base.to_string())
+    }
+
     /// Whether `revision` is reachable from `branch`'s tip.
     ///
     /// Conservative: any lookup failure (unknown branch, unparsable or missing revision)

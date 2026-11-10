@@ -340,6 +340,32 @@ pub fn run_validate() -> Result<()> {
         }
     }
 
+    // 6. Stale parent boundary - recorded behind the real merge-base
+    let mut stale_boundaries: Vec<String> = Vec::new();
+    for name in &tracked {
+        if orphaned.contains(name) {
+            continue;
+        }
+        if let Some(meta) = BranchMetadata::read(repo.inner(), name)?
+            && meta.stale_boundary_repair(repo.inner(), name).is_some()
+        {
+            stale_boundaries.push(name.clone());
+        }
+    }
+    if stale_boundaries.is_empty() {
+        println!("{} No stale parent boundaries", "PASS".green());
+    } else {
+        issues += 1;
+        println!(
+            "{} {} branch(es) with a stale parent boundary (rebased outside stax):",
+            "WARN".yellow(),
+            stale_boundaries.len()
+        );
+        for name in &stale_boundaries {
+            println!("  {}", name.yellow());
+        }
+    }
+
     println!();
     if issues == 0 {
         println!("{}", "All checks passed.".green());
@@ -379,6 +405,8 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
     let mut orphaned: Vec<String> = Vec::new();
     let mut missing_parents: Vec<(String, String)> = Vec::new();
     let mut invalid: Vec<String> = Vec::new();
+    // (branch, stored boundary, merge-base to record instead)
+    let mut stale_boundaries: Vec<(String, String, String)> = Vec::new();
 
     for name in &tracked {
         let branch_exists = repo.inner().find_branch(name, BranchType::Local).is_ok();
@@ -394,6 +422,12 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
                     && repo.branch_commit(&meta.parent_branch_name).is_err()
                 {
                     missing_parents.push((name.clone(), meta.parent_branch_name.clone()));
+                } else if let Some(merge_base) = meta.stale_boundary_repair(repo.inner(), name) {
+                    stale_boundaries.push((
+                        name.clone(),
+                        meta.parent_branch_revision.clone(),
+                        merge_base,
+                    ));
                 }
             } else {
                 invalid.push(name.clone());
@@ -486,6 +520,42 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
         }
     }
 
+    // Fix stale parent boundaries. Lossless: the merge-base only moves the recorded
+    // boundary past history the branch already shares with its parent.
+    if !stale_boundaries.is_empty() {
+        println!(
+            "Stale parent boundary ({} branch(es), rebased outside stax):",
+            stale_boundaries.len().to_string().yellow()
+        );
+        for (branch, stored, merge_base) in &stale_boundaries {
+            println!(
+                "  Record merge-base for '{}' ({} -> {})",
+                branch.cyan(),
+                stored.chars().take(8).collect::<String>().red(),
+                merge_base.chars().take(8).collect::<String>().green()
+            );
+        }
+        if !dry_run {
+            let mut tx = Transaction::begin(OpKind::Fix, &repo, false)?;
+            for (branch, _, _) in &stale_boundaries {
+                tx.plan_branch(&repo, branch)?;
+            }
+            tx.snapshot()?;
+            for (branch, _, merge_base) in &stale_boundaries {
+                if let Some(meta) = BranchMetadata::read(repo.inner(), branch)? {
+                    BranchMetadata {
+                        parent_branch_revision: merge_base.clone(),
+                        ..meta
+                    }
+                    .write(repo.inner(), branch)?;
+                    tx.record_after(&repo, branch)?;
+                    fixes += 1;
+                }
+            }
+            tx.finish_ok()?;
+        }
+    }
+
     // Report stale branches
     let stack = Stack::load(&repo)?;
     let needs_restack = stack.needs_restack();
@@ -503,7 +573,7 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
 
     println!();
     if dry_run {
-        let total = orphaned.len() + invalid.len() + missing_parents.len();
+        let total = orphaned.len() + invalid.len() + missing_parents.len() + stale_boundaries.len();
         if total == 0 {
             println!("{}", "No issues found.".green());
         } else {
@@ -516,7 +586,11 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
                 .yellow()
             );
         }
-    } else if fixes == 0 && orphaned.is_empty() && invalid.is_empty() && missing_parents.is_empty()
+    } else if fixes == 0
+        && orphaned.is_empty()
+        && invalid.is_empty()
+        && missing_parents.is_empty()
+        && stale_boundaries.is_empty()
     {
         println!("{}", "No issues found.".green());
     } else {

@@ -134,6 +134,8 @@ mod split_tests;
 mod stack_test_tests;
 #[path = "staging_menu_tests.rs"]
 mod staging_menu_tests;
+#[path = "stale_boundary_tests.rs"]
+mod stale_boundary_tests;
 #[path = "standup_tests.rs"]
 mod standup_tests;
 #[path = "stats_tests.rs"]
