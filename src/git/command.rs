@@ -47,6 +47,21 @@ pub(crate) fn output(cwd: &Path, args: &[&str]) -> std::io::Result<Output> {
     })
 }
 
+/// Like [`output`], but git never lazily fetches missing objects from a promisor remote.
+///
+/// In a partial clone (`--filter=blob:none`), `git log -p` over a range downloads every
+/// changed blob on demand, in many sequential round trips. Use this for optional
+/// heuristics so a missing blob fails fast instead of stalling the command.
+pub(crate) fn output_no_lazy_fetch(cwd: &Path, args: &[&str]) -> std::io::Result<Output> {
+    timed(cwd, args, || {
+        Command::new("git")
+            .args(args)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .current_dir(cwd)
+            .output()
+    })
+}
+
 pub(crate) fn status(cwd: &Path, args: &[&str]) -> std::io::Result<ExitStatus> {
     timed(cwd, args, || {
         Command::new("git").args(args).current_dir(cwd).status()

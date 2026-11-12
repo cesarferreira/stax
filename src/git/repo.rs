@@ -1495,8 +1495,15 @@ impl GitRepo {
             .unwrap_or(0))
     }
 
+    /// Patch-ids for the non-merge commits in `range`.
+    ///
+    /// Never lazily fetches blobs: in a partial clone that turns a 200-commit range into
+    /// thousands of sequential remote fetches. A missing blob returns `Err`, and callers
+    /// fall back to the cheaper ancestor/tree-equivalence checks.
     pub(crate) fn patch_ids_for_range(&self, cwd: &Path, range: &str) -> Result<HashSet<String>> {
-        let output = self.run_git(cwd, &["log", "--format=%H", "-p", "--no-merges", range])?;
+        let args = ["log", "--format=%H", "-p", "--no-merges", range];
+        let output = command::output_no_lazy_fetch(cwd, &args)
+            .with_context(|| format!("Failed to run git {}", args.join(" ")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!(
@@ -3456,6 +3463,59 @@ mod tests {
         assert!(
             seen.iter().any(|message| message == "Rebasing onto main"),
             "phases: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn patch_ids_for_range_does_not_lazy_fetch_in_partial_clone() {
+        let dir = TempDir::new().expect("tempdir");
+        let origin = dir.path().join("origin.git");
+        let seed = dir.path().join("seed");
+        let clone = dir.path().join("clone");
+        fs::create_dir_all(&seed).unwrap();
+        run_git(&seed, &["init", "-b", "main"]);
+        run_git(&seed, &["config", "user.email", "t@example.com"]);
+        run_git(&seed, &["config", "user.name", "T"]);
+        fs::write(seed.join("a.txt"), "one\n").unwrap();
+        run_git(&seed, &["add", "."]);
+        run_git(&seed, &["commit", "-m", "base"]);
+        fs::write(seed.join("a.txt"), "two\n").unwrap();
+        run_git(&seed, &["commit", "-am", "change"]);
+        run_git(
+            dir.path(),
+            &[
+                "clone",
+                "--bare",
+                seed.to_str().unwrap(),
+                origin.to_str().unwrap(),
+            ],
+        );
+        run_git(&origin, &["config", "uploadpack.allowFilter", "true"]);
+        run_git(
+            &origin,
+            &["config", "uploadpack.allowAnySHA1InWant", "true"],
+        );
+        run_git(
+            dir.path(),
+            &[
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                &format!("file://{}", origin.display()),
+                clone.to_str().unwrap(),
+            ],
+        );
+
+        let repo = GitRepo::open_from_path(&clone).expect("open repo");
+        // The blobs are not local, so this must fail fast instead of fetching them.
+        assert!(repo.patch_ids_for_range(&clone, "HEAD~1..HEAD").is_err());
+        let missing = run_git_capture(
+            &clone,
+            &["rev-list", "--objects", "--missing=print", "HEAD"],
+        );
+        assert!(
+            missing.lines().any(|l| l.starts_with('?')),
+            "blobs were fetched: {missing}"
         );
     }
 }
