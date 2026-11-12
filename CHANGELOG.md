@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.119.1] - 2026-11-12
+
+### 💼 Other
+
+- Stop sync patch-id detection from lazy-fetching blobs in partial clones
 ## [0.119.0] - 2026-11-10
 
 ### 💼 Other
@@ -19,6 +24,10 @@ All notable changes to this project will be documented in this file.
 - Fix submit replaying trunk history when the stored boundary is stale ([#945](https://github.com/cesarferreira/stax/issues/945))
 - Detect and repair stale parent boundaries in validate and fix ([#946](https://github.com/cesarferreira/stax/issues/946))
 - Added make release
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.118.2] - 2026-11-04
 
 ### 🚀 Features
@@ -2317,46 +2326,13 @@ All notable changes to this project will be documented in this file.
 - Now when stax rs deletes a merged branch, it will:
 ## [0.3.0] - 2025-12-27
 
-### 💼 Other
-
-- Clearer message when deleting merged branches
-- Updated comments on PRs
-- Rename branch command
-- New-readme
-- Re-added screenshot
-- Updated readme
-- Added tests to rename
-- Tui
-- Reorder panes
-- Edit works properly
-- Details view
-- Updated SS
-- Remote comparisons
-- Stack reorder
-- Reordering preview
-- Updated readme
-- Updated readme
-- Added screenshots
-## [0.2.1] - 2025-12-27
-
-### 🐛 Bug Fixes
-
-- Fix release
-- Fixed pipeline
-
-### 💼 Other
-
-- Improved test accuracy
-- Workflow trigger
-- Added locked openssl for cross compilation
-- Bumped octocrab
-## [0.2.0] - 2025-12-26
-
 ### 🐛 Bug Fixes
 
 - Fix tracking
 - Fixing bco
 - Fix for icon in remote branches
+- Fix release
+- Fixed pipeline
 
 ### 💼 Other
 
@@ -2442,6 +2418,28 @@ All notable changes to this project will be documented in this file.
 - Improved bco
 - Tags publish
 - Bumped version
+- Improved test accuracy
+- Workflow trigger
+- Added locked openssl for cross compilation
+- Bumped octocrab
+- Clearer message when deleting merged branches
+- Updated comments on PRs
+- Rename branch command
+- New-readme
+- Re-added screenshot
+- Updated readme
+- Added tests to rename
+- Tui
+- Reorder panes
+- Edit works properly
+- Details view
+- Updated SS
+- Remote comparisons
+- Stack reorder
+- Reordering preview
+- Updated readme
+- Updated readme
+- Added screenshots
 
 ### 📚 Documentation
 
