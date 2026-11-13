@@ -100,6 +100,8 @@ mod pr_body_tests;
 mod pr_open_tests;
 #[path = "pr_template_tests.rs"]
 mod pr_template_tests;
+#[path = "pr_view_tests.rs"]
+mod pr_view_tests;
 #[path = "prev_watch_tmux_tests.rs"]
 mod prev_watch_tmux_tests;
 #[path = "ready_tests.rs"]
