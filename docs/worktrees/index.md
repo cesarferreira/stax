@@ -130,6 +130,7 @@ Run `st wt` in an interactive terminal.
 | `Enter` | Attach / switch to the tmux session for the selected worktree |
 | `c` | Create a lane and open it in tmux |
 | `d` | Remove the selected worktree |
+| `u` | Unlock the selected locked worktree (`git worktree unlock`) |
 | `R` | Restack all stax-managed worktrees |
 | `?` | Show help |
 | `q` / `Esc` | Quit |

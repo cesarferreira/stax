@@ -765,6 +765,18 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Remove the lock on a linked worktree by path (`git worktree unlock`).
+    pub fn worktree_unlock(&self, path: &Path) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let path_str = path.to_str().context("Non-UTF-8 worktree path")?;
+        let output = self.run_git(&main_dir, &["worktree", "unlock", path_str])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree unlock failed: {}", stderr);
+        }
+        Ok(())
+    }
+
     /// Run `git worktree prune` from the main worktree.
     pub fn worktree_prune(&self) -> Result<()> {
         let main_dir = self.main_repo_workdir()?;
@@ -3414,6 +3426,43 @@ mod tests {
             .branches_with_configured_upstream()
             .expect("no branch config should not be an error");
         assert!(configured.is_empty());
+    }
+
+    #[test]
+    fn worktree_unlock_clears_lock_and_errors_when_not_locked() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        let wt_dir = TempDir::new().expect("tempdir");
+        let wt_path = wt_dir.path().join("lane");
+        let wt_str = wt_path.to_str().expect("utf8 path");
+        run_git(path, &["worktree", "add", "-b", "lane", wt_str]);
+        run_git(path, &["worktree", "lock", "--reason", "stuck", wt_str]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let locked = repo
+            .list_worktrees()
+            .expect("list")
+            .into_iter()
+            .find(|wt| wt.branch.as_deref() == Some("lane"))
+            .expect("lane worktree");
+        assert!(locked.is_locked);
+
+        repo.worktree_unlock(&locked.path).expect("unlock");
+        let unlocked = repo
+            .list_worktrees()
+            .expect("list")
+            .into_iter()
+            .find(|wt| wt.branch.as_deref() == Some("lane"))
+            .expect("lane worktree");
+        assert!(!unlocked.is_locked);
+
+        assert!(repo.worktree_unlock(&unlocked.path).is_err());
     }
 
     #[test]
