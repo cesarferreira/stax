@@ -1007,6 +1007,10 @@ pub fn run() -> Result<()> {
                 commands::worktree::promote::run(shell_output)
             }
             Some(WorktreeCommands::Prune) => commands::worktree::prune::run(),
+            Some(WorktreeCommands::Lock { name, reason }) => {
+                commands::worktree::lock::run_lock(name, reason)
+            }
+            Some(WorktreeCommands::Unlock { name }) => commands::worktree::lock::run_unlock(name),
             Some(WorktreeCommands::Cleanup {
                 force,
                 dry_run,

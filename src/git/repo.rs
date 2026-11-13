@@ -762,6 +762,23 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Lock a linked worktree by path (`git worktree lock`), optionally with a reason.
+    pub fn worktree_lock(&self, path: &Path, reason: Option<&str>) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let path_str = path.to_str().context("Non-UTF-8 worktree path")?;
+        let mut args = vec!["worktree", "lock"];
+        if let Some(reason) = reason {
+            args.extend(["--reason", reason]);
+        }
+        args.push(path_str);
+        let output = self.run_git(&main_dir, &args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree lock failed: {}", stderr);
+        }
+        Ok(())
+    }
+
     /// Remove the lock on a linked worktree by path (`git worktree unlock`).
     pub fn worktree_unlock(&self, path: &Path) -> Result<()> {
         let main_dir = self.main_repo_workdir()?;

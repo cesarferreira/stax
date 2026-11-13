@@ -104,6 +104,7 @@ fn handle_normal_key(app: &mut WorktreeApp, code: KeyCode, modifiers: KeyModifie
         KeyCode::Char('c') => app.request_create(),
         KeyCode::Char('d') => app.request_delete(),
         KeyCode::Char('u') => app.request_unlock(),
+        KeyCode::Char('l') => app.request_lock(),
         KeyCode::Char('R') => app.request_restack(),
         KeyCode::Char('r') if modifiers.contains(KeyModifiers::SHIFT) => app.request_restack(),
         _ => {}
