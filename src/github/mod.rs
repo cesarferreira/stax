@@ -4,6 +4,7 @@ pub mod client;
 pub mod gh_stack;
 pub mod pr;
 pub mod pr_template;
+pub mod pr_view;
 mod transport;
 
 pub use client::{ForkTarget, GitHubClient};

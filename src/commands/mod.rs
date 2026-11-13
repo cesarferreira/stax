@@ -36,6 +36,7 @@ pub mod modify;
 pub mod navigate;
 pub mod open;
 pub mod pr;
+pub mod pr_view;
 pub mod range_diff;
 pub mod ready;
 pub mod redo;

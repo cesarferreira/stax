@@ -212,6 +212,23 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
+        Commands::Pr {
+            command: Some(PrCommands::View { target }),
+        } => {
+            // Works anywhere: `owner/repo#N` and links need no checkout.
+            // A malformed target fails the same way with or without a terminal.
+            commands::pr_view::validate_target(target.as_deref())?;
+            let interactive = check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
+            if !interactive.available {
+                anyhow::bail!(
+                    "`stax pr view` needs an interactive terminal. \
+                     Use `stax pr list` for a plain list of this repository's pull requests."
+                );
+            }
+            let result = commands::pr_view::run(target.clone());
+            update::show_update_notification();
+            return result;
+        }
         Commands::Demo => {
             let result = commands::demo::run();
             update::show_update_notification();
@@ -605,6 +622,7 @@ pub fn run() -> Result<()> {
                 stack,
                 plain,
             } => commands::pr::run_list(limit, json, ready, all, current, stack, plain),
+            PrCommands::View { .. } => unreachable!(), // Handled above
         },
         Commands::Ready {
             all,
