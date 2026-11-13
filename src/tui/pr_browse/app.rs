@@ -1,5 +1,7 @@
 use crate::forge::MergeMethod;
-use crate::github::pr_view::{Action, Detail, Entry, Group, PrRef, Source, dedupe, matches_filter};
+use crate::github::pr_browse::{
+    Action, Detail, Entry, Group, PrRef, Source, dedupe, matches_filter,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

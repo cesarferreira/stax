@@ -408,7 +408,7 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 | `st update` | Upgrade the stax CLI with the detected install method (skipped if already current, unless `--force`), then offer to refresh installed AI agent skill files |
 | `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
-| `st pr view [TARGET]` | Interactive PR browser and reviewer (GitHub only) — pick from the PRs that concern you or open `12`, `owner/repo#12`, or a link; Summary/Timeline/Code tabs with merge, close, ready, approve, and comment |
+| `st pr browse [TARGET]` | Interactive PR browser and reviewer (GitHub only) — pick from the PRs that concern you or open `12`, `owner/repo#12`, or a link; Summary/Timeline/Code tabs with merge, close, ready, approve, and comment |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
 

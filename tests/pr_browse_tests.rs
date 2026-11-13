@@ -1,5 +1,5 @@
-//! Tests for `stax pr view`. The interactive browser itself is covered by unit
-//! tests in `src/github/pr_view.rs` and `src/tui/pr_view/`; these cover the CLI
+//! Tests for `stax pr browse`. The interactive browser itself is covered by unit
+//! tests in `src/github/pr_browse.rs` and `src/tui/pr_browse/`; these cover the CLI
 //! surface that doesn't need a terminal or the network.
 
 use crate::common;
@@ -7,10 +7,10 @@ use crate::common;
 use common::{OutputAssertions, TestRepo};
 
 #[test]
-fn pr_view_help_describes_the_target() {
+fn pr_browse_help_describes_the_target() {
     let repo = TestRepo::new();
 
-    let output = repo.run_stax(&["pr", "view", "--help"]);
+    let output = repo.run_stax(&["pr", "browse", "--help"]);
     output.assert_success();
     let stdout = TestRepo::stdout(&output);
 
@@ -19,19 +19,19 @@ fn pr_view_help_describes_the_target() {
 }
 
 #[test]
-fn pr_view_is_listed_under_pr() {
+fn pr_browse_is_listed_under_pr() {
     let repo = TestRepo::new();
 
     let output = repo.run_stax(&["pr", "--help"]);
     output.assert_success();
-    assert!(TestRepo::stdout(&output).contains("view"));
+    assert!(TestRepo::stdout(&output).contains("browse"));
 }
 
 #[test]
-fn pr_view_without_a_terminal_points_to_pr_list() {
+fn pr_browse_without_a_terminal_points_to_pr_list() {
     let repo = TestRepo::new();
 
-    let output = repo.run_stax(&["pr", "view", "12"]);
+    let output = repo.run_stax(&["pr", "browse", "12"]);
 
     output.assert_failure();
     let stderr = TestRepo::stderr(&output);
@@ -42,7 +42,7 @@ fn pr_view_without_a_terminal_points_to_pr_list() {
 }
 
 #[test]
-fn pr_view_rejects_a_malformed_target_before_checking_the_terminal() {
+fn pr_browse_rejects_a_malformed_target_before_checking_the_terminal() {
     let repo = TestRepo::new();
 
     for target in [
@@ -51,7 +51,7 @@ fn pr_view_rejects_a_malformed_target_before_checking_the_terminal() {
         "https://evil.example/o/r/pull/1",
         "https://github.com/o/r/issues/1",
     ] {
-        let output = repo.run_stax(&["pr", "view", target]);
+        let output = repo.run_stax(&["pr", "browse", target]);
         output.assert_failure();
         let stderr = TestRepo::stderr(&output);
         assert!(

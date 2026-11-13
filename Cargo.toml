@@ -122,6 +122,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "json"] }
 maud = { version = "0.27", features = ["axum"] }
 getrandom = "0.4"
+pulldown-cmark = { version = "0.13.6", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"
