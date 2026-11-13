@@ -732,6 +732,7 @@ mod tests {
     fn tables_are_drawn_with_borders_and_aligned_columns() {
         let md = "| Name | Qty |\n|:-----|----:|\n| apple | 3 |\n| fig | 12 |\n";
         let lines = plain(&render(md, 40));
+        assert!(lines.iter().all(|l| width_of(l) <= 40), "{lines:#?}");
         assert_eq!(
             lines,
             [
@@ -802,6 +803,7 @@ mod tests {
     fn quotes_code_blocks_and_rules() {
         let md = "> quoted\n\n```rust\nlet x = 1;\n```\n\n---\n";
         let text = plain(&render(md, 30));
+        assert!(text.iter().all(|l| width_of(l) <= 30), "{text:#?}");
         assert_eq!(text[0], "▎ quoted");
         assert_eq!(text[2].trim(), "rust");
         assert_eq!(text[3].trim(), "let x = 1;");
