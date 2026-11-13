@@ -242,6 +242,8 @@ Full guide: [Worktrees](../worktrees/index.md) · [AI lanes](../workflows/agent-
 | `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` removes the current lane) |
 | `st worktree promote` | `wt promote` | Retire the current lane and check its branch out in the main worktree |
 | `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping |
+| `st worktree lock [name]` | `wt lock` | Lock a worktree so it can't be removed or pruned (`--reason`) |
+| `st worktree unlock [name]` | `wt unlock` | Clear a worktree lock |
 | `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune + remove safe detached/merged lanes (`--dry-run` previews) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
 

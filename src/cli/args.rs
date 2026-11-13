@@ -1944,6 +1944,17 @@ pub(crate) enum WorktreeCommands {
     /// Remove stale git worktree bookkeeping
     Prune,
 
+    /// Lock a worktree so it cannot be removed or pruned
+    Lock {
+        name: Option<String>,
+        /// Why the worktree is locked (shown in the dashboard and `st wt ll --json`)
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
+    /// Unlock a locked worktree so it can be removed again
+    Unlock { name: Option<String> },
+
     /// Prune stale bookkeeping and bulk-remove safe detached/merged worktrees
     #[command(visible_alias = "clean")]
     Cleanup {

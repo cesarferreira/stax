@@ -1042,6 +1042,60 @@ fn wt_remove_accepts_disambiguated_path_suffix_for_detached_duplicates() {
 }
 
 #[test]
+fn wt_lock_and_unlock_round_trip_blocks_and_restores_removal() {
+    let repo = TestRepo::new();
+    let wt = repo.path().join("lockable");
+    repo.git(&["worktree", "add", "--detach", wt.to_str().unwrap(), "main"])
+        .assert_success();
+
+    repo.run_stax(&["wt", "lock", "lockable", "--reason", "keep me"])
+        .assert_success()
+        .assert_stdout_contains("Locked");
+
+    let locked = repo.git(&["worktree", "list", "--porcelain"]);
+    let listing = TestRepo::stdout(&locked);
+    assert!(
+        listing.contains("locked keep me"),
+        "expected lock reason in porcelain output, got: {listing}"
+    );
+
+    let blocked = repo.run_stax(&["wt", "rm", "lockable"]);
+    assert!(
+        !blocked.status.success(),
+        "removal of locked worktree must fail"
+    );
+    assert!(wt.exists());
+
+    repo.run_stax(&["wt", "unlock", "lockable"])
+        .assert_success()
+        .assert_stdout_contains("Unlocked");
+
+    repo.run_stax(&["wt", "rm", "lockable"]).assert_success();
+    assert!(!wt.exists());
+}
+
+#[test]
+fn wt_lock_and_unlock_reject_invalid_states() {
+    let repo = TestRepo::new();
+    let wt = repo.path().join("plain");
+    repo.git(&["worktree", "add", "--detach", wt.to_str().unwrap(), "main"])
+        .assert_success();
+
+    let unlock_unlocked = repo.run_stax(&["wt", "unlock", "plain"]);
+    assert!(!unlock_unlocked.status.success());
+    assert!(TestRepo::stderr(&unlock_unlocked).contains("is not locked"));
+
+    repo.run_stax(&["wt", "lock", "plain"]).assert_success();
+    let lock_again = repo.run_stax(&["wt", "lock", "plain"]);
+    assert!(!lock_again.status.success());
+    assert!(TestRepo::stderr(&lock_again).contains("already locked"));
+
+    let missing = repo.run_stax(&["wt", "unlock", "does-not-exist"]);
+    assert!(!missing.status.success());
+    assert!(TestRepo::stderr(&missing).contains("No worktree named"));
+}
+
+#[test]
 fn wt_create_respects_explicit_repo_local_root_dir() {
     let repo = TestRepo::new();
     let home = repo.clean_home();

@@ -42,6 +42,8 @@ st wt path payments-api
 st wt rm payments-api
 st wt cleanup --dry-run
 st wt prune
+st wt lock payments-api --reason "keep until release"
+st wt unlock payments-api
 st wt rs
 ```
 
@@ -88,6 +90,8 @@ Selectors accepted by `go`, `path`, `rm`, and reuse paths in `create`:
 | `st wt rm [name]` | `st worktree remove`, `st wtrm` | Remove one worktree (`wt rm` removes current); supports `-f/--force`, `--delete-branch` |
 | `st wt promote` | `st worktree promote` | Retire the current linked worktree and check its branch out in the main worktree |
 | `st wt prune` | `st worktree prune`, `st wtprune` | Remove stale `git worktree` bookkeeping only |
+| `st wt lock [name]` | `st worktree lock` | Lock a worktree so it can't be removed or pruned (`--reason`) |
+| `st wt unlock [name]` | `st worktree unlock` | Clear a worktree lock, e.g. one left behind by an interrupted `git worktree add` |
 | `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune + bulk-remove safe detached/merged lanes (`--dry-run`, `--yes`, `-f`) |
 | `st wt restack` | `st worktree restack`, `st wtrs`, `st wt rs` | Restack all stax-managed worktrees |
 
@@ -131,6 +135,7 @@ Run `st wt` in an interactive terminal.
 | `c` | Create a lane and open it in tmux |
 | `d` | Remove the selected worktree |
 | `u` | Unlock the selected locked worktree (`git worktree unlock`) |
+| `l` | Lock the selected worktree |
 | `R` | Restack all stax-managed worktrees |
 | `?` | Show help |
 | `q` / `Esc` | Quit |

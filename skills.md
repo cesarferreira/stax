@@ -121,6 +121,8 @@ stax worktree ll               # Richer worktree status (managed/prunable/confli
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
 stax worktree path <name>      # Print absolute path of a worktree (for scripting)
 stax worktree remove <name>    # Remove a worktree
+stax worktree lock [name]      # Lock a worktree so it can't be removed/pruned (--reason <text>)
+stax worktree unlock [name]    # Clear a worktree lock (e.g. stale lock from an interrupted add)
 stax worktree promote          # Retire current lane + check its branch out in main worktree
 stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
 stax worktree restack          # Restack all stax-managed worktrees
@@ -565,6 +567,8 @@ stax wt ll                                        # Rich status of all lanes
 stax wt rs                                        # Restack ALL stax-managed worktrees after trunk moves
 stax wt rm add-dark-mode --delete-branch          # Remove worktree + delete branch + metadata
 stax wt rm add-dark-mode --force                  # Force remove dirty worktree
+stax wt lock add-dark-mode --reason "keep until release"  # Lock worktree so it can't be removed/pruned
+stax wt unlock add-dark-mode                      # Clear a lock (e.g. stale lock from an interrupted add)
 stax wt promote                                    # Continue current lane branch in main worktree
 stax wt cleanup --dry-run                         # Preview bulk prune/remove decisions
 stax wt cleanup                                   # Prune stale entries + remove merged/detached lanes

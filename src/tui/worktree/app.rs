@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
+const DASHBOARD_LOCK_REASON: &str = "locked from stax dashboard";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardMode {
     Normal,
@@ -97,12 +99,12 @@ impl WorktreeRecord {
         }
     }
 
-    fn clear_lock(&mut self) {
-        self.info.is_locked = false;
-        self.info.lock_reason = None;
+    fn set_locked(&mut self, locked: bool, reason: Option<String>) {
+        self.info.is_locked = locked;
+        self.info.lock_reason = reason.clone();
         if let Some(details) = self.details.as_mut() {
-            details.info.is_locked = false;
-            details.info.lock_reason = None;
+            details.info.is_locked = locked;
+            details.info.lock_reason = reason;
             self.status_labels = status_labels(details);
         }
     }
@@ -302,11 +304,40 @@ impl WorktreeApp {
         match GitRepo::open().and_then(|repo| repo.worktree_unlock(&path)) {
             Ok(()) => {
                 if let Some(record) = self.records.get_mut(self.selected_index) {
-                    record.clear_lock();
+                    record.set_locked(false, None);
                 }
                 self.set_status(format!("Unlocked '{}'", name));
             }
             Err(e) => self.set_status(format!("Unlock failed: {}", e)),
+        }
+    }
+
+    pub fn request_lock(&mut self) {
+        let Some(record) = self.selected() else {
+            return;
+        };
+
+        if record.info.is_main {
+            self.set_status("Cannot lock the main worktree");
+            return;
+        }
+        if record.info.is_locked {
+            self.set_status("Selected worktree is already locked");
+            return;
+        }
+
+        let name = record.info.name.clone();
+        let path = record.info.path.clone();
+        match GitRepo::open()
+            .and_then(|repo| repo.worktree_lock(&path, Some(DASHBOARD_LOCK_REASON)))
+        {
+            Ok(()) => {
+                if let Some(record) = self.records.get_mut(self.selected_index) {
+                    record.set_locked(true, Some(DASHBOARD_LOCK_REASON.to_string()));
+                }
+                self.set_status(format!("Locked '{}'", name));
+            }
+            Err(e) => self.set_status(format!("Lock failed: {}", e)),
         }
     }
 
@@ -799,17 +830,23 @@ mod tests {
     }
 
     #[test]
-    fn clear_lock_removes_locked_badge_and_reason() {
+    fn set_locked_toggles_locked_badge_and_reason() {
         let mut record = record("lane");
         record.info.is_locked = true;
         record.info.lock_reason = Some("stuck".to_string());
         assert!(worktree_badges(&record).contains(&"locked".to_string()));
 
-        record.clear_lock();
+        record.set_locked(false, None);
 
         assert!(!record.info.is_locked);
         assert!(record.info.lock_reason.is_none());
         assert!(!worktree_badges(&record).contains(&"locked".to_string()));
+
+        record.set_locked(true, Some("why".to_string()));
+
+        assert!(record.info.is_locked);
+        assert_eq!(record.info.lock_reason.as_deref(), Some("why"));
+        assert!(worktree_badges(&record).contains(&"locked".to_string()));
     }
 
     #[test]
