@@ -39,21 +39,15 @@ fn bold() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// A steady colour per name, so one person reads the same everywhere.
+/// A steady colour per name from the shared stack palette, so one person reads
+/// the same everywhere and the accents match `stax ls` and the board.
 fn author_style(name: &str) -> Style {
-    const PALETTE: [Color; 6] = [
-        Color::Yellow,
-        Color::LightMagenta,
-        Color::LightCyan,
-        Color::LightGreen,
-        Color::LightRed,
-        Color::LightBlue,
-    ];
     let hash = name
         .bytes()
         .fold(7usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));
+    let (r, g, b) = crate::commands::stack_palette::lane_rgb(hash);
     Style::default()
-        .fg(PALETTE[hash % PALETTE.len()])
+        .fg(Color::Rgb(r, g, b))
         .add_modifier(Modifier::BOLD)
 }
 
