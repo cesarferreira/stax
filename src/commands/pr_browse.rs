@@ -1,10 +1,10 @@
-//! `stax pr view`: browse the pull requests that concern you, or open one.
+//! `stax pr browse`: browse the pull requests that concern you, or open one.
 
 use crate::config::Config;
 use crate::git::GitRepo;
-use crate::github::pr_view::PrRef;
+use crate::github::pr_browse::PrRef;
 use crate::remote::{ForgeType, TrustedRemoteInfo};
-use crate::tui::pr_view::{Scope, TrustedRemote};
+use crate::tui::pr_browse::{Scope, TrustedRemote};
 use anyhow::Result;
 
 /// Where the command runs, read from the current folder if it is a GitHub
@@ -54,5 +54,5 @@ pub fn run(target: Option<String>) -> Result<()> {
     let initial = target
         .map(|target| PrRef::parse(&target, scope.here.as_deref()))
         .transpose()?;
-    crate::tui::pr_view::run(scope, initial)
+    crate::tui::pr_browse::run(scope, initial)
 }

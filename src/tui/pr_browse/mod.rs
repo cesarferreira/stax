@@ -1,12 +1,13 @@
-//! Interactive pull request browser and reviewer behind `stax pr view`.
+//! Interactive pull request browser and reviewer behind `stax pr browse`.
 
 pub mod app;
+pub mod markdown;
 pub mod ui;
 
 use crate::commands::open::open_url_in_browser;
 use crate::forge::MergeMethod;
 use crate::github::GitHubClient;
-use crate::github::pr_view::{self, Action, Detail, Entry, PrRef, Source, State};
+use crate::github::pr_browse::{self, Action, Detail, Entry, PrRef, Source, State};
 use anyhow::Result;
 use app::{App, Overlay, ParsedPatch, PatchState, Screen, Tab};
 use crossterm::{
@@ -188,7 +189,7 @@ pub fn run(scope: Scope, initial: Option<PrRef>) -> Result<()> {
     let sources = if initial.is_some() {
         Vec::new()
     } else {
-        pr_view::sources(
+        pr_browse::sources(
             scope.here.as_deref(),
             scope.branch.as_deref(),
             scope.trunk.as_deref(),
@@ -251,7 +252,7 @@ async fn handle_request(
                 } else {
                     String::new()
                 };
-                pr_view::search(&search_client, &source, &login, scope.trusted.is_some()).await
+                pr_browse::search(&search_client, &source, &login, scope.trusted.is_some()).await
             }
             .await
             .map_err(|e| describe(&e));
@@ -260,7 +261,7 @@ async fn handle_request(
         Request::Detail { pr, seq } => {
             let result = async {
                 let client = scope.client_for(&pr.repo, pr.on_trusted)?;
-                pr_view::fetch_detail(&client, &pr).await.map(Box::new)
+                pr_browse::fetch_detail(&client, &pr).await.map(Box::new)
             }
             .await
             .map_err(|e| describe(&e));
@@ -269,7 +270,7 @@ async fn handle_request(
         Request::Patch { pr, head } => {
             let result = async {
                 let client = scope.client_for(&pr.repo, pr.on_trusted)?;
-                pr_view::fetch_patch(&client, &pr).await
+                pr_browse::fetch_patch(&client, &pr).await
             }
             .await
             .map_err(|e| describe(&e));
@@ -278,7 +279,7 @@ async fn handle_request(
         Request::Act { pr, action, head } => {
             let result = async {
                 let client = scope.client_for(&pr.repo, pr.on_trusted)?;
-                pr_view::perform(&client, &pr, &action, &head).await
+                pr_browse::perform(&client, &pr, &action, &head).await
             }
             .await
             .map_err(|e| describe(&e));
@@ -636,7 +637,7 @@ fn handle_merge_key(app: &mut App, code: KeyCode, methods: &[MergeMethod]) {
     if let KeyCode::Char(c) = code
         && let Some(method) = methods
             .iter()
-            .find(|m| pr_view::method_key(**m) == c.to_ascii_lowercase())
+            .find(|m| pr_browse::method_key(**m) == c.to_ascii_lowercase())
     {
         app.overlay = Overlay::Confirm(Action::Merge(*method));
     }

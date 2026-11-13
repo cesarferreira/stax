@@ -1,6 +1,6 @@
 use super::app::{App, DiffKind, GroupStatus, Overlay, PatchState, Screen, Tab};
 use crate::commands::github_list::format_relative_time;
-use crate::github::pr_view::{
+use crate::github::pr_browse::{
     CheckStatus, Detail, EventKind, Mergeability, State, Verdict, checks_status, describe_checks,
     method_key, method_label, parse_time,
 };
@@ -37,6 +37,47 @@ fn dim() -> Style {
 
 fn bold() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// A steady colour per name, so one person reads the same everywhere.
+fn author_style(name: &str) -> Style {
+    const PALETTE: [Color; 6] = [
+        Color::Yellow,
+        Color::LightMagenta,
+        Color::LightCyan,
+        Color::LightGreen,
+        Color::LightRed,
+        Color::LightBlue,
+    ];
+    let hash = name
+        .bytes()
+        .fold(7usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));
+    Style::default()
+        .fg(PALETTE[hash % PALETTE.len()])
+        .add_modifier(Modifier::BOLD)
+}
+
+/// `key description · key description`, the keys picked out in colour.
+fn keys_line(pairs: &[(&str, &str)], width: usize) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ")];
+    let mut used = 1;
+    for (i, (key, what)) in pairs.iter().enumerate() {
+        let sep = if i == 0 { 0 } else { 3 };
+        let cost = sep + cell_width(key) + 1 + cell_width(what);
+        if used + cost > width {
+            break;
+        }
+        if i > 0 {
+            spans.push(Span::styled(" · ", dim()));
+        }
+        spans.push(Span::styled(
+            (*key).to_owned(),
+            Style::default().fg(Color::Cyan),
+        ));
+        spans.push(Span::styled(format!(" {what}"), dim()));
+        used += cost;
+    }
+    Line::from(spans)
 }
 
 fn cell_width(text: &str) -> usize {
@@ -98,48 +139,6 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
         out.push(line);
     }
     out
-}
-
-/// Drops HTML comments (pull request templates are full of them) and turns
-/// images into a short placeholder, since a terminal can't draw them.
-pub fn clean_markdown(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(start) = rest.find("<!--") {
-        out.push_str(&rest[..start]);
-        match rest[start..].find("-->") {
-            Some(end) => rest = &rest[start + end + 3..],
-            None => {
-                rest = "";
-                break;
-            }
-        }
-    }
-    out.push_str(rest);
-
-    let mut result = String::with_capacity(out.len());
-    let mut chars = out.as_str();
-    while let Some(pos) = chars.find("![") {
-        result.push_str(&chars[..pos]);
-        let after = &chars[pos + 2..];
-        if let Some(close) = after.find("](")
-            && !after[..close].contains('\n')
-            && let Some(end) = after[close..].find(')')
-        {
-            let alt = after[..close].trim();
-            result.push_str(&if alt.is_empty() {
-                "[image]".to_owned()
-            } else {
-                format!("[image: {alt}]")
-            });
-            chars = &after[close + end + 1..];
-        } else {
-            result.push_str("![");
-            chars = after;
-        }
-    }
-    result.push_str(chars);
-    result
 }
 
 fn relative(at: &str) -> String {
@@ -253,12 +252,18 @@ fn render_list_screen(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(truncate(&entry.title, title_room), bold()),
             ];
             if entry.draft {
-                first.push(Span::styled(draft, dim()));
+                first.push(Span::styled(draft, Style::default().fg(Color::Yellow)));
             }
             let when = relative(&entry.updated);
-            let second = format!("      {} · {} · {}", entry.pr.repo, entry.author, when);
+            let second = vec![
+                Span::raw("      "),
+                Span::styled(entry.pr.repo.clone(), Style::default().fg(Color::LightBlue)),
+                Span::styled(" · ", dim()),
+                Span::styled(entry.author.clone(), author_style(&entry.author)),
+                Span::styled(format!(" · {when}"), dim()),
+            ];
             lines.push(Line::from(first).style(bg));
-            lines.push(Line::from(Span::styled(truncate(&second, width), dim())).style(bg));
+            lines.push(Line::from(second).style(bg));
             index += 1;
         }
     }
@@ -281,13 +286,20 @@ fn render_list_screen(f: &mut Frame, app: &mut App, area: Rect) {
     let top = top.min(selected_row);
     f.render_widget(Paragraph::new(lines).scroll((top as u16, 0)), body);
 
-    let hint = app.status.clone().unwrap_or_else(|| {
-        "↑/↓ move · enter open · ctrl+y copy number · ctrl+r reload · esc quit".to_owned()
-    });
-    f.render_widget(
-        Paragraph::new(Span::styled(format!(" {hint}"), dim())),
-        chunks[2],
-    );
+    let footer = match &app.status {
+        Some(status) => status_line(status),
+        None => keys_line(
+            &[
+                ("↑/↓", "move"),
+                ("enter", "open"),
+                ("ctrl+y", "copy number"),
+                ("ctrl+r", "reload"),
+                ("esc", "quit"),
+            ],
+            chunks[2].width as usize,
+        ),
+    };
+    f.render_widget(Paragraph::new(footer), chunks[2]);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,25 +367,21 @@ fn render_view_header(f: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
     let Some(pr) = &app.current else { return };
     let (title, meta) = match &app.detail {
-        Some(d) => {
-            let size = format!("+{} −{}", d.additions, d.deletions);
-            (
-                d.title.clone(),
-                vec![
-                    Span::styled(format!(" ● {}", d.state.label()), state_style(d.state)),
-                    Span::styled(
-                        format!(
-                            "  {} · by {} · updated {} · ",
-                            pr.label(),
-                            d.author,
-                            relative(&d.updated)
-                        ),
-                        dim(),
-                    ),
-                    Span::styled(size, Style::default().fg(Color::Green)),
-                ],
-            )
-        }
+        Some(d) => (
+            d.title.clone(),
+            vec![
+                Span::styled(format!(" ● {}", d.state.label()), state_style(d.state)),
+                Span::styled(format!("  {} · by ", pr.label()), dim()),
+                Span::styled(d.author.clone(), author_style(&d.author)),
+                Span::styled(format!(" · updated {} · ", relative(&d.updated)), dim()),
+                Span::styled(
+                    format!("+{}", d.additions),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::raw(" "),
+                Span::styled(format!("−{}", d.deletions), Style::default().fg(Color::Red)),
+            ],
+        ),
         None => (
             String::new(),
             vec![Span::styled(format!(" {}", pr.label()), dim())],
@@ -414,32 +422,41 @@ fn render_view_header(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_view_footer(f: &mut Frame, app: &App, area: Rect) {
-    let text = if let Some(busy) = &app.busy {
-        busy.clone()
-    } else if let Some(status) = &app.status {
-        status.clone()
+/// A message in the footer: failures red, work in progress yellow, the rest green.
+fn status_line(text: &str) -> Line<'static> {
+    let color = if text.starts_with("Couldn't") {
+        Color::Red
+    } else if text.ends_with('…') {
+        Color::Yellow
     } else {
-        let back = if app.direct { "q quit" } else { "q back" };
-        let code = if app.tab == Tab::Code {
-            " · [/] file · h/l scroll sideways"
-        } else {
-            ""
-        };
-        format!(
-            "←/→ tabs · j/k scroll{code} · m merge · x close · r ready · a approve · c comment · o browser · ? keys · {back}"
-        )
+        Color::Green
     };
-    f.render_widget(
-        Paragraph::new(Span::styled(
-            format!(
-                " {}",
-                truncate(&text, area.width.saturating_sub(1) as usize)
-            ),
-            dim(),
-        )),
-        area,
-    );
+    Line::from(Span::styled(format!(" {text}"), Style::default().fg(color)))
+}
+
+fn render_view_footer(f: &mut Frame, app: &App, area: Rect) {
+    let line = if let Some(busy) = &app.busy {
+        status_line(busy)
+    } else if let Some(status) = &app.status {
+        status_line(status)
+    } else {
+        let mut pairs = vec![("←/→", "tabs"), ("j/k", "scroll")];
+        if app.tab == Tab::Code {
+            pairs.extend([("[/]", "file"), ("h/l", "sideways")]);
+        }
+        pairs.extend([
+            ("m", "merge"),
+            ("x", "close"),
+            ("r", "ready"),
+            ("a", "approve"),
+            ("c", "comment"),
+            ("o", "browser"),
+            ("?", "keys"),
+            ("q", if app.direct { "quit" } else { "back" }),
+        ]);
+        keys_line(&pairs, area.width as usize)
+    };
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn label_value(label: &str, mut value: Vec<Span<'static>>) -> Line<'static> {
@@ -483,7 +500,11 @@ fn summary_lines(detail: &Detail, width: usize) -> Vec<Line<'static>> {
 
     lines.push(label_value(
         "Branch",
-        vec![Span::raw(format!("{} → {}", detail.head, detail.base))],
+        vec![
+            Span::styled(detail.head.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled(" → ", dim()),
+            Span::styled(detail.base.clone(), Style::default().fg(Color::LightBlue)),
+        ],
     ));
     if !detail.reviewers.is_empty() {
         let mut spans = Vec::new();
@@ -547,25 +568,10 @@ fn summary_lines(detail: &Detail, width: usize) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("Description", bold())));
     lines.push(Line::default());
-    let body = clean_markdown(&detail.body);
-    if body.trim().is_empty() {
+    if detail.body.trim().is_empty() {
         lines.push(Line::from(Span::styled("No description provided.", dim())));
     } else {
-        let mut in_fence = false;
-        for line in wrap_text(body.trim(), width) {
-            let trimmed = line.trim_start();
-            let style = if trimmed.starts_with("```") {
-                in_fence = !in_fence;
-                dim()
-            } else if in_fence {
-                Style::default().fg(Color::Gray)
-            } else if trimmed.starts_with('#') {
-                bold()
-            } else {
-                Style::default()
-            };
-            lines.push(Line::from(Span::styled(line, style)));
-        }
+        lines.extend(super::markdown::render(&detail.body, width));
     }
     lines
 }
@@ -632,7 +638,7 @@ fn timeline_lines(detail: &Detail, width: usize, expanded: bool) -> Vec<Line<'st
         };
         let mut head = vec![
             Span::styled(glyph, Style::default().fg(color)),
-            Span::styled(format!(" {actor}"), bold()),
+            Span::styled(format!(" {actor}"), author_style(&event.actor)),
             Span::raw(truncate(
                 &what,
                 width.saturating_sub(cell_width(&actor) + 14),
@@ -650,20 +656,21 @@ fn timeline_lines(detail: &Detail, width: usize, expanded: bool) -> Vec<Line<'st
         lines.push(Line::from(head));
 
         if let Some(body) = body {
-            let cleaned = clean_markdown(body);
-            let wrapped = wrap_text(cleaned.trim(), width.saturating_sub(4));
-            let total = wrapped.len();
+            let rendered = super::markdown::render(body, width.saturating_sub(4));
+            let total = rendered.len();
             let shown = if expanded {
                 total
             } else {
                 total.min(COLLAPSED_LINES)
             };
-            for line in wrapped.into_iter().take(shown) {
-                lines.push(Line::from(Span::raw(format!("    {line}"))));
+            for line in rendered.into_iter().take(shown) {
+                let mut spans = vec![Span::styled("  │ ", Style::default().fg(color))];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
             }
             if shown < total {
                 lines.push(Line::from(Span::styled(
-                    format!("    … {} more lines (e expands)", total - shown),
+                    format!("  │ … {} more lines (e expands)", total - shown),
                     dim(),
                 )));
             }
@@ -710,10 +717,18 @@ fn code_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                         Style::default().fg(Color::Magenta),
                     )),
                     kind => {
-                        let (sign, style) = match kind {
-                            DiffKind::Add => ('+', Style::default().fg(Color::Green)),
-                            DiffKind::Del => ('-', Style::default().fg(Color::Red)),
-                            _ => (' ', Style::default()),
+                        let (sign, style, tint) = match kind {
+                            DiffKind::Add => (
+                                '+',
+                                Style::default().fg(Color::LightGreen),
+                                Style::default().bg(Color::Indexed(22)),
+                            ),
+                            DiffKind::Del => (
+                                '-',
+                                Style::default().fg(Color::LightRed),
+                                Style::default().bg(Color::Indexed(52)),
+                            ),
+                            _ => (' ', Style::default(), Style::default()),
                         };
                         Line::from(vec![
                             Span::styled(
@@ -725,6 +740,7 @@ fn code_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                                 style,
                             ),
                         ])
+                        .style(tint)
                     }
                 }
             })
@@ -824,8 +840,8 @@ fn render_merge_picker(f: &mut Frame, methods: &[crate::forge::MergeMethod]) {
     popup(f, "Merge", lines, 40);
 }
 
-fn render_confirm(f: &mut Frame, app: &App, action: &crate::github::pr_view::Action) {
-    use crate::github::pr_view::Action;
+fn render_confirm(f: &mut Frame, app: &App, action: &crate::github::pr_browse::Action) {
+    use crate::github::pr_browse::Action;
     let label = app
         .current
         .as_ref()
@@ -914,16 +930,6 @@ mod tests {
     fn wrapping_counts_wide_characters_as_two_cells() {
         let lines = wrap_text("日本語日本語 日本語", 8);
         assert!(lines.iter().all(|l| cell_width(l) <= 8), "{lines:?}");
-    }
-
-    #[test]
-    fn markdown_loses_html_comments_and_images() {
-        let body = "Hello <!-- template\nhint --> world\n![shot](http://x/y.png) and ![](z.png)\n<!-- unterminated";
-        assert_eq!(
-            clean_markdown(body),
-            "Hello  world\n[image: shot] and [image]\n"
-        );
-        assert_eq!(clean_markdown("a ![b c"), "a ![b c");
     }
 
     #[test]

@@ -2001,7 +2001,7 @@ pub(crate) enum PrCommands {
     },
 
     /// Browse the open pull requests that concern you, or open one (GitHub only, TTY only)
-    View {
+    Browse {
         /// Pull request to open: 12, owner/repo#12, or a GitHub link. Omit to pick from a list.
         target: Option<String>,
     },
@@ -2059,7 +2059,7 @@ impl Commands {
                 None
                 | Some(PrCommands::Open)
                 | Some(PrCommands::List { .. })
-                | Some(PrCommands::View { .. }) => CommandPolicy::RebaseSafe,
+                | Some(PrCommands::Browse { .. }) => CommandPolicy::RebaseSafe,
                 Some(PrCommands::Body { .. }) => CommandPolicy::RequiresCleanRepoState,
             },
             Commands::Worktree { command } => match command {

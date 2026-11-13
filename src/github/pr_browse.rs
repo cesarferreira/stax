@@ -1,4 +1,4 @@
-//! Data layer for `stax pr view`: the open pull requests that concern you, one
+//! Data layer for `stax pr browse`: the open pull requests that concern you, one
 //! pull request read in full (checks, reviews, conversation), and what you can
 //! do to it (merge, close, reopen, mark ready, approve, comment).
 //!
@@ -534,7 +534,7 @@ pub async fn search(
     viewer: &str,
     on_trusted: bool,
 ) -> Result<Vec<Entry>> {
-    client.record_api_call("graphql.pr_view.search");
+    client.record_api_call("graphql.pr_browse.search");
     let data: Value = client
         .graphql_data(json!({
             "query": SEARCH,
@@ -552,7 +552,7 @@ pub async fn search(
 /// Reads a pull request in full: its page, the repository's merge settings,
 /// and the comments left on lines of the diff, in one request.
 pub async fn fetch_detail(client: &GitHubClient, pr: &PrRef) -> Result<Detail> {
-    client.record_api_call("graphql.pr_view.detail");
+    client.record_api_call("graphql.pr_browse.detail");
     let (owner, name) = pr.owner_and_name();
     let data: Value = client
         .graphql_data(json!({
