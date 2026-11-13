@@ -97,6 +97,16 @@ impl WorktreeRecord {
         }
     }
 
+    fn clear_lock(&mut self) {
+        self.info.is_locked = false;
+        self.info.lock_reason = None;
+        if let Some(details) = self.details.as_mut() {
+            details.info.is_locked = false;
+            details.info.lock_reason = None;
+            self.status_labels = status_labels(details);
+        }
+    }
+
     pub fn is_loading(&self) -> bool {
         self.details.is_none() && self.load_error.is_none()
     }
@@ -275,6 +285,29 @@ impl WorktreeApp {
         }
 
         self.mode = DashboardMode::ConfirmDelete;
+    }
+
+    pub fn request_unlock(&mut self) {
+        let Some(record) = self.selected() else {
+            return;
+        };
+
+        if !record.info.is_locked {
+            self.set_status("Selected worktree is not locked");
+            return;
+        }
+
+        let name = record.info.name.clone();
+        let path = record.info.path.clone();
+        match GitRepo::open().and_then(|repo| repo.worktree_unlock(&path)) {
+            Ok(()) => {
+                if let Some(record) = self.records.get_mut(self.selected_index) {
+                    record.clear_lock();
+                }
+                self.set_status(format!("Unlocked '{}'", name));
+            }
+            Err(e) => self.set_status(format!("Unlock failed: {}", e)),
+        }
     }
 
     pub fn confirm_delete(&mut self) {
@@ -763,6 +796,20 @@ mod tests {
         first.info.is_current = true;
         let second = record("beta");
         assert_eq!(default_selection(&[first, second], Some("beta")), 1);
+    }
+
+    #[test]
+    fn clear_lock_removes_locked_badge_and_reason() {
+        let mut record = record("lane");
+        record.info.is_locked = true;
+        record.info.lock_reason = Some("stuck".to_string());
+        assert!(worktree_badges(&record).contains(&"locked".to_string()));
+
+        record.clear_lock();
+
+        assert!(!record.info.is_locked);
+        assert!(record.info.lock_reason.is_none());
+        assert!(!worktree_badges(&record).contains(&"locked".to_string()));
     }
 
     #[test]
