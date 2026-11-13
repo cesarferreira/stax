@@ -436,10 +436,7 @@ impl GitRepo {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("No local changes") {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(!stdout.contains("No local changes"))
     }
 
     pub(crate) fn stash_pop_at(&self, cwd: &Path) -> Result<()> {
