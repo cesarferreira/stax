@@ -85,7 +85,7 @@ pub struct PrInfoWithHead {
 }
 
 /// Merge method for PRs
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MergeMethod {
     #[default]
     Squash,

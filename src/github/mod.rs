@@ -3,6 +3,7 @@ pub mod checks;
 pub mod client;
 pub mod gh_stack;
 pub mod pr;
+pub mod pr_browse;
 pub mod pr_template;
 mod transport;
 

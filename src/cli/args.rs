@@ -2010,6 +2010,12 @@ pub(crate) enum PrCommands {
         #[arg(long, requires = "ready", conflicts_with = "json")]
         plain: bool,
     },
+
+    /// Browse the open pull requests that concern you, or open one (GitHub only, TTY only)
+    Browse {
+        /// Pull request to open: 12, owner/repo#12, or a GitHub link. Omit to pick from a list.
+        target: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -2061,9 +2067,10 @@ impl Commands {
                 None | Some(IssueCommands::List { .. }) => CommandPolicy::RebaseSafe,
             },
             Commands::Pr { command } => match command {
-                None | Some(PrCommands::Open) | Some(PrCommands::List { .. }) => {
-                    CommandPolicy::RebaseSafe
-                }
+                None
+                | Some(PrCommands::Open)
+                | Some(PrCommands::List { .. })
+                | Some(PrCommands::Browse { .. }) => CommandPolicy::RebaseSafe,
                 Some(PrCommands::Body { .. }) => CommandPolicy::RequiresCleanRepoState,
             },
             Commands::Worktree { command } => match command {
