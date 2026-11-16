@@ -1,6 +1,7 @@
 mod app;
 pub mod board;
 mod event;
+pub mod pr_browse;
 pub mod ready;
 pub mod split;
 pub mod split_hunk;

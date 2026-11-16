@@ -69,6 +69,9 @@ stax ready --current           # PR readiness TUI scoped to current stack only
 stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
 stax pr list --ready           # Same interactive TUI under PR list
+stax pr browse                   # Interactive picker of PRs that concern you (TTY only); enter opens one
+stax pr browse 12                # Open PR #12 of this repo in the viewer (Summary/Timeline/Code; m merge, x close, a approve, c comment)
+stax pr browse owner/repo#12     # Open any GitHub PR; a PR link works too, outside a checkout as well
 stax draft [branch]            # Mark current or named branch PR as draft
 stax draft --stack             # Mark every PR in the current stack as draft
 stax undraft [branch]          # Mark current or named branch PR ready for review
