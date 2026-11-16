@@ -72,6 +72,12 @@ stax pr list --ready           # Same interactive TUI under PR list
 stax pr browse                   # Interactive picker of PRs that concern you (TTY only); enter opens one
 stax pr browse 12                # Open PR #12 of this repo in the viewer (Summary/Timeline/Code; m merge, x close, a approve, c comment)
 stax pr browse owner/repo#12     # Open any GitHub PR; a PR link works too, outside a checkout as well
+stax pr show [target] --json   # Agent-friendly: PR state, checks, reviewers and the full conversation (comments, reviews, line comments) as JSON
+stax pr show [target]          # Same as plain text, no colour or control codes
+stax pr diff [target]          # The PR's unified diff on stdout
+stax pr comment [target] -m "text"   # Comment on the PR; pass `-m -` to read the text from stdin
+stax pr approve [target]       # Approve the PR
+# [target] is 12, owner/repo#12, or a PR link; omitted = the current branch's open PR. These work outside a checkout when the target is spelled out in full.
 stax draft [branch]            # Mark current or named branch PR as draft
 stax draft --stack             # Mark every PR in the current stack as draft
 stax undraft [branch]          # Mark current or named branch PR ready for review
@@ -644,6 +650,21 @@ errors.
 4. Validate the resulting PR URL, base branch, and draft/ready state with `stax ll`; inspect the generated description with `stax pr body`; optionally check remote status with `stax ci`.
 
 `--yes` accepts the AI-generated PR details; it does not waive repository verification. Never undraft or merge without explicit approval.
+
+### Read and Answer PR Feedback (agents)
+
+`stax pr browse` is interactive and needs a TTY, so agents use the non-interactive commands instead:
+
+```bash
+stax pr show --json                          # Current branch's PR: checks, reviewers, timeline[] of comments/reviews/inline_comment
+stax pr show owner/repo#12 --json | jq '.timeline[] | select(.type=="inline_comment")'
+stax pr diff 12                              # Read the change under review
+printf 'Fixed in abc1234.\n' | stax pr comment 12 -m -   # Multi-line text via stdin (stdin is only read for `-m -`)
+stax pr comment 12 -m "Thanks, addressed."
+stax pr approve 12
+```
+
+`--json` fields are stable: `state` (`open|draft|merged|closed`), `mergeability`, `checks[].status` (`passed|failed|running|skipped`), `reviewers[].verdict`, and `timeline[].type` (`opened|commit|comment|review|inline_comment|merged|closed`) with `actor`, `at`, `body`, plus `path` for inline comments. Merge, close and draft changes stay in the interactive `stax pr browse`.
 
 ### Start a New Feature Stack
 
