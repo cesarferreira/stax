@@ -5,6 +5,7 @@ pub mod markdown;
 pub mod ui;
 
 use crate::commands::open::open_url_in_browser;
+use crate::commands::pr_browse::Scope;
 use crate::forge::MergeMethod;
 use crate::github::GitHubClient;
 use crate::github::pr_browse::{self, Action, Detail, Entry, PrRef, Source, State};
@@ -19,94 +20,10 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-/// Where the browser runs: the repository and branch of the current folder
-/// (if it is a GitHub checkout) and the GitHub it talks to.
-pub struct Scope {
-    pub here: Option<String>,
-    pub branch: Option<String>,
-    pub trunk: Option<String>,
-    /// The current checkout's remote, once validated as a trusted network
-    /// destination. Pull requests that live there (`PrRef::on_trusted`) are
-    /// reached through its API URL; everything else goes to github.com.
-    pub trusted: Option<TrustedRemote>,
-    pub config: crate::config::Config,
-    /// Web address of the checkout's host, for links: `https://github.com`.
-    pub web_base: String,
-    clients: Mutex<HashMap<(String, bool), GitHubClient>>,
-}
-
-pub struct TrustedRemote {
-    pub repo: String,
-    pub host: String,
-    pub api_base_url: Option<String>,
-}
-
-impl Scope {
-    pub fn new(
-        here: Option<String>,
-        branch: Option<String>,
-        trunk: Option<String>,
-        trusted: Option<TrustedRemote>,
-        config: crate::config::Config,
-        web_base: String,
-    ) -> Self {
-        Scope {
-            here,
-            branch,
-            trunk,
-            trusted,
-            config,
-            web_base,
-            clients: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// A client for `repo` (`owner/name`). Always built through the
-    /// host-scoped token resolver, which refuses a token configured for a
-    /// different host: the checkout's validated host for its own pull
-    /// requests, github.com for everything else. A pasted link or a
-    /// look-alike repository name can never steer the token elsewhere.
-    /// Clients are kept, so hovering rows doesn't rebuild one per request.
-    fn client_for(&self, repo: &str, on_trusted: bool) -> Result<GitHubClient> {
-        let key = (repo.to_ascii_lowercase(), on_trusted);
-        if let Some(client) = self.clients.lock().ok().and_then(|c| c.get(&key).cloned()) {
-            return Ok(client);
-        }
-        let (owner, name) = repo
-            .split_once('/')
-            .ok_or_else(|| anyhow::anyhow!("'{repo}' isn't an owner/name repository"))?;
-        let client = match (&self.trusted, on_trusted) {
-            (Some(t), true) => GitHubClient::new_for_trusted_remote(
-                owner,
-                name,
-                t.api_base_url.clone(),
-                &self.config,
-                &t.host,
-            )?,
-            _ => {
-                GitHubClient::new_for_trusted_remote(owner, name, None, &self.config, "github.com")?
-            }
-        };
-        if let Ok(mut clients) = self.clients.lock() {
-            clients.insert(key, client.clone());
-        }
-        Ok(client)
-    }
-
-    /// The client for searches: the checkout's host when there is one.
-    fn search_client(&self) -> Result<GitHubClient> {
-        match &self.trusted {
-            Some(t) => self.client_for(&t.repo, true),
-            None => self.client_for("_/_", false),
-        }
-    }
-}
 
 enum Request {
     Search {

@@ -229,6 +229,39 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
+        Commands::Pr {
+            command:
+                Some(
+                    pr_cmd @ (PrCommands::Show { .. }
+                    | PrCommands::Diff { .. }
+                    | PrCommands::Comment { .. }
+                    | PrCommands::Approve { .. }),
+                ),
+        } => {
+            // Like `pr browse`, these name their pull request in full, so they work
+            // anywhere; a malformed target fails before anything else happens.
+            let result = match pr_cmd.clone() {
+                PrCommands::Show { target, json } => {
+                    commands::pr_browse::validate_target(target.as_deref())
+                        .and_then(|()| commands::pr_browse::show(target, json))
+                }
+                PrCommands::Diff { target } => {
+                    commands::pr_browse::validate_target(target.as_deref())
+                        .and_then(|()| commands::pr_browse::diff(target))
+                }
+                PrCommands::Comment { target, message } => {
+                    commands::pr_browse::validate_target(target.as_deref())
+                        .and_then(|()| commands::pr_browse::comment(target, message))
+                }
+                PrCommands::Approve { target } => {
+                    commands::pr_browse::validate_target(target.as_deref())
+                        .and_then(|()| commands::pr_browse::approve(target))
+                }
+                _ => unreachable!("matched above"),
+            };
+            update::show_update_notification();
+            return result;
+        }
         Commands::Demo => {
             let result = commands::demo::run();
             update::show_update_notification();
@@ -622,7 +655,11 @@ pub fn run() -> Result<()> {
                 stack,
                 plain,
             } => commands::pr::run_list(limit, json, ready, all, current, stack, plain),
-            PrCommands::Browse { .. } => unreachable!(), // Handled above
+            PrCommands::Browse { .. }
+            | PrCommands::Show { .. }
+            | PrCommands::Diff { .. }
+            | PrCommands::Comment { .. }
+            | PrCommands::Approve { .. } => unreachable!(), // Handled above
         },
         Commands::Ready {
             all,

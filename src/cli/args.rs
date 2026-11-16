@@ -2016,6 +2016,36 @@ pub(crate) enum PrCommands {
         /// Pull request to open: 12, owner/repo#12, or a GitHub link. Omit to pick from a list.
         target: Option<String>,
     },
+
+    /// Print a pull request with its checks, reviews and conversation (GitHub only)
+    Show {
+        /// Pull request: 12, owner/repo#12, or a GitHub link. Defaults to the current branch's PR.
+        target: Option<String>,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print a pull request's unified diff (GitHub only)
+    Diff {
+        /// Pull request: 12, owner/repo#12, or a GitHub link. Defaults to the current branch's PR.
+        target: Option<String>,
+    },
+
+    /// Add a comment to a pull request (GitHub only)
+    Comment {
+        /// Pull request: 12, owner/repo#12, or a GitHub link. Defaults to the current branch's PR.
+        target: Option<String>,
+        /// Comment text; `-` or no value reads standard input
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
+    /// Approve a pull request (GitHub only)
+    Approve {
+        /// Pull request: 12, owner/repo#12, or a GitHub link. Defaults to the current branch's PR.
+        target: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -2070,7 +2100,11 @@ impl Commands {
                 None
                 | Some(PrCommands::Open)
                 | Some(PrCommands::List { .. })
-                | Some(PrCommands::Browse { .. }) => CommandPolicy::RebaseSafe,
+                | Some(PrCommands::Browse { .. })
+                | Some(PrCommands::Show { .. })
+                | Some(PrCommands::Diff { .. })
+                | Some(PrCommands::Comment { .. })
+                | Some(PrCommands::Approve { .. }) => CommandPolicy::RebaseSafe,
                 Some(PrCommands::Body { .. }) => CommandPolicy::RequiresCleanRepoState,
             },
             Commands::Worktree { command } => match command {

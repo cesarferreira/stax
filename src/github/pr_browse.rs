@@ -230,6 +230,16 @@ pub enum State {
 }
 
 impl State {
+    /// Stable machine name, for `--json`.
+    pub fn key(self) -> &'static str {
+        match self {
+            State::Open => "open",
+            State::Draft => "draft",
+            State::Merged => "merged",
+            State::Closed => "closed",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             State::Open => "Open",
@@ -262,6 +272,17 @@ pub enum CheckStatus {
     Failed,
     Running,
     Skipped,
+}
+
+impl CheckStatus {
+    pub fn key(self) -> &'static str {
+        match self {
+            CheckStatus::Passed => "passed",
+            CheckStatus::Failed => "failed",
+            CheckStatus::Running => "running",
+            CheckStatus::Skipped => "skipped",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -324,6 +345,16 @@ pub enum Verdict {
 }
 
 impl Verdict {
+    pub fn key(self) -> &'static str {
+        match self {
+            Verdict::Requested => "requested",
+            Verdict::Approved => "approved",
+            Verdict::ChangesRequested => "changes_requested",
+            Verdict::Commented => "commented",
+            Verdict::Dismissed => "dismissed",
+        }
+    }
+
     fn parse(state: &str) -> Option<Self> {
         match state {
             "APPROVED" => Some(Verdict::Approved),
@@ -363,6 +394,17 @@ pub enum Mergeability {
 }
 
 impl Mergeability {
+    pub fn key(self) -> &'static str {
+        match self {
+            Mergeability::Ready => "ready",
+            Mergeability::Conflicts => "conflicts",
+            Mergeability::Blocked => "blocked",
+            Mergeability::Behind => "behind",
+            Mergeability::Unstable => "unstable",
+            Mergeability::Unknown => "unknown",
+        }
+    }
+
     fn parse(merge_state: &str, mergeable: &str) -> Self {
         match merge_state {
             "CLEAN" | "HAS_HOOKS" => Mergeability::Ready,
@@ -905,6 +947,128 @@ fn timeline(page: &Value, author: &str, created: &str, state: State) -> Vec<Even
     events
 }
 
+// ---------------------------------------------------------------------------
+// Non-interactive output (`stax pr show`)
+// ---------------------------------------------------------------------------
+
+/// The pull request as stable JSON for scripts and agents. Field names are
+/// part of the command's contract; add fields, don't rename them.
+pub fn detail_json(detail: &Detail, url: &str) -> Value {
+    let event = |e: &Event| {
+        let mut out = json!({ "at": e.at, "actor": e.actor });
+        let fields = match &e.kind {
+            EventKind::Opened => json!({ "type": "opened" }),
+            EventKind::Commit { sha, headline } => {
+                json!({ "type": "commit", "sha": sha, "headline": headline })
+            }
+            EventKind::Comment { body } => json!({ "type": "comment", "body": body }),
+            EventKind::Review { verdict, body } => {
+                json!({ "type": "review", "verdict": verdict.key(), "body": body })
+            }
+            EventKind::Inline { path, body } => {
+                json!({ "type": "inline_comment", "path": path, "body": body })
+            }
+            EventKind::Merged => json!({ "type": "merged" }),
+            EventKind::Closed => json!({ "type": "closed" }),
+        };
+        if let (Some(out), Some(fields)) = (out.as_object_mut(), fields.as_object()) {
+            out.extend(fields.clone());
+        }
+        out
+    };
+    json!({
+        "repo": detail.pr.repo,
+        "number": detail.pr.number,
+        "url": url,
+        "title": detail.title,
+        "state": detail.state.key(),
+        "author": detail.author,
+        "updated_at": detail.updated,
+        "base": detail.base,
+        "head": detail.head,
+        "head_sha": detail.head_sha,
+        "additions": detail.additions,
+        "deletions": detail.deletions,
+        "labels": detail.labels,
+        "mergeability": detail.mergeability.key(),
+        "can_write": detail.can_write,
+        "merge_methods": detail.methods.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+        "reviewers": detail.reviewers.iter()
+            .map(|r| json!({ "login": r.login, "verdict": r.verdict.key() }))
+            .collect::<Vec<_>>(),
+        "checks": detail.checks.iter()
+            .map(|c| json!({ "name": c.name, "status": c.status.key(), "url": c.url }))
+            .collect::<Vec<_>>(),
+        "body": detail.body,
+        "timeline": detail.timeline.iter().map(event).collect::<Vec<_>>(),
+    })
+}
+
+/// The pull request as plain text, without colour or terminal control codes.
+pub fn detail_text(detail: &Detail, url: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "{} ({})", detail.title, detail.pr.label());
+    let _ = writeln!(out, "{url}");
+    let _ = writeln!(
+        out,
+        "{} · by {} · {} → {} · +{} −{}",
+        detail.state.label(),
+        detail.author,
+        detail.head,
+        detail.base,
+        detail.additions,
+        detail.deletions
+    );
+    if detail.state == State::Open || detail.state == State::Draft {
+        let _ = writeln!(out, "Mergeability: {}", detail.mergeability.label());
+    }
+    if !detail.labels.is_empty() {
+        let _ = writeln!(out, "Labels: {}", detail.labels.join(", "));
+    }
+    if !detail.reviewers.is_empty() {
+        let reviewers: Vec<String> = detail
+            .reviewers
+            .iter()
+            .map(|r| format!("{} ({})", r.login, r.verdict.label()))
+            .collect();
+        let _ = writeln!(out, "Reviewers: {}", reviewers.join(", "));
+    }
+    let _ = writeln!(out, "Checks: {}", describe_checks(&detail.checks));
+    for check in detail
+        .checks
+        .iter()
+        .filter(|c| matches!(c.status, CheckStatus::Failed | CheckStatus::Running))
+    {
+        let _ = writeln!(out, "  {}: {}", check.status.key(), check.name);
+    }
+    let _ = writeln!(out, "\nDescription:\n{}", detail.body.trim());
+    let _ = writeln!(out, "\nTimeline:");
+    for event in &detail.timeline {
+        let who = if event.actor.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", event.actor)
+        };
+        let (what, body) = match &event.kind {
+            EventKind::Opened => ("opened".to_owned(), None),
+            EventKind::Commit { sha, headline } => (format!("committed {sha} {headline}"), None),
+            EventKind::Comment { body } => ("commented".to_owned(), Some(body)),
+            EventKind::Review { verdict, body } => (verdict.label().to_owned(), Some(body)),
+            EventKind::Inline { path, body } => (format!("commented on {path}"), Some(body)),
+            EventKind::Merged => ("merged".to_owned(), None),
+            EventKind::Closed => ("closed".to_owned(), None),
+        };
+        let _ = writeln!(out, "- {}{who} {what}", event.at);
+        if let Some(body) = body.filter(|b| !b.trim().is_empty()) {
+            for line in body.trim().lines() {
+                let _ = writeln!(out, "    {line}");
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1218,6 +1382,61 @@ mod tests {
             EventKind::Commit { sha, .. } => assert_eq!(sha, "abcdef1"),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn json_output_has_a_stable_shape() {
+        let pr = PrRef {
+            on_trusted: false,
+            repo: "a/b".into(),
+            number: 9,
+        };
+        let detail = parse_detail(pr, &fixture()).unwrap();
+        let value = detail_json(&detail, "https://github.com/a/b/pull/9");
+
+        assert_eq!(value["repo"], "a/b");
+        assert_eq!(value["number"], 9);
+        assert_eq!(value["state"], "draft");
+        assert_eq!(value["mergeability"], "blocked");
+        assert_eq!(value["merge_methods"], json!(["squash", "rebase"]));
+        assert_eq!(
+            value["reviewers"][0],
+            json!({"login": "carol", "verdict": "approved"})
+        );
+        assert_eq!(value["checks"][0]["status"], "failed");
+        assert_eq!(value["checks"][2]["url"], Value::Null);
+        let timeline = value["timeline"].as_array().unwrap();
+        let types: Vec<_> = timeline
+            .iter()
+            .map(|e| e["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            ["opened", "commit", "comment", "inline_comment", "review"]
+        );
+        assert_eq!(timeline[3]["path"], "src/a.rs");
+        assert_eq!(timeline[3]["body"], "nit");
+        assert_eq!(timeline[4]["verdict"], "approved");
+        assert_eq!(timeline[2]["actor"], "ghost");
+    }
+
+    #[test]
+    fn text_output_is_plain_and_includes_comment_bodies() {
+        let pr = PrRef {
+            on_trusted: false,
+            repo: "a/b".into(),
+            number: 9,
+        };
+        let detail = parse_detail(pr, &fixture()).unwrap();
+        let text = detail_text(&detail, "https://github.com/a/b/pull/9");
+        assert!(
+            text.starts_with("Add thing (a/b#9)\nhttps://github.com/a/b/pull/9\n"),
+            "{text}"
+        );
+        assert!(text.contains("failed: CI / test"), "{text}");
+        assert!(text.contains("    nit"), "{text}");
+        assert!(text.contains("    lgtm"), "{text}");
+        assert!(!text.contains('\u{1b}'), "no terminal control codes");
     }
 
     #[test]

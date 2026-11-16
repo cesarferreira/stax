@@ -179,6 +179,10 @@ when it points at the same commit. `--all` conflicts with `--parent` and
 | `st pr` · `st pr open` | Open current branch PR |
 | `st pr body` · `st pr body --edit` | Print or edit the current branch PR description |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
+| `st pr show [TARGET] [--json]` | Print a PR (GitHub only) with state, mergeability, checks, reviewers and the whole conversation: comments, reviews and line comments. `--json` has stable fields for scripts and agents. `TARGET` is `12`, `owner/repo#12` or a link (the last two work outside a checkout); omitted means the current branch's open PR |
+| `st pr diff [TARGET]` | Print a PR's unified diff |
+| `st pr comment [TARGET] [-m TEXT]` | Comment on a PR. Without `-m` (or with `-m -`) the text is read from standard input, so multi-line comments can be piped |
+| `st pr approve [TARGET]` | Approve a PR |
 | `st pr browse [TARGET]` | Interactive PR browser and reviewer (GitHub only, TTY only). No `TARGET` picks from this branch's, this repository's, your, review-requested, and owned-repository PRs; `TARGET` is `12`, `owner/repo#12`, or a PR link (the last two work outside a checkout). Summary / Timeline / Code tabs; merge (`m`), close/reopen (`x`), ready/draft (`r`), approve (`a`), comment (`c`), open in browser (`o`), copy link/number (`y`/`n`). Descriptions and comments are rendered as Markdown (headings, emphasis, lists, task lists, quotes, code blocks, tables); diffs are unified, not side-by-side; images and videos show as `[image: …]` placeholders |
 | `st pr list --ready` | Interactive PR readiness TUI for unmerged tracked PRs; remotely merged PRs disappear on live refresh (`--current`/`--stack` limits to the current stack, `--plain` for a static table) |
 | `st ready` | Same as `st pr list --ready` — interactive TUI with CI, review approval, and merge state; filtering merged PRs does not clean up local branches (`--current`, `--stack`, `--all`, `--plain`, `--json`, `--interval`) |
