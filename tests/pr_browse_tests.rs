@@ -183,8 +183,21 @@ async fn pr_show_json_prints_the_conversation_for_a_named_pr() {
 #[tokio::test]
 async fn pr_show_defaults_to_the_current_branch_and_prints_plain_text() {
     let repo = checkout_with_remote();
+    let branch = repo.current_branch();
     let server = MockServer::start().await;
     mock_graphql(&server).await;
+    // The branch's PR is found by owner and branch, as `stax pr` finds it.
+    Mock::given(method("GET"))
+        .and(path("/repos/test-owner/test-repo/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "url": "https://api.github.com/repos/test-owner/test-repo/pulls/12",
+            "id": 12, "number": 12, "state": "open", "draft": false, "title": "Add the thing",
+            "html_url": "https://github.com/test-owner/test-repo/pull/12",
+            "head": { "ref": branch, "sha": "abc123", "label": format!("test-owner:{branch}") },
+            "base": { "ref": "main", "sha": "bbbb" }
+        }])))
+        .mount(&server)
+        .await;
 
     let output = env_for(&server)
         .command(&repo.path())
@@ -204,12 +217,17 @@ async fn pr_show_defaults_to_the_current_branch_and_prints_plain_text() {
     assert!(!stdout.contains('\u{1b}'), "no terminal control codes");
 
     let requests = server.received_requests().await.unwrap();
-    let search = requests
+    let lookup = requests
         .iter()
-        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
-        .find_map(|b| b["variables"]["q"].as_str().map(str::to_owned))
-        .expect("a branch search");
-    assert!(search.contains("head:feature-x"), "{search}");
+        .find(|r| r.method.as_str() == "GET" && r.url.path().ends_with("/pulls"))
+        .expect("a branch lookup");
+    let head = lookup
+        .url
+        .query_pairs()
+        .find(|(k, _)| k == "head")
+        .map(|(_, v)| v.into_owned())
+        .expect("a head filter");
+    assert_eq!(head, format!("test-owner:{branch}"));
 }
 
 #[tokio::test]
@@ -291,7 +309,7 @@ async fn pr_comment_reads_a_multiline_message_from_stdin() {
     let mut child = env
         .command(&repo.path())
         .env("STAX_GITHUB_TOKEN", "test-token")
-        .args(["pr", "comment", "12"])
+        .args(["pr", "comment", "12", "-m", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -333,18 +351,54 @@ async fn pr_approve_posts_an_approving_review() {
 fn pr_comment_without_text_fails_before_any_request() {
     let repo = TestRepo::new();
 
-    // Standard input is empty and no -m is given.
     let output = repo.run_stax(&["pr", "comment", "owner/repo#12"]);
     output.assert_failure();
     assert!(
-        TestRepo::stderr(&output).contains("comment is empty"),
+        TestRepo::stderr(&output).contains("-m -"),
         "{}",
         TestRepo::stderr(&output)
     );
 
-    let output = repo.run_stax(&["pr", "comment", "owner/repo#12", "-m", "   "]);
-    output.assert_failure();
-    assert!(TestRepo::stderr(&output).contains("comment is empty"));
+    for text in ["   ", "-"] {
+        // `-` reads standard input, which `run_stax` leaves empty.
+        let output = repo.run_stax(&["pr", "comment", "owner/repo#12", "-m", text]);
+        output.assert_failure();
+        assert!(
+            TestRepo::stderr(&output).contains("comment is empty"),
+            "{text:?}: {}",
+            TestRepo::stderr(&output)
+        );
+    }
+}
+
+/// Agent harnesses leave standard input open and never close it. Without `-m -`
+/// the command must fail at once instead of waiting for input.
+#[test]
+fn pr_comment_does_not_wait_on_an_open_stdin() {
+    let repo = TestRepo::new();
+    let env = IsolatedProcessEnv::with_config("");
+    let mut child = env
+        .command(&repo.path())
+        .args(["pr", "comment", "owner/repo#12"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stax pr comment");
+    let _open_stdin = child.stdin.take();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("pr comment blocked reading standard input");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert!(!status.success());
 }
 
 #[test]

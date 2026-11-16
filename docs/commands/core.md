@@ -105,7 +105,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · live CI/PR readiness |
 | `st pr show [TARGET]` / `st pr diff [TARGET]` | Non-interactive: print a PR with its checks, reviews and conversation (`--json` for scripts and agents) · print its unified diff |
-| `st pr comment [TARGET] -m "…"` / `st pr approve [TARGET]` | Comment on a PR (text from `-m`, or stdin) · approve it. `TARGET` is `12`, `owner/repo#12` or a link; omitted means the current branch's open PR |
+| `st pr comment [TARGET] -m "…"` / `st pr approve [TARGET]` | Comment on a PR (text from `-m`, or `-m -` for stdin) · approve it. `TARGET` is `12`, `owner/repo#12` or a link; omitted means the current branch's open PR |
 | `st pr browse [TARGET]` | Interactive PR browser/reviewer (GitHub, TTY) — pick from the PRs that concern you, or open `12`, `owner/repo#12`, or a PR link directly |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs or fuzzy-find commits with `find` / `--find` |

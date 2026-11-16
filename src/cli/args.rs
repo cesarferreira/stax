@@ -2036,7 +2036,7 @@ pub(crate) enum PrCommands {
     Comment {
         /// Pull request: 12, owner/repo#12, or a GitHub link. Defaults to the current branch's PR.
         target: Option<String>,
-        /// Comment text; `-` or no value reads standard input
+        /// Comment text; `-m -` reads it from standard input
         #[arg(short, long)]
         message: Option<String>,
     },

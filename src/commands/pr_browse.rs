@@ -1,13 +1,15 @@
 //! `stax pr browse`: browse the pull requests that concern you, or open one.
 
+use crate::commands::resolve_pr::resolve_pr_number;
 use crate::config::Config;
+use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
-use crate::github::pr_browse::{self, Action, PrRef, Source};
+use crate::github::pr_browse::{self, Action, PrRef};
 use crate::remote::{ForgeType, TrustedRemoteInfo};
 use anyhow::{Result, bail};
 use std::collections::HashMap;
-use std::io::{IsTerminal, Read};
+use std::io::Read;
 use std::sync::Mutex;
 
 /// Where the browser runs: the repository and branch of the current folder
@@ -159,26 +161,28 @@ impl Scope {
     }
 }
 
-/// The pull request a command acts on: the named one, or else the open pull
-/// request of the checked-out branch.
-fn resolve(rt: &tokio::runtime::Runtime, scope: &Scope, target: Option<&str>) -> Result<PrRef> {
+/// The pull request a command acts on: the named one, or else the current
+/// branch's, found the way `stax comments` and `stax pr` find it (local branch
+/// metadata first, then an exact owner-and-branch lookup on the forge), so a
+/// same-named branch in a fork is never mistaken for it.
+fn resolve(scope: &Scope, target: Option<&str>) -> Result<PrRef> {
     if let Some(target) = target {
         return PrRef::parse(target, scope.here.as_deref());
     }
-    let (Some(repo), Some(branch)) = (&scope.here, &scope.branch) else {
+    let (Some(here), Some(branch)) = (&scope.here, &scope.branch) else {
         bail!(
             "Name a pull request (12, owner/repo#12 or a link): this folder isn't a GitHub \
              checkout on a branch."
         );
     };
-    let source = Source::Branch {
-        repo: repo.clone(),
-        branch: branch.clone(),
-    };
-    let client = scope.search_client()?;
-    let found = rt.block_on(pr_browse::search(&client, &source, "", true))?;
-    match found.into_iter().next() {
-        Some(entry) => Ok(entry.pr),
+    let repo = GitRepo::open()?;
+    let stack = Stack::load(&repo)?;
+    match resolve_pr_number(&repo, &stack, branch, &scope.config)? {
+        Some(number) => Ok(PrRef {
+            repo: here.clone(),
+            number,
+            on_trusted: true,
+        }),
         None => bail!(
             "No open pull request for branch '{branch}'. Name one, or create it with `stax submit`."
         ),
@@ -191,10 +195,10 @@ fn with_pr<T>(
     work: impl FnOnce(&tokio::runtime::Runtime, &Scope, &PrRef, &GitHubClient) -> Result<T>,
 ) -> Result<T> {
     let scope = load_scope();
+    let pr = resolve(&scope, target)?;
     let rt = tokio::runtime::Runtime::new()?;
     // Clients build their transport on the current runtime.
     let _enter = rt.enter();
-    let pr = resolve(&rt, &scope, target)?;
     let client = scope.client_for(&pr.repo, pr.on_trusted)?;
     work(&rt, &scope, &pr, &client)
 }
@@ -225,18 +229,18 @@ pub fn diff(target: Option<String>) -> Result<()> {
     })
 }
 
-/// The comment text: `-m`, or standard input when `-m -` or no `-m` is given
-/// and input is piped. Read before anything touches the network.
+/// The comment text: `-m TEXT`, or `-m -` for standard input. Standard input is
+/// only read when asked for: an agent harness leaves it open and never closes
+/// it, so reading it by default would hang. Checked before the network is touched.
 fn read_message(message: Option<String>) -> Result<String> {
     let text = match message.as_deref() {
         Some("-") => read_stdin()?,
         Some(text) => text.to_owned(),
-        None if !std::io::stdin().is_terminal() => read_stdin()?,
-        None => bail!("Give the comment with -m \"text\", or pipe it in on standard input."),
+        None => bail!("Give the comment with -m \"text\", or -m - to read it from standard input."),
     };
     let text = text.trim().to_owned();
     if text.is_empty() {
-        bail!("The comment is empty. Give it with -m \"text\", or pipe it in on standard input.");
+        bail!("The comment is empty.");
     }
     Ok(text)
 }
