@@ -35,10 +35,10 @@
 One giant PR is slow to review and risky to merge. A stack of small PRs is the answer — but managing stacks by hand with `git rebase --onto` is a footgun. **stax** makes stacks a first-class Git primitive.
 
 - **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
-- **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
+- **Fast stack status.** In our [benchmark on this repo](docs/reference/benchmarks.md), `st ls` took 11.2 ms on average — about 70× faster than Graphite and 215× faster than Freephite.
 - **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate branch names, commit messages, and PR details from real diffs.
 - **GitHub-native stacks, automatically.** When your repo has GitHub's native Stacked PRs enabled and `github/gh-stack` is installed, `st ss` registers the stack with GitHub under the hood — zero config, zero extra commands. See [Native GitHub Stacked PRs](#native-github-stacked-prs).
-- **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
+- **Undo-first.** `restack`, `submit`, `sync`, and `reorder` snapshot local branch state so you can recover with `st undo` or reapply with `st redo`.
 - **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
 
 > `stax` installs two binaries: `stax` and the short alias `st`. This README uses `st`.
@@ -115,62 +115,32 @@ st --version
 <a id="quickstart"></a>
 ## Quickstart
 
-`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step. When you install skills interactively (or with `--yes`), stax asks which agent harnesses should receive the skill file, pre-checking the ones it detects on disk. Use `--skills all|detected|<ids>` for non-interactive control.
-
-`st skills update` fetches and compares the fully rendered skill file for each selected harness, so it refreshes changed instructions even when the installed package-version marker matches; byte-identical files are left untouched. `st skills list` reports only those local package-version markers, not whether the remote instructions have changed.
+Run `st setup` to configure GitHub auth, shell integration, and optional AI agent skills:
 
 ```bash
-st setup --yes
+st setup
 ```
 
-<details>
-<summary>Alternative auth options</summary>
+In a GitHub repo you can push to, start on a clean, up-to-date `main`. Use two new files to give each branch its own commit:
 
 ```bash
-# Import from GitHub CLI
-gh auth login && st auth --from-gh
-
-# Enter a token interactively
-st auth
-
-# Or via env var
-export STAX_GITHUB_TOKEN="ghp_xxxx"
-```
-
-By default stax ignores ambient `GITHUB_TOKEN`. Opt in with `auth.allow_github_token_env = true`.
-
-GitHub may report `401 Unauthorized` or `404 Not Found` when a token is expired
-or cannot access a private repository. For repository searches and
-already-resolved review/comment reads, stax adds an auth hint; refresh with
-`st auth --from-gh` or check the token's repository access and scopes. The hint
-is intentionally not attached to every missing PR or failed mutation, where a
-404 can be the expected resource-level error.
-
-</details>
-
-Now ship a two-branch stack end-to-end:
-
-```bash
-# 1. Stack two branches on trunk
 st create auth-api
+printf 'Token refresh API\n' > auth-api-demo.md
+git add auth-api-demo.md
+git commit -m "Document the token refresh API"
+
 st create auth-ui
+printf 'Token refresh UI\n' > auth-ui-demo.md
+git add auth-ui-demo.md
+git commit -m "Document the token refresh UI"
 
-# 2. See the stack
-st ls
-# ◉  auth-ui        1↑
-# ○  auth-api       1↑
-# ○  main
-
-# 3. Submit the whole stack as linked PRs
-st ss
-
-# 4. After the bottom PR merges on GitHub…
-st refresh         # sync trunk, restack this stack, update PRs
+st ls  # auth-ui sits on auth-api, which sits on main
+st ss  # open or update both PRs
 ```
 
-Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
+On GitHub, `auth-api` targets `main`, and `auth-ui` targets `auth-api`. That means the top PR shows only the UI commit, not the API work underneath it. Once `auth-api` merges, run `st refresh` from `auth-ui` to update trunk, rebase the remaining branch, and update its PR.
 
-Next: [Quick Start guide](docs/getting-started/quick-start.md) · [Merge & cascade workflow](docs/workflows/merge-and-cascade.md)
+Next: [Quickstart guide and auth alternatives](docs/getting-started/quick-start.md) · [Merge & cascade workflow](docs/workflows/merge-and-cascade.md)
 
 ## Highlights
 
@@ -351,82 +321,26 @@ These rules apply to AI-generated PR titles and bodies from `generate` and `subm
 
 | Command | What it does |
 |---|---|
-| `st` | Launch interactive TUI |
-| `st web [path]` | Start a localhost web workspace in the browser |
-| Web stack pane | Automatically fits branch names and topology; drag or use Arrow keys to resize. Manual width persists per repository in browser localStorage; double-click resets automatic sizing. |
-| Web Sync | Confirmed browser action: fetches, updates trunk, and cleans merged local branches; requires a clean tree and never stashes or restacks. Refresh only reloads the current snapshot. |
-| `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
-| `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
-| `st watch --current` | Watch only the current stack |
-| `st watch --iterations <N>` | Run exactly `N` total refreshes (`1` renders exactly once; `0` is invalid), then exit without sleeping; for `N > 1`, use `--interval <seconds>` to set the delay between refreshes |
-| `st create <name>` / `st add <name>` | Create a branch stacked on current |
-| `st create --ai -a --yes` | Generate branch name + first commit message |
-| `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
-| `st branch track --all` | Adopt every untracked non-trunk local branch into stacks using its nearest cycle-safe strict local ancestor |
-| `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
-| `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
-| `st submit --no-restack` | Submit using current local branch heads instead of temporary rebased publish heads |
-| `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
-| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
-| `st branch submit --fork` | On a denied-for-lack-of-write-access push, retry from a GitHub fork of the upstream repo (single branch; set `[remote] auto_fork = true` for always-on) |
-| `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
-| `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
-| `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
-| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`, `--ignore-failed-ci`) |
-| `st ready` | Interactive PR readiness TUI — CI, review approval, and merge state for unmerged tracked PRs; auto-refreshes every 15s and drops remotely merged PRs without cleaning up their local branches (`--current`/`--stack` for current stack, `--plain` for a static table, `--json` for machine-readable readiness schema) |
-| `st board` / `st home` | Interactive repository dashboard (GitHub only) — PULL REQUESTS / ISSUES tabs with a detail pane, inline diff/comments, label editing, draft toggle, and API-only merge (`--limit`, `--tab`, `--interval`, `--plain` for static tables) |
-| `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack; GitHub statuses and check runs are fetched across all pages before roll-up |
-| `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
-| `st ci -w --strict` | Watch CI but exit as soon as any check fails |
-| `st rs` / `st rs --restack` | Sync trunk, clean merged branches, report closed-but-unmerged PR branches without deleting them, optionally rebase |
-| `st sweep` | Classify local branches (merged/closed-pr/gone/stale/active); `--delete` cleans merged and safe upstream-gone branches, while `--delete --include-closed` explicitly discards closed PR branches |
-| `st stats` | Single-screen, local-only snapshot of stacking health (stack shape, PR mix, restack/parent/dirty health, worktree lanes, hygiene, next action); `--current` scopes to the current stack, `--json` for machine output, `--ci` adds an opt-in CI roll-up |
-| `st refresh` / `st r` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (pass `--delete-merged` to opt into `sync`-style cleanup) |
-| `st refresh --get` | Before restacking, reconcile each branch in the current stack against its remote ref; use this after another machine rebased and force-pushed the stack ([multi-machine workflow](docs/workflows/multi-machine.md)) |
-| `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
-| `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
-| `st refresh --verbose` | Include detailed sync/restack/submit timing |
-| `st restack` | Rebase current stack onto parents locally |
-| `st cascade` | Restack + push + open/update PRs (no trunk fetch; offline-friendly) |
-| `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
-| `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
-| `st wt` | Open the worktree dashboard |
-| `st wt promote` | Retire the current lane and check its branch out in the main worktree |
-| `st resolve` | AI-resolve an in-progress rebase conflict |
-| `st create --ai` | Generate a branch name from local changes |
-| `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
-| `st ss --ai` | Submit with AI-generated PR title/body suggestions |
-| `st standup` | Summarize recent engineering activity (`--ci` opts into live CI checks) |
-| `st tmux status` | Print a tmux-formatted status string (branch, stack position, PR, CI) for `status-right` |
-| `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
-| `st undo` / `st redo` | Recover / reapply risky operations |
-| `st run <cmd>` | Run a command on each branch in the stack |
-| `st run --parallel --jobs 4 <cmd>` | Run checks concurrently in isolated temporary worktrees without switching the main worktree; each command receives `STAX_RUN_BRANCH` |
-| `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
-| `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
-| `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
-| `st update` | Upgrade the stax CLI with the detected install method (skipped if already current, unless `--force`), then offer to refresh installed AI agent skill files |
-| `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
-| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
-| `st pr show` / `st pr diff` / `st pr comment` / `st pr approve` | Non-interactive PR commands for scripts and agents — read a PR and its conversation (`--json`), read its diff, comment, approve; `TARGET` is `12`, `owner/repo#12` or a link, default the current branch's PR |
-| `st pr browse [TARGET]` | Interactive PR browser and reviewer (GitHub only) — pick from the PRs that concern you or open `12`, `owner/repo#12`, or a link; Summary/Timeline/Code tabs with merge, close, ready, approve, and comment |
+| `st` | Browse your stacks in the terminal |
+| `st create <name>` | Stack a new branch on your current branch |
+| `st ls` / `st ll` | Show stacks and PR status; `st ll` adds PR details |
+| `st ss` | Open or update linked PRs for the current stack |
+| `st ci` | Check CI for the stack's PRs |
+| `st refresh` | Sync trunk, restack locally, and update the current stack's PRs |
+| `st restack` | Rebase the current stack locally without pushing |
+| `st merge` | Merge PRs from the bottom of the stack up to your current branch |
+| `st undo` / `st redo` | Restore or reapply a recorded local state |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
 
 ## Performance
 
-Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machine; the ratios do not.
+Mean times measured with `hyperfine` on this repo. Both timings and speedups can vary by repository and machine.
 
-Run `make benchmark-status` for deterministic cold 10/50/100-branch scaling
-fixtures, or add global `--trace` to a command to see instrumented Git
-subprocess and wall-clock timings. For `st --trace rs`, Git fetch and the
-remote-head probe have separate timings. Merged-branch cleanup also separates
-CI-status fetch time from local CI-history write time.
-
-| Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
-|----------------|----------|-----------------|----------------|
-| `st ls`        | baseline | **214.76×** faster | **69.72×** faster |
-| `st rs` (sync) | baseline | **2.41×** faster  | —              |
+| Operation | stax | [Freephite](https://github.com/bradymadden97/freephite) | [Graphite](https://github.com/withgraphite/graphite-cli) |
+|---|---:|---:|---:|
+| List stacks | **11.2 ms** | 2.413 s | 783.3 ms |
+| Sync | **2.807 s** | 6.769 s | Not measured |
 
 stax is wire-compatible with Freephite/Graphite for common stacked-branch workflows.
 
