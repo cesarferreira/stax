@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/stax-logo.png" width="112" height="112" alt="">
   <h1>stax</h1>
   <p><strong>Keep working while your first PR is in review.</strong></p>
   <p>
