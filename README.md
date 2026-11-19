@@ -6,6 +6,7 @@
     <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
     <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
   </p>
+  <img src="assets/screenshot.png" width="100%" alt="stax in action">
   <p>
     <a href="#install">Install</a> ·
     <a href="#quickstart">Quickstart</a> ·
