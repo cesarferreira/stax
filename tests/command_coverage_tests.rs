@@ -203,7 +203,6 @@ fn documented_cli_commands_and_aliases_resolve_from_help() {
 #[test]
 fn docs_cover_numbered_remote_and_active_local_stack_unlink() {
     let docs = [
-        ("README.md", include_str!("../README.md")),
         (
             "docs/commands/core.md",
             include_str!("../docs/commands/core.md"),
@@ -212,7 +211,10 @@ fn docs_cover_numbered_remote_and_active_local_stack_unlink() {
             "docs/commands/reference.md",
             include_str!("../docs/commands/reference.md"),
         ),
-        ("skills.md", include_str!("../skills.md")),
+        (
+            "docs/integrations/github-native-stacks.md",
+            include_str!("../docs/integrations/github-native-stacks.md"),
+        ),
     ];
 
     for (path, content) in docs {
