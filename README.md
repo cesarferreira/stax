@@ -4,6 +4,7 @@
   <p>
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&amp;logo=github&amp;label=tests"></a>
     <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
+    <a href="https://crates.io/crates/stax"><img alt="Crates.io downloads" src="https://img.shields.io/crates/d/stax"></a>
     <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
   </p>
   <img src="assets/screenshot.png" width="100%" alt="stax in action">
