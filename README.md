@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>stax</h1>
+  <h1><img src="assets/stax-logo.svg" width="124" height="42" alt="stax"></h1>
   <p><strong>Keep working while your first PR is in review.</strong></p>
   <p>
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&amp;logo=github&amp;label=tests"></a>
