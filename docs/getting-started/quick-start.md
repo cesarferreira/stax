@@ -2,10 +2,10 @@
 
 ## 1. Onboard
 
-`st setup` is the recommended one-shot: shell integration, AI agent skills, and GitHub auth.
+`st setup` configures GitHub auth, shell integration, and optional AI agent skills.
 
 ```bash
-st setup --yes
+st setup
 ```
 
 <details>
@@ -23,29 +23,51 @@ export STAX_GITHUB_TOKEN="ghp_xxxx"
 ```
 
 By default stax ignores ambient `GITHUB_TOKEN`. Opt in with `auth.allow_github_token_env = true`.
+For token selection and troubleshooting, see the [configuration reference](../configuration/index.md).
 
 </details>
 
 ## 2. Ship a stack end-to-end
 
+In a GitHub repo you can push to, start on a clean, up-to-date `main`. Create an API branch, then stack the UI and tests on top of it as siblings:
+
 ```bash
-# Stack two branches on trunk
 st create auth-api
+echo "Token refresh API" > auth-api-demo.md
+git add auth-api-demo.md
+git commit -m "Document the token refresh API"
+
 st create auth-ui
+echo "Token refresh UI" > auth-ui-demo.md
+git add auth-ui-demo.md
+git commit -m "Document the token refresh UI"
 
-# See the stack
+st create auth-tests --from auth-api
+echo "Token refresh test cases" > auth-tests-demo.md
+git add auth-tests-demo.md
+git commit -m "Outline the token refresh tests"
+
 st ls
-# ◉  auth-ui 1↑
-# ○  auth-api 1↑
-# ○  main
+```
 
-# Submit the whole stack as linked PRs
-st ss
+```text
+◉       auth-tests 1↑
+│ ○     auth-ui 1↑
+○─┘     auth-api 1↑
+○    ☁️ main
+```
 
-# After the bottom PR merges on GitHub, catch up in one shot:
-st rs --restack    # pull trunk, clean merged, rebase the rest
-# or: st refresh    # sync + restack + push/update PRs in one command
-# scripts: st refresh --force --yes --no-prompt
+`◉` marks the checked-out branch. Read the stack from the bottom up: `auth-api` builds on `main`, and `auth-ui` and `auth-tests` both build on `auth-api`. To submit both sides of the split, run:
+
+```bash
+git switch auth-api
+st upstack submit
+```
+
+On GitHub, `auth-api` targets `main`, while `auth-ui` and `auth-tests` both target `auth-api`. After `auth-api` merges, run this from each remaining branch to sync trunk, restack, and update its PR:
+
+```bash
+st refresh
 ```
 
 Picked the wrong trunk? `st trunk main` or `st init --trunk <branch>` reconfigures.
