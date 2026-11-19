@@ -1,14 +1,20 @@
-# stax
-
-[![Tests](https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&logo=github&label=tests)](https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml)
-[![Crates.io](https://img.shields.io/crates/v/stax)](https://crates.io/crates/stax)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-
-**Keep working while your first PR is in review.**
+<div align="center">
+  <h1>stax</h1>
+  <p><strong>Keep working while your first PR is in review.</strong></p>
+  <p>
+    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/cesarferreira/stax/rust-tests.yml?branch=main&amp;logo=github&amp;label=tests"></a>
+    <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
+    <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  </p>
+  <p>
+    <a href="#install">Install</a> ·
+    <a href="#quickstart">Quickstart</a> ·
+    <a href="#commands">Commands</a> ·
+    <a href="https://cesarferreira.github.io/stax/">Docs</a>
+  </p>
+</div>
 
 Build the UI on top of the API branch instead of waiting for the API to merge. Each gets its own PR, and reviewers see only what that branch adds. stax tracks which Git branches build on each other, opens PRs against the right base, and rebases the remaining branches when the base changes.
-
-[Install](#install) · [Quickstart](#quickstart) · [Commands](#commands) · [Docs](https://cesarferreira.github.io/stax/)
 
 ## Install
 
