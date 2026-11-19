@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 64">
+  <defs>
+    <linearGradient id="fork" gradientUnits="userSpaceOnUse" x1="12" y1="44" x2="112" y2="19">
+      <stop stop-color="#0652ff"/>
+      <stop offset=".55" stop-color="#00b2ed"/>
+      <stop offset="1" stop-color="#00dba7"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#fork)" stroke-width="8" stroke-linecap="round">
+    <path d="M16 44h96"/>
+    <path d="M44 44c20 0 19-25 40-25h28"/>
+  </g>
+  <g fill="url(#fork)">
+    <circle cx="16" cy="44" r="10"/>
+    <circle cx="112" cy="44" r="10"/>
+    <circle cx="112" cy="19" r="10"/>
+  </g>
+</svg>
