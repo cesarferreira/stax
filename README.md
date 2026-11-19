@@ -20,37 +20,46 @@ Or use `cargo binstall stax`. See the [installation guide](docs/getting-started/
 
 ## Quickstart
 
-Run `st setup` once to configure GitHub auth and shell integration. Then, in a GitHub repo you can push to, start on a clean, up-to-date `main`. Use two new files to give each branch its own commit:
+Run `st setup` once to configure GitHub auth and shell integration. Then, in a GitHub repo you can push to, start on a clean, up-to-date `main`. Create an API branch, then stack the UI and tests on top of it as siblings:
 
 ```bash
 st create auth-api
-printf 'Token refresh API\n' > auth-api-demo.md
+echo "Token refresh API" > auth-api-demo.md
 git add auth-api-demo.md
 git commit -m "Document the token refresh API"
 
 st create auth-ui
-printf 'Token refresh UI\n' > auth-ui-demo.md
+echo "Token refresh UI" > auth-ui-demo.md
 git add auth-ui-demo.md
 git commit -m "Document the token refresh UI"
+
+st create auth-tests --from auth-api
+echo "Token refresh test cases" > auth-tests-demo.md
+git add auth-tests-demo.md
+git commit -m "Outline the token refresh tests"
 
 st ls
 ```
 
 ```text
-◉     auth-ui 1↑
-○     auth-api 1↑
-○  ☁️ main
+◉       auth-tests 1↑
+│ ○     auth-ui 1↑
+○─┘     auth-api 1↑
+○    ☁️ main
 ```
 
-Read it from the bottom up: `auth-api` builds on `main`, and `auth-ui` builds on `auth-api`. `◉` marks the checked-out branch; `1↑` shows that each branch adds one commit to its parent.
+Read it from the bottom up: `auth-api` builds on `main`, then the stack splits. Both `auth-ui` and `auth-tests` build on `auth-api`, not on each other. `◉` marks the checked-out branch; `1↑` means one commit ahead of the parent.
+
+To open PRs for both sides of the split, submit from their shared base:
 
 ```bash
-st ss
+git switch auth-api
+st upstack submit
 ```
 
-This opens two linked PRs: **`auth-api` → `main`** and **`auth-ui` → `auth-api`**. The UI PR shows only the UI change, even though the branch already contains the API work.
+This opens `auth-api` against `main` and both `auth-ui` and `auth-tests` against `auth-api`. The UI and tests can be reviewed independently.
 
-Once `auth-api` merges, run `st refresh` from `auth-ui` to sync `main`, rebase the remaining branch, and update its PR.
+Once `auth-api` merges, run `st refresh` from each remaining branch to rebase it and update its PR.
 
 [Setup and auth help](docs/getting-started/quick-start.md) · [Merge and cascade guide](docs/workflows/merge-and-cascade.md)
 
@@ -61,6 +70,7 @@ Once `auth-api` merges, run `st refresh` from `auth-ui` to sync `main`, rebase t
 | Create a branch on top of the current one | `st create <name>` |
 | See my stacks and PR status | `st ls` |
 | Open or update PRs for the current stack | `st ss` |
+| Open or update PRs for the current branch and all its descendants | `st upstack submit` |
 | Preview a submit without making changes | `st ss --plan` |
 | Sync trunk, rebase, and update the stack's PRs | `st refresh` |
 | See which CI checks are failing | `st ci` |
