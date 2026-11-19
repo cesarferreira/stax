@@ -42,8 +42,19 @@ printf 'Token refresh UI\n' > auth-ui-demo.md
 git add auth-ui-demo.md
 git commit -m "Document the token refresh UI"
 
-st ls  # auth-ui sits on auth-api, which sits on main
-st ss  # open or update both PRs
+st ls
+```
+
+```text
+◉     auth-ui 1↑
+○     auth-api 1↑
+○  ☁️ main
+```
+
+`◉` marks the checked-out branch. Read the stack from the bottom up: `auth-api` adds one commit on top of `main`, and `auth-ui` adds one commit on top of `auth-api`.
+
+```bash
+st ss
 ```
 
 On GitHub, `auth-api` targets `main`, and `auth-ui` targets `auth-api`. After `auth-api` merges, run this from `auth-ui` to sync trunk, restack, and update the remaining PR:
