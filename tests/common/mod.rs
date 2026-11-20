@@ -83,6 +83,7 @@ impl IsolatedProcessEnv {
             .env_remove("STAX_FORGE_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .env_remove("GH_TOKEN")
+            .env_remove("STAX_BROWSER_COMMAND")
             .env_remove("GITLAB_TOKEN")
             .env_remove("GITEA_TOKEN")
             .env("STAX_DISABLE_UPDATE_CHECK", "1");
@@ -128,6 +129,7 @@ fn apply_sanitized_test_env(cmd: &mut Command) {
         .env_remove("STAX_GITHUB_TOKEN")
         .env_remove("STAX_SHELL_INTEGRATION")
         .env_remove("STAX_CONFIG_DIR")
+        .env_remove("STAX_BROWSER_COMMAND")
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)

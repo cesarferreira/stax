@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::ci::CheckRunInfo;
 use crate::commands::board::{BoardScope, BoardTabSelection};
-use crate::commands::open::open_url_in_browser;
+use crate::commands::open::{browser_open_failed_message, try_open_url_in_browser};
 use crate::config::Config;
 use crate::forge::{MergeMethod, PrComment};
 use crate::git::GitRepo;
@@ -523,8 +523,10 @@ fn toggle_draft(app: &mut BoardApp, req_tx: &Sender<BoardRequest>) {
 
 fn open_selected_in_browser(app: &mut BoardApp) {
     if let Some(url) = app.selected_url() {
-        open_url_in_browser(&url);
-        app.status_message = Some(format!("Opened {url}"));
+        app.status_message = Some(match try_open_url_in_browser(&url) {
+            Ok(()) => format!("Opened {url}"),
+            Err(_) => browser_open_failed_message(&url),
+        });
     } else {
         app.status_message = Some("Nothing selected to open".to_string());
     }

@@ -15,7 +15,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::commands::open::open_url_in_browser;
+use crate::commands::open::{browser_open_failed_message, try_open_url_in_browser};
 use crate::commands::ready::{
     ReadyFetchOutcome, ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope,
 };
@@ -171,8 +171,10 @@ fn handle_key(
         }
         KeyCode::Enter | KeyCode::Char('o') => {
             if let Some(url) = app.selected_pr_url() {
-                open_url_in_browser(&url);
-                app.status_message = Some(format!("Opened {url}"));
+                app.status_message = Some(match try_open_url_in_browser(&url) {
+                    Ok(()) => format!("Opened {url}"),
+                    Err(_) => browser_open_failed_message(&url),
+                });
             } else {
                 app.status_message = Some("Selected row has no loaded PR URL yet".to_string());
             }
