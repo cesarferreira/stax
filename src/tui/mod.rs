@@ -18,7 +18,7 @@ use crate::application::{
     OperationEvent, OperationOutcome, OperationReporter, OperationRequest, OperationStage,
     PullRequestMode, RestackScope, execute_repository_operation,
 };
-use crate::commands::open::open_url_in_browser;
+use crate::commands::open::{browser_open_failed_message, try_open_url_in_browser};
 use crate::git::GitRepo;
 use anyhow::Result;
 use crossterm::{
@@ -761,8 +761,10 @@ fn execute_pending_operation(
     let result = execute_repository_operation(workdir, request, &mut reporter);
     match result {
         Ok(receipt) => {
-            if let OperationOutcome::PullRequestResolved { url, .. } = &receipt.outcome {
-                open_url_in_browser(url);
+            if let OperationOutcome::PullRequestResolved { url, .. } = &receipt.outcome
+                && try_open_url_in_browser(url).is_err()
+            {
+                return Ok(Some(browser_open_failed_message(url)));
             }
             Ok(Some(receipt.summary))
         }

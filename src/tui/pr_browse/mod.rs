@@ -4,7 +4,7 @@ pub mod app;
 pub mod markdown;
 pub mod ui;
 
-use crate::commands::open::open_url_in_browser;
+use crate::commands::open::{browser_open_failed_message, try_open_url_in_browser};
 use crate::commands::pr_browse::Scope;
 use crate::forge::MergeMethod;
 use crate::github::GitHubClient;
@@ -115,8 +115,8 @@ pub fn run(scope: Scope, initial: Option<PrRef>) -> Result<()> {
     let mut app = App::new(sources, initial.clone(), scope.web_base.clone());
     let (req_tx, rx) = spawn_worker(runtime, search_client, Arc::new(scope));
 
-    for index in 0..app.groups.len() {
-        let source = app.groups[index].source.clone();
+    for (index, group) in app.groups.iter().enumerate() {
+        let source = group.source.clone();
         let _ = req_tx.send(Request::Search { index, source });
     }
     if let Some(pr) = initial {
@@ -470,8 +470,11 @@ fn handle_view_key(app: &mut App, key: KeyEvent, req_tx: &Sender<Request>) {
             }
         }
         KeyCode::Char('o') => {
-            if let Some(pr) = &app.current {
-                open_url_in_browser(&app.url(pr));
+            if let Some(pr) = app.current.clone() {
+                let url = app.url(&pr);
+                if try_open_url_in_browser(&url).is_err() {
+                    app.status = Some(browser_open_failed_message(&url));
+                }
             }
         }
         KeyCode::Char('y') => {
