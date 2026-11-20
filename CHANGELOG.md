@@ -2,12 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.121.0] - 2026-11-20
+
+### 💼 Other
+
+- Add `stax pr browse`, an interactive PR browser and reviewer ([#948](https://github.com/cesarferreira/stax/issues/948))
+- Add non-interactive `pr show`, `pr diff`, `pr comment` and `pr approve` commands ([#952](https://github.com/cesarferreira/stax/issues/952))
+- Rewrite the README around the stacked PR workflow ([#954](https://github.com/cesarferreira/stax/issues/954))
+- Add a stax logo to the README header ([#955](https://github.com/cesarferreira/stax/issues/955))
+- Show a helpful link when browser launch fails ([#956](https://github.com/cesarferreira/stax/issues/956))
 ## [0.120.0] - 2026-11-14
 
 ### 🚀 Features
 
 - *(wt)* Add unlock action to worktree dashboard ([#949](https://github.com/cesarferreira/stax/issues/949))
 - *(wt)* Add lock/unlock CLI commands and dashboard lock key ([#950](https://github.com/cesarferreira/stax/issues/950))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.119.1] - 2026-11-12
 
 ### 💼 Other
