@@ -83,23 +83,7 @@ pub(crate) fn run_go_on_worktree(
         &worktree.name,
     )?;
 
-    if !worktree.path.exists() {
-        bail!(
-            "Worktree path '{}' does not exist. Run `stax worktree prune`.",
-            worktree.path.display()
-        );
-    }
-
-    format_go_message(worktree);
-
-    if !no_verify {
-        run_blocking_hook(None, &worktree.path, "pre_go")?;
-        spawn_background_hook(
-            config.worktree.hooks.post_go.as_deref(),
-            &worktree.path,
-            "post_go",
-        )?;
-    }
+    prepare_go(worktree, &config, no_verify)?;
 
     if shell_output {
         emit_shell_payload(&worktree.path, launch.as_ref());
@@ -120,5 +104,26 @@ pub(crate) fn run_go_on_worktree(
         }
     }
 
+    Ok(())
+}
+
+pub(crate) fn prepare_go(worktree: &WorktreeInfo, config: &Config, no_verify: bool) -> Result<()> {
+    if !worktree.path.exists() {
+        bail!(
+            "Worktree path '{}' does not exist. Run `stax worktree prune`.",
+            worktree.path.display()
+        );
+    }
+
+    format_go_message(worktree);
+
+    if !no_verify {
+        run_blocking_hook(None, &worktree.path, "pre_go")?;
+        spawn_background_hook(
+            config.worktree.hooks.post_go.as_deref(),
+            &worktree.path,
+            "post_go",
+        )?;
+    }
     Ok(())
 }

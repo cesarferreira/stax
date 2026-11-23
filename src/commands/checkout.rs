@@ -18,6 +18,7 @@ use dialoguer::{
     theme::{ColorfulTheme, Theme},
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::path::Path;
@@ -27,6 +28,7 @@ const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
 const ACTIVE_ROW_BACKGROUND: &str = "\u{1b}[48;5;236m";
 const CHECKOUT_BRANCH_STYLE: &str = "\u{1b}[1;96m";
 const ANSI_RESET: &str = "\u{1b}[0m";
+const CHECKOUT_JSON_VERSION: u32 = 1;
 
 #[derive(Clone, Copy)]
 struct CheckoutColor {
@@ -50,6 +52,100 @@ struct CheckoutRow {
     branch: String,
     display: String,
     active_display: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputFormat {
+    Human,
+    Shell,
+    Json,
+}
+
+#[derive(Serialize)]
+struct CheckoutCandidate<'a> {
+    name: &'a str,
+    parent: Option<&'a str>,
+    is_current: bool,
+    is_trunk: bool,
+    linked_worktree: Option<String>,
+    needs_restack: bool,
+    pr_number: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct CheckoutList<'a> {
+    version: u32,
+    trunk: &'a str,
+    current: &'a str,
+    branches: Vec<CheckoutCandidate<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CheckoutResult {
+    CheckedOut,
+    AlreadyCurrent,
+    Worktree,
+}
+
+#[derive(Serialize)]
+struct CheckoutReceipt<'a> {
+    version: u32,
+    outcome: CheckoutResult,
+    branch: &'a str,
+    worktree_path: Option<&'a Path>,
+}
+
+fn print_checkout_result(
+    outcome: CheckoutResult,
+    branch: &str,
+    worktree_path: Option<&Path>,
+) -> Result<()> {
+    let receipt = CheckoutReceipt {
+        version: CHECKOUT_JSON_VERSION,
+        outcome,
+        branch,
+        worktree_path,
+    };
+    println!("{}", serde_json::to_string(&receipt)?);
+    Ok(())
+}
+
+pub(crate) fn list_json() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    let stack = Stack::load(&repo)?;
+    let (display_branches, _, _) = picker_display_branches(&stack)?;
+    let mut branches = Vec::new();
+    if !display_branches.is_empty() {
+        let worktrees = repo.linked_worktree_names_by_branch()?;
+        for name in display_branches
+            .iter()
+            .map(|branch| branch.name.as_str())
+            .chain(std::iter::once(stack.trunk.as_str()))
+        {
+            let info = stack.branches.get(name);
+            branches.push(CheckoutCandidate {
+                name,
+                parent: info.and_then(|branch| branch.parent.as_deref()),
+                is_current: name == current,
+                is_trunk: name == stack.trunk,
+                linked_worktree: worktrees.get(name).cloned(),
+                needs_restack: info.is_some_and(|branch| branch.needs_restack),
+                pr_number: info.and_then(|branch| branch.pr_number),
+            });
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&CheckoutList {
+            version: CHECKOUT_JSON_VERSION,
+            trunk: &stack.trunk,
+            current: &current,
+            branches,
+        })?
+    );
+    Ok(())
 }
 
 #[derive(Default)]
@@ -198,9 +294,39 @@ pub fn run(
     child: Option<usize>,
     shell_output: bool,
 ) -> Result<()> {
+    let output = if shell_output {
+        OutputFormat::Shell
+    } else {
+        OutputFormat::Human
+    };
+    run_formatted(branch, pr, trunk, parent, child, output)
+}
+
+pub(crate) fn run_formatted(
+    branch: Option<String>,
+    pr: Option<u64>,
+    trunk: bool,
+    parent: bool,
+    child: Option<usize>,
+    output: OutputFormat,
+) -> Result<()> {
+    let json = output == OutputFormat::Json;
+    let shell_output = output == OutputFormat::Shell;
+    if json {
+        let targets = [branch.is_some(), trunk, parent, child.is_some()];
+        if targets.into_iter().filter(|selected| *selected).count() != 1 {
+            anyhow::bail!(
+                "--json requires exactly one checkout target: a branch, --trunk, --parent, or --child. Use --list --json for picker candidates."
+            );
+        }
+    }
+
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
     let current = repo.current_branch()?;
+    if json && !repo.is_initialized() {
+        crate::commands::init::auto_init(&repo)?;
+    }
 
     // Handle explicit --pr flag
     if let Some(pr_num) = pr {
@@ -208,7 +334,8 @@ pub fn run(
     }
 
     // Parse "#123" from branch string
-    if let Some(ref branch_str) = branch
+    if !json
+        && let Some(ref branch_str) = branch
         && let Some(pr_num) = parse_pr_number(branch_str)?
     {
         return checkout_by_pr(&repo, pr_num, shell_output);
@@ -250,23 +377,6 @@ pub fn run(
             Some(b) => b,
             None => {
                 let stack = Stack::load(&repo)?;
-                let _workdir = repo.workdir()?;
-
-                if stack.branches.is_empty() {
-                    println!("No branches found.");
-                    return Ok(());
-                }
-
-                // Get trunk children (each starts a chain)
-                let trunk_info = stack.branches.get(&stack.trunk);
-                let trunk_children: Vec<String> =
-                    trunk_info.map(|b| b.children.clone()).unwrap_or_default();
-
-                if trunk_children.is_empty() {
-                    println!("No branches found.");
-                    return Ok(());
-                }
-
                 let rows = build_checkout_rows(&stack, &repo, &current)?;
 
                 if rows.is_empty() {
@@ -308,13 +418,18 @@ pub fn run(
 
     drop(repo);
 
-    if let Some(worktree) = route_checkout_to_worktree(&workdir, &target, shell_output)? {
+    if let Some(worktree) = route_checkout_to_worktree(&workdir, &target, output)? {
+        if json {
+            go::prepare_go(&worktree, &Config::load()?, false)?;
+            return print_checkout_result(CheckoutResult::Worktree, &target, Some(&worktree.path));
+        }
         if shell_output {
             emit_shell_message(&format!(
                 "Routed checkout to worktree '{}' for branch '{}'",
                 worktree.name, target
             ));
         } else {
+            println!();
             println!(
                 "{}",
                 format!(
@@ -338,7 +453,9 @@ pub fn run(
             Vec::new(),
         )?;
     } else if target == current {
-        if shell_output {
+        if json {
+            return print_checkout_result(CheckoutResult::AlreadyCurrent, &target, None);
+        } else if shell_output {
             emit_shell_message(&already_on_shell_message(&target));
         } else {
             println!("{}", already_on_message(&target));
@@ -347,17 +464,23 @@ pub fn run(
         if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
-        let timer = LiveTimer::maybe_new(true, &format!("Checking out {}...", target));
+        let timer = LiveTimer::maybe_new(!json, &format!("Checking out {}...", target));
         let receipt = RepositorySession::open(&workdir)?
             .checkout(&target, &mut NoopOperationReporter)
             .map_err(anyhow::Error::from)?;
         LiveTimer::maybe_finish_ok(timer, "done");
-        let checked_out_branch = match receipt.outcome {
-            OperationOutcome::Checkout(CheckoutOutcome::CheckedOut { branch }) => branch,
-            OperationOutcome::Checkout(CheckoutOutcome::AlreadyCurrent { branch }) => branch,
-            _ => target.clone(),
+        let (checked_out_branch, result) = match receipt.outcome {
+            OperationOutcome::Checkout(CheckoutOutcome::AlreadyCurrent { branch }) => {
+                (branch, CheckoutResult::AlreadyCurrent)
+            }
+            OperationOutcome::Checkout(CheckoutOutcome::CheckedOut { branch }) => {
+                (branch, CheckoutResult::CheckedOut)
+            }
+            _ => (target, CheckoutResult::CheckedOut),
         };
-        if shell_output {
+        if json {
+            return print_checkout_result(result, &checked_out_branch, None);
+        } else if shell_output {
             emit_shell_message(&checkout_completion_shell_message(&checked_out_branch));
         } else {
             println!("{}", checkout_completion_message(&checked_out_branch));
@@ -370,9 +493,16 @@ pub fn run(
 fn route_checkout_to_worktree(
     workdir: &Path,
     target: &str,
-    shell_output: bool,
+    output: OutputFormat,
 ) -> Result<Option<WorktreeInfo>> {
-    let Some(worktree) = GitRepo::branch_worktree_in(workdir, target)? else {
+    let worktree = if output == OutputFormat::Json {
+        GitRepo::list_worktrees_in(workdir)?
+            .into_iter()
+            .find(|worktree| worktree.branch.as_deref() == Some(target))
+    } else {
+        GitRepo::branch_worktree_in(workdir, target)?
+    };
+    let Some(worktree) = worktree else {
         return Ok(None);
     };
 
@@ -383,14 +513,38 @@ fn route_checkout_to_worktree(
         return Ok(None);
     }
 
-    if !shell_output {
-        println!();
-    }
-
     Ok(Some(worktree))
 }
 
+fn picker_display_branches(stack: &Stack) -> Result<(Vec<DisplayBranch>, usize, usize)> {
+    let mut trunk_children = stack
+        .branches
+        .get(&stack.trunk)
+        .map(|branch| branch.children.clone())
+        .unwrap_or_default();
+    trunk_children.sort();
+    let mut display_branches: Vec<DisplayBranch> = Vec::new();
+    let mut max_column = 0;
+
+    for (i, root) in trunk_children.iter().enumerate() {
+        collect_display_branches_with_nesting(
+            stack,
+            root,
+            i,
+            &mut display_branches,
+            &mut max_column,
+        )?;
+    }
+    let trunk_child_max_col = trunk_children.len().saturating_sub(1);
+    Ok((display_branches, max_column, trunk_child_max_col))
+}
+
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
+    let (display_branches, max_column, trunk_child_max_col) = picker_display_branches(stack)?;
+    if display_branches.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let config = Config::load()?;
     let worktree_glyph = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
     let linked_worktrees_by_branch: HashSet<String> = repo
@@ -400,32 +554,6 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         .filter_map(|worktree| worktree.branch)
         .collect();
     let show_worktree_column = !linked_worktrees_by_branch.is_empty();
-
-    let trunk_info = stack.branches.get(&stack.trunk);
-    let trunk_children: Vec<String> = trunk_info
-        .map(|b| b.children.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-
-    if trunk_children.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut display_branches: Vec<DisplayBranch> = Vec::new();
-    let mut max_column = 0;
-    let mut sorted_trunk_children = trunk_children;
-    sorted_trunk_children.sort();
-
-    for (i, root) in sorted_trunk_children.iter().enumerate() {
-        collect_display_branches_with_nesting(
-            stack,
-            root,
-            i,
-            &mut display_branches,
-            &mut max_column,
-        )?;
-    }
 
     // Build ordered list of all branches we care about (displayed + trunk)
     let mut ordered_branches: Vec<String> =
@@ -543,12 +671,6 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
 
     // Render trunk row (matches status.rs)
     let is_trunk_current = stack.trunk == current;
-    let trunk_child_max_col = if sorted_trunk_children.is_empty() {
-        0
-    } else {
-        sorted_trunk_children.len() - 1
-    };
-
     let mut trunk_tree = String::new();
     let mut trunk_visual_width = 0;
     let trunk_circle = if is_trunk_current { "◉" } else { "○" };

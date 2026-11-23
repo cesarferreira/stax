@@ -1142,6 +1142,206 @@ fn test_checkout_alias_co() {
 }
 
 #[test]
+fn test_checkout_json_lists_picker_candidates() {
+    let repo = TestRepo::new();
+
+    let empty = repo.run_stax(&["co", "--list", "--json"]);
+    assert!(empty.status.success(), "{}", TestRepo::stderr(&empty));
+    let empty: Value = serde_json::from_slice(&empty.stdout).expect("checkout list JSON");
+    assert_eq!(
+        empty,
+        serde_json::json!({"version": 1, "trunk": "main", "current": "main", "branches": []})
+    );
+
+    assert!(repo.git(&["switch", "-c", "beta"]).status.success());
+    assert!(
+        repo.run_stax(&["branch", "track", "--parent", "main"])
+            .status
+            .success()
+    );
+    assert!(repo.git(&["switch", "main"]).status.success());
+    assert!(repo.git(&["switch", "-c", "alpha"]).status.success());
+    assert!(
+        repo.run_stax(&["branch", "track", "--parent", "main"])
+            .status
+            .success()
+    );
+    assert!(repo.git(&["switch", "-c", "child"]).status.success());
+    assert!(
+        repo.run_stax(&["branch", "track", "--parent", "alpha"])
+            .status
+            .success()
+    );
+    assert!(repo.git(&["branch", "untracked"]).status.success());
+
+    let output = repo.run_stax(&["branch", "co", "--json", "--list", "--shell-output"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let list: Value = serde_json::from_slice(&output.stdout).expect("checkout list JSON");
+    assert_eq!(list["version"], 1);
+    assert_eq!(list["trunk"], "main");
+    assert_eq!(list["current"], "child");
+    let branches = list["branches"].as_array().expect("branches array");
+    let names: Vec<&str> = branches
+        .iter()
+        .filter_map(|branch| branch["name"].as_str())
+        .collect();
+    assert_eq!(names, ["child", "alpha", "beta", "main"]);
+    assert_eq!(
+        branches[0],
+        serde_json::json!({
+            "name": "child", "parent": "alpha", "is_current": true, "is_trunk": false,
+            "linked_worktree": null, "needs_restack": false, "pr_number": null
+        })
+    );
+    assert_eq!(branches[3]["is_trunk"], true);
+    assert_eq!(repo.current_branch(), "child");
+}
+
+#[test]
+fn test_checkout_json_reports_literal_branch_outcome() {
+    let repo = TestRepo::new();
+
+    for branch in ["#123", "quote'branch"] {
+        assert!(repo.git(&["branch", branch]).status.success());
+        for outcome in ["checked_out", "already_current"] {
+            let output = repo.run_stax(&["co", "--json", "--shell-output", "--", branch]);
+            assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+            let result: Value =
+                serde_json::from_slice(&output.stdout).expect("checkout result JSON");
+            assert_eq!(
+                result,
+                serde_json::json!({"version": 1, "outcome": outcome, "branch": branch, "worktree_path": null})
+            );
+            assert_eq!(repo.current_branch(), branch);
+        }
+    }
+
+    let output = repo.run_stax(&["co", "--json", "--trunk"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["branch"],
+        "main"
+    );
+    assert_eq!(repo.current_branch(), "main");
+}
+
+#[test]
+fn test_checkout_json_routes_to_linked_worktree() {
+    let repo = TestRepo::new();
+    let worktree = repo.path().join("linked worktree");
+    assert!(repo.git(&["switch", "-c", "lane"]).status.success());
+    assert!(
+        repo.run_stax(&["branch", "track", "--parent", "main"])
+            .status
+            .success()
+    );
+    assert!(repo.git(&["switch", "main"]).status.success());
+    let added = repo.git(&["worktree", "add", worktree.to_str().unwrap(), "lane"]);
+    assert!(added.status.success(), "{}", TestRepo::stderr(&added));
+
+    let list = repo.run_stax(&["co", "--list", "--json"]);
+    assert!(list.status.success(), "{}", TestRepo::stderr(&list));
+    let list: Value = serde_json::from_slice(&list.stdout).expect("checkout list JSON");
+    assert_eq!(list["branches"][0]["linked_worktree"], "linked worktree");
+
+    let output = repo.run_stax(&["b", "co", "lane", "--json", "--shell-output"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: Value = serde_json::from_slice(&output.stdout).expect("checkout result JSON");
+    assert_eq!(result["version"], 1);
+    assert_eq!(result["outcome"], "worktree");
+    assert_eq!(result["branch"], "lane");
+    let result_path = Path::new(result["worktree_path"].as_str().expect("worktree path"));
+    assert_eq!(
+        result_path.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+    assert_eq!(repo.current_branch(), "main");
+}
+
+#[test]
+fn test_checkout_json_routes_only_exact_branch_names() {
+    let repo = TestRepo::new();
+    let worktree = repo.path().join("lane");
+    let added = repo.git(&["worktree", "add", "-b", "lane", worktree.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", TestRepo::stderr(&added));
+
+    let literal = "refs/heads/lane";
+    let missing = repo.run_stax(&["co", "--json", "--", literal]);
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+    assert!(TestRepo::stderr(&missing).contains("does not exist locally"));
+    assert_eq!(repo.current_branch(), "main");
+
+    let added_branch = repo.git(&["branch", literal]);
+    assert!(
+        added_branch.status.success(),
+        "{}",
+        TestRepo::stderr(&added_branch)
+    );
+    let output = repo.run_stax(&["co", "--json", "--", literal]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: Value = serde_json::from_slice(&output.stdout).expect("checkout result JSON");
+    assert_eq!(
+        result,
+        serde_json::json!({"version": 1, "outcome": "checked_out", "branch": literal, "worktree_path": null})
+    );
+    let current = repo.git(&["symbolic-ref", "HEAD"]);
+    assert_eq!(
+        TestRepo::stdout(&current).trim(),
+        "refs/heads/refs/heads/lane"
+    );
+
+    let output = repo.run_stax(&["co", "--json", "--", "lane"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+    let result: Value = serde_json::from_slice(&output.stdout).expect("checkout result JSON");
+    assert_eq!(result["outcome"], "worktree");
+    let result_path = Path::new(result["worktree_path"].as_str().expect("worktree path"));
+    assert_eq!(
+        result_path.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn test_checkout_json_errors_leave_stdout_and_changes_intact() {
+    let repo = TestRepo::new();
+
+    for args in [
+        &["co", "--json"][..],
+        &["co", "--list"],
+        &["co", "--list", "--json", "main"],
+        &["co", "--list", "--json", "--trunk"],
+        &["co", "--json", "--pr", "123"],
+        &["co", "--json", "--trunk", "--parent"],
+    ] {
+        let output = repo.run_stax(args);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+    }
+
+    assert!(repo.git(&["switch", "-c", "conflict"]).status.success());
+    repo.create_file("README.md", "different branch\n");
+    repo.commit("Change tracked file");
+    assert!(repo.git(&["switch", "main"]).status.success());
+    repo.create_file("README.md", "local edits\n");
+
+    let output = repo.run_stax(&["co", "conflict", "--json"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{}", TestRepo::stdout(&output));
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("Could not check out branch 'conflict'"),
+        "{stderr}"
+    );
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(
+        fs::read_to_string(repo.path().join("README.md")).unwrap(),
+        "local edits\n"
+    );
+}
+
+#[test]
 fn test_checkout_routes_to_existing_worktree_with_duplicate_leaf_name() {
     let repo = TestRepo::new();
 

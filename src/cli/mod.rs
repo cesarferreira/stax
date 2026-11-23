@@ -16,6 +16,30 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
     commands::submit::run(scope, submit.into())
 }
 
+fn run_checkout(args: CheckoutArgs) -> Result<()> {
+    use commands::checkout::{self, OutputFormat};
+
+    if args.list {
+        return checkout::list_json();
+    }
+
+    let output = if args.json {
+        OutputFormat::Json
+    } else if args.shell_output {
+        OutputFormat::Shell
+    } else {
+        OutputFormat::Human
+    };
+    checkout::run_formatted(
+        args.branch,
+        args.pr,
+        args.trunk,
+        args.parent,
+        args.child,
+        output,
+    )
+}
+
 fn print_subcommand_help(name: &str) -> Result<()> {
     let mut cmd = Cli::command();
     let subcommand = cmd
@@ -297,8 +321,14 @@ pub fn run() -> Result<()> {
         _ => {}
     }
 
-    // Ensure repo is initialized for all other commands
-    commands::init::ensure_initialized()?;
+    // JSON checkout must skip interactive repository setup.
+    if !matches!(
+        &command,
+        Commands::Checkout(CheckoutArgs { json: true, .. })
+            | Commands::Branch(BranchCommands::Checkout(CheckoutArgs { json: true, .. }))
+    ) {
+        commands::init::ensure_initialized()?;
+    }
 
     // Block commands that do not explicitly support running during an active rebase.
     if !command.allows_during_rebase()
@@ -566,14 +596,7 @@ pub fn run() -> Result<()> {
             delete_merged,
             get,
         ),
-        Commands::Checkout {
-            branch,
-            pr,
-            trunk,
-            parent,
-            child,
-            shell_output,
-        } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
+        Commands::Checkout(args) => run_checkout(args),
         Commands::Get {
             branch,
             parent,
@@ -865,14 +888,7 @@ pub fn run() -> Result<()> {
             } => commands::branch::create::run(
                 name, message, from, prefix, all, insert, below, no_verify, ai, yes,
             ),
-            BranchCommands::Checkout {
-                branch,
-                pr,
-                trunk,
-                parent,
-                child,
-                shell_output,
-            } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
+            BranchCommands::Checkout(args) => run_checkout(args),
             BranchCommands::Track {
                 parent,
                 all,

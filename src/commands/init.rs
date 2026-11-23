@@ -54,7 +54,7 @@ pub fn run(trunk: Option<String>) -> Result<()> {
 }
 
 /// Auto-initialize without prompts (for non-interactive use)
-fn auto_init(repo: &GitRepo) -> Result<bool> {
+pub(crate) fn auto_init(repo: &GitRepo) -> Result<bool> {
     if let Ok(trunk) = repo.detect_trunk() {
         repo.set_trunk(&trunk)?;
         return Ok(true);

@@ -78,6 +78,7 @@ Once `auth-api` merges, run `st refresh` from each remaining branch to rebase it
 | Create a branch on top of the current one | `st create <name>` |
 | See my stacks and PR status | `st ls` |
 | Switch branches (pick interactively or pass a name) | `st co` / `st co <branch>` |
+| List checkout choices for a script or external picker | `st co --list --json` |
 | Open or update PRs for the current stack | `st ss` |
 | Open or update PRs for the current branch and all its descendants | `st upstack submit` |
 | Preview a submit without making changes | `st ss --plan` |

@@ -470,6 +470,9 @@ Restack the stack and submit updates, without fetching trunk (offline-friendly).
 ### `st checkout`
 
 - `--trunk` / `--parent` / `--child 1`
+- `st co --list --json` returns checkout candidates in picker order without opening the picker. The response has `version` (currently `1`), `trunk`, `current`, and `branches`. Each branch has `name`, `parent`, `is_current`, `is_trunk`, `linked_worktree` (the display name), `needs_restack`, and `pr_number`. The parent, worktree name, and PR number are `null` when absent. Repositories with only a trunk and no tracked stack return an empty `branches` array.
+- `st co <branch> --json` returns `version`, `outcome`, `branch`, and `worktree_path`. The outcome is `checked_out`, `already_current`, or `worktree`. For `worktree`, `worktree_path` is the absolute path of the existing worktree and the caller can open it. Otherwise the path is `null`.
+- For checkout with `--json`, provide exactly one local branch name or stack shortcut. A branch name such as `#123` is interpreted literally. PR lookup via `--pr` is available in the standard checkout mode. On failure, the command exits nonzero and prints diagnostics to stderr.
 
 ### `st web`
 
