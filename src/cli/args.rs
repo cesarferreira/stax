@@ -41,6 +41,33 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Commands>,
 }
 
+#[derive(Args)]
+pub(crate) struct CheckoutArgs {
+    /// Branch name (interactive if not provided)
+    pub(crate) branch: Option<String>,
+    /// Checkout branch by PR number
+    #[arg(long, conflicts_with = "branch")]
+    pub(crate) pr: Option<u64>,
+    /// Jump directly to trunk
+    #[arg(long)]
+    pub(crate) trunk: bool,
+    /// Jump to parent of current branch
+    #[arg(long)]
+    pub(crate) parent: bool,
+    /// Jump to child branch by index (1-based)
+    #[arg(long)]
+    pub(crate) child: Option<usize>,
+    /// List checkout picker candidates (requires --json)
+    #[arg(long, requires = "json", conflicts_with_all = ["branch", "pr", "trunk", "parent", "child"])]
+    pub(crate) list: bool,
+    /// Output JSON for listing or checking out a local branch
+    #[arg(long, conflicts_with = "pr")]
+    pub(crate) json: bool,
+    /// Internal: emit shell control lines for shell integration.
+    #[arg(long, hide = true)]
+    pub(crate) shell_output: bool,
+}
+
 #[derive(Args, Debug, Clone)]
 pub(crate) struct WebArgs {
     /// Repository or path inside one to open; defaults to the current directory
@@ -621,25 +648,7 @@ pub(crate) enum Commands {
 
     /// Checkout a branch in the stack
     #[command(visible_aliases = ["co", "bco"])]
-    Checkout {
-        /// Branch name (interactive if not provided)
-        branch: Option<String>,
-        /// Checkout branch by PR number
-        #[arg(long, conflicts_with = "branch")]
-        pr: Option<u64>,
-        /// Jump directly to trunk
-        #[arg(long)]
-        trunk: bool,
-        /// Jump to parent of current branch
-        #[arg(long)]
-        parent: bool,
-        /// Jump to child branch by index (1-based)
-        #[arg(long)]
-        child: Option<usize>,
-        /// Internal: emit shell control lines for shell integration.
-        #[arg(long, hide = true)]
-        shell_output: bool,
-    },
+    Checkout(CheckoutArgs),
 
     /// Fetch, checkout, and track a remote branch or stack
     Get {
@@ -1680,25 +1689,7 @@ pub(crate) enum BranchCommands {
 
     /// Checkout a branch in the stack
     #[command(visible_alias = "co")]
-    Checkout {
-        /// Branch name (interactive if not provided)
-        branch: Option<String>,
-        /// Checkout branch by PR number
-        #[arg(long, conflicts_with = "branch")]
-        pr: Option<u64>,
-        /// Jump directly to trunk
-        #[arg(long)]
-        trunk: bool,
-        /// Jump to parent of current branch
-        #[arg(long)]
-        parent: bool,
-        /// Jump to child branch by index (1-based)
-        #[arg(long)]
-        child: Option<usize>,
-        /// Internal: emit shell control lines for shell integration.
-        #[arg(long, hide = true)]
-        shell_output: bool,
-    },
+    Checkout(CheckoutArgs),
 
     /// Track an existing branch (set its parent)
     Track {

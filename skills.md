@@ -436,6 +436,8 @@ stax cascade --auto-stash-pop      # Stash/pop dirty target worktrees
 ```bash
 stax co                            # Interactive branch picker
 stax co <branch>                   # Checkout specific branch
+stax co --list --json              # Noninteractive picker candidates in native order
+stax co <branch> --json            # Checkout a literal branch, report outcome and worktree_path
 stax checkout --trunk              # Jump to trunk
 stax checkout --parent             # Jump to parent
 stax checkout --child 1            # Jump to first child
