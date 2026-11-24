@@ -157,6 +157,8 @@ pub fn run() -> Result<()> {
                 current: false,
                 compact: false,
                 quiet: false,
+                remote: false,
+                no_fetch: false,
             }
         }
     };
@@ -350,14 +352,32 @@ pub fn run() -> Result<()> {
             current,
             compact,
             quiet,
-        } => commands::status::run(json, stack, current, compact, quiet, false),
+            remote,
+            no_fetch,
+        } => commands::status::run(
+            json,
+            stack,
+            current,
+            compact,
+            quiet,
+            false,
+            commands::status::StatusRemoteMode::from_flags(remote, no_fetch),
+        ),
         Commands::Ll {
             json,
             stack,
             current,
             compact,
             quiet,
-        } => commands::status::run(json, stack, current, compact, quiet, true),
+        } => commands::status::run(
+            json,
+            stack,
+            current,
+            compact,
+            quiet,
+            true,
+            commands::status::StatusRemoteMode::Off,
+        ),
         Commands::Log {
             json,
             stack,
@@ -940,9 +960,15 @@ pub fn run() -> Result<()> {
             auto_stash_pop,
         } => commands::upstack::onto::run(target, auto_stash_pop),
         Commands::Downstack(cmd) => match cmd {
-            DownstackCommands::Get => {
-                commands::status::run(false, None, false, false, false, false)
-            }
+            DownstackCommands::Get => commands::status::run(
+                false,
+                None,
+                false,
+                false,
+                false,
+                false,
+                commands::status::StatusRemoteMode::Off,
+            ),
             DownstackCommands::Submit { submit } => {
                 run_submit(submit, commands::submit::SubmitScope::Downstack)
             }

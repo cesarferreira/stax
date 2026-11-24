@@ -536,3 +536,31 @@ fn merge_queue_rejects_ignore_failed_ci() {
         "--queue and --ignore-failed-ci should be mutually exclusive"
     );
 }
+
+#[test]
+fn ls_parses_remote_flag() {
+    let cli = parse_cli(&["stax", "ls", "--remote"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Status {
+            remote: true,
+            no_fetch: false,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn status_no_fetch_requires_remote() {
+    assert!(try_parse_cli(&["stax", "status", "--no-fetch"]).is_err());
+}
+
+#[test]
+fn status_remote_conflicts_with_compact() {
+    assert!(try_parse_cli(&["stax", "status", "--remote", "--compact"]).is_err());
+}
+
+#[test]
+fn ll_rejects_remote_flag() {
+    assert!(try_parse_cli(&["stax", "ll", "--remote"]).is_err());
+}

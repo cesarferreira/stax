@@ -20,6 +20,7 @@ Stax manages stacked branches: small focused branches layered on top of each oth
 
 ```bash
 stax status|ls                # Stack status (tree)
+stax status --remote [--no-fetch]   # Per-branch parity vs own <remote>/<branch> (in sync / N↑ unpushed / N↓ behind / diverged / no remote); read-only, fetches only shown refs; also `stax ls --remote`; add --json for remote_parity fields
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
 stax web [path] [--port <n>] [--no-open]  # Start localhost workspace; busy ports fall back automatically
@@ -379,6 +380,7 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
 stax sync --get                    # Before restacking, fetch each branch of the current stack (every tracked branch when on trunk) from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
+stax status --remote              # Multi-machine: see drift per branch first, then reconcile with `stax rs --get --all-stacks`
 stax sync --get --all-stacks       # Reconcile every tracked branch in every stack (parent before child); requires --get; frozen/other-worktree branches are skipped; does not widen --restack
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.

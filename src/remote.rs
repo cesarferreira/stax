@@ -372,6 +372,29 @@ pub fn ls_remote_head_oids(workdir: &Path, remote: &str) -> Result<HashMap<Strin
     Ok(heads)
 }
 
+/// Update only `refs/remotes/<remote>/<branch>` for the given branches, using explicit refspecs so
+/// local branches are never touched and non-standard `remote.<name>.fetch` settings don't matter.
+pub fn fetch_remote_tracking_refs(workdir: &Path, remote: &str, branches: &[String]) -> Result<()> {
+    if branches.is_empty() {
+        return Ok(());
+    }
+
+    let mut args: Vec<String> = vec!["fetch".into(), "--no-tags".into(), remote.into()];
+    args.extend(
+        branches
+            .iter()
+            .map(|b| format!("+refs/heads/{b}:refs/remotes/{remote}/{b}")),
+    );
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let output =
+        crate::git::command::output(workdir, &arg_refs).context("Failed to run git fetch")?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+}
+
 /// Fetch only the given branch tips from `remote` (plus any objects reachable from them).
 pub fn fetch_remote_refs(workdir: &Path, remote: &str, branches: &[String]) -> Result<()> {
     if branches.is_empty() {
@@ -1086,5 +1109,57 @@ mod tests {
             serde_json::from_str::<ForgeType>(r#""forgejo""#).unwrap(),
             ForgeType::Gitea
         );
+    }
+
+    #[test]
+    fn fetch_remote_tracking_refs_updates_only_tracking_ref() {
+        fn git(dir: &Path, args: &[&str]) -> String {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{:?}: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        let bare = TempDir::new().unwrap();
+        let work = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        git(bare.path(), &["init", "--bare", "-b", "main"]);
+        git(work.path(), &["init", "-b", "main"]);
+        git(work.path(), &["commit", "--allow-empty", "-m", "one"]);
+        git(
+            work.path(),
+            &["remote", "add", "origin", bare.path().to_str().unwrap()],
+        );
+        git(work.path(), &["push", "origin", "main"]);
+        git(work.path(), &["fetch", "origin"]);
+        let local_before = git(work.path(), &["rev-parse", "refs/heads/main"]);
+
+        git(other.path(), &["clone", bare.path().to_str().unwrap(), "."]);
+        git(other.path(), &["commit", "--allow-empty", "-m", "two"]);
+        git(other.path(), &["push", "origin", "main"]);
+        let remote_sha = git(other.path(), &["rev-parse", "HEAD"]);
+
+        fetch_remote_tracking_refs(work.path(), "origin", &["main".to_string()]).unwrap();
+
+        assert_eq!(
+            git(work.path(), &["rev-parse", "refs/remotes/origin/main"]),
+            remote_sha
+        );
+        assert_eq!(
+            git(work.path(), &["rev-parse", "refs/heads/main"]),
+            local_before
+        );
+        assert!(fetch_remote_tracking_refs(work.path(), "origin", &[]).is_ok());
     }
 }

@@ -9,6 +9,7 @@ mod model;
 mod move_subtree;
 mod operation;
 mod pull_request;
+mod remote_parity;
 mod rename;
 mod reorder;
 mod repository;
@@ -34,6 +35,9 @@ pub use operation::{
     OperationReceipt, OperationReporter, OperationRequest, OperationResult, OperationSideEffects,
     OperationStage, OperationWarning, PullRequestChange, PullRequestMode, PullRequestReceipt,
     RestackScope, TransactionStatus, TransactionSummary,
+};
+pub(crate) use remote_parity::{
+    RemoteParity, RemoteParityState, classify_remote_parity, refs_needing_fetch,
 };
 pub use repository::{RepositorySession, execute_repository_operation};
 pub(crate) use restack::RestackExecutionOptions;
