@@ -22,6 +22,7 @@ use colored::Colorize;
 use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -201,6 +202,9 @@ struct LocalBranchDeleteOutcome {
     deleted: bool,
     worktree_blocked: bool,
 }
+
+const NO_TERMINAL_DELETE_SKIP_REASON: &str = "no terminal to confirm deletion";
+const NO_TERMINAL_DELETE_HINT: &str = "Next: rerun in a terminal to confirm deletions, run `st sync --force` to delete without prompts, or set `sync.confirm_delete = false`";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncBranchDeleteAction {
@@ -398,6 +402,9 @@ struct SyncContext {
     json: bool,
     auto_confirm: bool,
     skip_interactive_plan: bool,
+    /// Computed once; false when stdin or stderr is not a terminal. Sync must never call
+    /// dialoguer then.
+    can_prompt: bool,
     sync_extra_fetch_refs: Vec<String>,
     imported_branches: Vec<String>,
     remote_delete_exempt_imported_branches: HashSet<String>,
@@ -497,6 +504,7 @@ impl SyncContext {
                 json,
                 auto_confirm,
                 skip_interactive_plan,
+                can_prompt: stdio_can_prompt(),
                 sync_extra_fetch_refs,
                 imported_branches,
                 remote_delete_exempt_imported_branches,
@@ -1151,7 +1159,12 @@ impl SyncContext {
     /// Interactive-only: show a consolidated plan after fetch and before trunk
     /// updates or deletions. Cancelling here leaves no transaction snapshot.
     fn confirm_sync_plan(&mut self, repo: &GitRepo) -> Result<SyncFlow> {
-        if self.quiet || self.auto_confirm || self.json || self.skip_interactive_plan {
+        if self.quiet
+            || self.auto_confirm
+            || self.json
+            || self.skip_interactive_plan
+            || !self.can_prompt
+        {
             return Ok(SyncFlow::Continue);
         }
 
@@ -1341,11 +1354,15 @@ impl SyncContext {
             }
         } else if self.delete_confirm_strategy == DeleteConfirmStrategy::BulkNonBlocking {
             if let Some(cleanup) = blocking {
-                choose_linked_worktree_delete_action(branch, cleanup)
+                if !self.can_prompt {
+                    Ok(SyncBranchDeleteAction::Skip)
+                } else {
+                    choose_linked_worktree_delete_action(branch, cleanup)
+                }
             } else {
                 Ok(SyncBranchDeleteAction::DeleteOnly)
             }
-        } else if self.quiet {
+        } else if self.quiet || !self.can_prompt {
             Ok(SyncBranchDeleteAction::Skip)
         } else if let Some(cleanup) = blocking {
             choose_linked_worktree_delete_action(branch, cleanup)
@@ -1363,9 +1380,20 @@ impl SyncContext {
     }
 
     fn record_unconfirmed_skip(&mut self, branch: &str) {
-        self.stats.record_cleanup_skip(branch, "not confirmed");
+        let no_terminal = !self.quiet && !self.can_prompt;
+        let reason = if no_terminal {
+            NO_TERMINAL_DELETE_SKIP_REASON
+        } else {
+            "not confirmed"
+        };
+        self.stats.record_cleanup_skip(branch, reason);
         if !self.quiet {
-            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+            let label = if no_terminal {
+                "skipped (no terminal to confirm)"
+            } else {
+                "skipped"
+            };
+            println!("    {} {}", branch.bright_black(), label.dimmed());
         }
     }
 
@@ -4696,6 +4724,12 @@ fn linked_worktree_delete_options(
     options
 }
 
+/// dialoguer renders and reads through stderr's terminal and fails with "not a terminal"
+/// otherwise, so every prompt must be gated on this.
+fn stdio_can_prompt() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
 fn choose_linked_worktree_delete_action(
     branch: &str,
     cleanup: &BlockingWorktreeCleanup,
@@ -5216,6 +5250,12 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
             )),
             TrunkUpdateFailure::Other => lines.push("Next: st trunk".to_string()),
         }
+    } else if stats
+        .cleanup_skips
+        .iter()
+        .any(|skip| skip.reason == NO_TERMINAL_DELETE_SKIP_REASON)
+    {
+        lines.push(NO_TERMINAL_DELETE_HINT.to_string());
     } else if !stats.cleanup_skips.is_empty() {
         lines.push("Next: st sweep".to_string());
     }
@@ -5595,6 +5635,46 @@ mod tests {
 
         assert!(output.contains("Next: st sweep"));
         assert!(!output.contains("Next: st restack --all"));
+    }
+
+    #[test]
+    fn render_sync_follow_up_hints_terminal_for_non_interactive_skips() {
+        let lines = render_sync_follow_up(&SyncStats {
+            cleanup_skips: vec![CleanupSkip {
+                branch: "old-auth".to_string(),
+                reason: NO_TERMINAL_DELETE_SKIP_REASON.to_string(),
+            }],
+            ..SyncStats::default()
+        });
+
+        let output = lines.join("\n");
+
+        assert!(output.contains("Cleanup skipped for old-auth (no terminal to confirm deletion)"));
+        assert!(output.contains(NO_TERMINAL_DELETE_HINT));
+        assert!(!output.contains("Next: st sweep"));
+        assert_eq!(lines.iter().filter(|l| l.starts_with("Next:")).count(), 1);
+    }
+
+    #[test]
+    fn render_sync_follow_up_prefers_trunk_recovery_over_terminal_hint() {
+        let lines = render_sync_follow_up(&SyncStats {
+            trunk_not_updated: Some(TrunkNotUpdated {
+                branch: "main".to_string(),
+                remote_ref: "origin/main".to_string(),
+                failure: TrunkUpdateFailure::Diverged,
+            }),
+            cleanup_skips: vec![CleanupSkip {
+                branch: "old-auth".to_string(),
+                reason: NO_TERMINAL_DELETE_SKIP_REASON.to_string(),
+            }],
+            ..SyncStats::default()
+        });
+
+        let output = lines.join("\n");
+
+        assert!(output.contains("Next: inspect and reconcile main with origin/main"));
+        assert!(!output.contains(NO_TERMINAL_DELETE_HINT));
+        assert_eq!(lines.iter().filter(|l| l.starts_with("Next:")).count(), 1);
     }
 
     #[test]
