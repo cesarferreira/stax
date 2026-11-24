@@ -371,7 +371,7 @@ stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
 # A deleted remote head does not make a known CLOSED PR merged. Closed branches stay local; stax sweep --delete --include-closed discards them explicitly.
 # Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
-# Non-interactive runs (no TTY, e.g. agents/CI): sync/pull/refresh skip the Sync plan and merged-branch deletion prompts; under the default `confirm_delete = true` merged branches are KEPT with a `Next:` hint, and linked-worktree branches are skipped. A dirty tree is not covered by this skip: `st sync`/`st rs` need `--stash` or `--no-stash` (otherwise the stash prompt is unanswerable); `st pull` stops unless `--auto-stash-pop`; `st refresh` has no `--stash`/`--no-stash` (stash or commit first; `--all-stacks` stops unless `--auto-stash-pop`). Use `stax sync --force` (or `--json --force`) to delete.
+# Non-interactive runs (no TTY, e.g. agents/CI): sync/pull/refresh skip the Sync plan and merged-branch deletion prompts; under the default `confirm_delete = true` merged branches are KEPT with a `Next:` hint, and linked-worktree branches are skipped. A dirty tree never prompts without a terminal: `st sync`/`st rs` stop before changing anything (hint: `--stash`); `st pull` (incl. `--no-restack`) and `st refresh` stop unless `--auto-stash-pop`; bare `st get` stops (commit or stash first); `--force` also stashes without a terminal for `st pull --no-restack` and single-stack `st refresh`. Use `stax sync --force` (or `--json --force`) to delete.
 # [sync] confirm_delete = false in config: sync/rs and bare `stax get` delete merged branches without the prompt (linked-worktree branches still ask; --quiet/--json still skip deletions).
 # [sync] ci_history_interval_days = 3: sync records merged-branch CI timings (for st ci ETAs) at most once per N days; 0 = every sync.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
@@ -386,7 +386,7 @@ stax pull                         # Reconcile every tracked branch in every stac
 stax pull --force                 # Same, but the remote wins: diverged branches are hard-reset to the remote tip; skips prompts
 stax pull --no-restack            # Only reconcile branches (same as sync --get --all-stacks)
 stax pull --dry-run               # Preview reconcile + the stacks that would be restacked; changes nothing
-stax pull --auto-stash-pop        # Stash/pop dirty worktrees while restacking
+stax pull --auto-stash-pop        # Stash/pop dirty worktrees (also stashes before sync, incl. --no-restack)
 stax sync --get --all-stacks       # Reconcile every tracked branch in every stack (parent before child); requires --get; frozen/other-worktree branches are skipped; does not widen --restack
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
@@ -418,7 +418,7 @@ stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
 stax refresh --all-stacks --get     # Reconcile every tracked branch against its remote, then restack/submit every stack
-stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
+stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees (also stashes before sync) while refreshing every stack
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
 stax refresh --verbose              # Show detailed sync/restack/submit timings

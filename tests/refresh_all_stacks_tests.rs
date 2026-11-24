@@ -383,3 +383,31 @@ fn all_stacks_stops_at_conflict_and_retry_finishes_remaining_stacks() {
         "the remaining stack should be restacked on retry"
     );
 }
+
+#[test]
+fn all_stacks_auto_stash_pop_stashes_dirty_tree_without_terminal() {
+    let repo = TestRepo::new_with_remote();
+    build_two_stacks(&repo);
+
+    repo.create_file("dirty.txt", "keep me");
+    let before = TestRepo::stdout(&repo.git(&["stash", "list"]))
+        .lines()
+        .count();
+
+    let output = repo.run_stax(&["refresh", "--all-stacks", "--no-submit", "--auto-stash-pop"]);
+    output.assert_success();
+    assert!(
+        !TestRepo::stderr(&output).contains("not a terminal"),
+        "must not prompt without a terminal: {}",
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).expect("dirty file restored"),
+        "keep me"
+    );
+    let after = TestRepo::stdout(&repo.git(&["stash", "list"]))
+        .lines()
+        .count();
+    assert_eq!(before, after, "stash must be popped after refresh");
+}

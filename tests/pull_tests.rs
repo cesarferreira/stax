@@ -222,6 +222,68 @@ fn pull_no_restack_only_reconciles() {
         "{}",
         TestRepo::stderr(&out)
     );
+    out.assert_failure();
+    assert!(
+        TestRepo::stderr(&out).contains("--auto-stash-pop"),
+        "{}",
+        TestRepo::stderr(&out)
+    );
+    assert!(!TestRepo::stderr(&out).contains("not a terminal"));
+}
+
+fn stash_count(repo: &TestRepo) -> usize {
+    TestRepo::stdout(&repo.git(&["stash", "list"]))
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+}
+
+#[test]
+fn pull_no_restack_dirty_tree_without_terminal_fails_cleanly() {
+    let repo = TestRepo::new_with_remote();
+    let (_a, b) = two_pushed_stacks(&repo, &["pl-na"], &["pl-nb"]);
+    update_remote_branch_in_clone(&repo, &b[0], "other.txt", "x");
+    advance_trunk(&repo);
+    repo.create_file("dirty.txt", "x");
+    let before = refs_snapshot(&repo);
+    let stashes = stash_count(&repo);
+
+    let out = repo.run_stax(&["pull", "--no-restack"]);
+
+    out.assert_failure();
+    let stderr = TestRepo::stderr(&out);
+    assert!(stderr.contains("Working tree is dirty"), "{stderr}");
+    assert!(stderr.contains("--auto-stash-pop"), "{stderr}");
+    assert!(!stderr.contains("re-run with --stash "), "{stderr}");
+    assert!(!stderr.contains("not a terminal"), "{stderr}");
+    assert_eq!(refs_snapshot(&repo), before);
+    assert_eq!(stash_count(&repo), stashes);
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "x"
+    );
+}
+
+#[test]
+fn pull_no_restack_auto_stash_pop_stashes_dirty_tree_without_terminal() {
+    let repo = TestRepo::new_with_remote();
+    let (_a, b) = two_pushed_stacks(&repo, &["pl-sa"], &["pl-sb"]);
+    let remote_b = update_remote_branch_in_clone(&repo, &b[0], "other.txt", "x");
+    repo.create_file("dirty.txt", "keep me");
+    let stashes = stash_count(&repo);
+
+    let out = repo.run_stax(&["pull", "--no-restack", "--auto-stash-pop"]);
+
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    assert!(stdout.contains("Stashed working tree changes."), "{stdout}");
+    assert!(stdout.contains("Restored stashed changes."), "{stdout}");
+    assert_eq!(stash_count(&repo), stashes);
+    assert_eq!(repo.get_commit_sha(&b[0]), remote_b);
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "keep me"
+    );
 }
 
 #[test]

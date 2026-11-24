@@ -67,7 +67,7 @@ pub fn run(
     );
     println!("  {} {}", "└─".dimmed(), step3);
 
-    commands::sync::run(
+    let sync_result = commands::sync::run(
         true,  // restack
         false, // full
         delete_merged,
@@ -78,12 +78,13 @@ pub fn run(
         false, // quiet
         verbose,
         auto_stash_pop,
-        commands::sync::StashPolicy::Prompt,
+        commands::sync::StashPolicy::from_auto_stash_pop(auto_stash_pop),
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
         commands::sync::GetScope::from_flags(get, false),
-    )?;
+    );
+    commands::sync::with_dirty_tree_hint(sync_result, Some("--auto-stash-pop"))?;
 
     if repo.rebase_in_progress()? {
         return Ok(());
@@ -180,7 +181,7 @@ fn run_all_stacks(
     };
 
     let sync_root = root_of(&stack, &original);
-    if let Err(error) = commands::sync::run(
+    let sync_result = commands::sync::run(
         true,  // restack
         false, // full
         delete_merged,
@@ -191,12 +192,14 @@ fn run_all_stacks(
         false, // quiet
         verbose,
         auto_stash_pop,
-        commands::sync::StashPolicy::Prompt,
+        commands::sync::StashPolicy::from_auto_stash_pop(auto_stash_pop),
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
         commands::sync::GetScope::from_flags(get, true),
-    ) {
+    );
+    if let Err(error) = commands::sync::with_dirty_tree_hint(sync_result, Some("--auto-stash-pop"))
+    {
         if let Some(root) = sync_root.as_deref() {
             all_stacks::print_progress(&plans, &[], root, "st refresh --all-stacks");
         }
