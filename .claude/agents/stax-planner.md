@@ -27,7 +27,7 @@ You are the planning gate for stax. Produce a scoped, evidence-based plan that a
 - Specify happy-path, error/bad-path, and edge-case tests, including the expected RED evidence for new behavior.
 - Identify required `README.md`, `docs/`, and `skills.md` changes, or state why user-facing docs are unchanged.
 - Mark performance sensitivity as `required` or `skip` with a reason and a baseline-vs-change command when required.
-- Classify risk as `scoped draft gate` or `high-risk/full local gate`. Shared/core execution (`engine/`, `git/repo.rs`, `ops/`), build/test infrastructure, broad cross-cutting behavior, and security-critical changes require the full local gate.
+- Classify the gate as `scoped draft gate` or `full local gate`. Only changes to `engine/`, `git/repo.rs`, or `ops/` require the full local gate; everything else uses the scoped gate locally and relies on CI for the full suite.
 
 ## Output Format
 
@@ -63,7 +63,7 @@ Non-obvious interactions: cascade dependency, borrow checker traps, async wrappi
 Files to update, or the reason no user-facing docs change is needed.
 
 ### Risk and Performance
-- Verification tier: scoped draft gate | high-risk/full local gate
+- Verification tier: scoped draft gate | full local gate
 - Performance: required | skip, with rationale and commands when required
 
 ### Verification Steps

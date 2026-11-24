@@ -26,20 +26,20 @@ git diff --check
 cargo nextest run <pattern>
 ```
 
-When the plan or concrete diff risk classifies the change as high-risk, also run the full local gate on the exact worktree head:
+When the change touches a full-gate path from `AGENTS.md` (`engine/`, `git/repo.rs`, `ops/`), also run the full local gate on the exact worktree head:
 
 ```bash
 make lint
 make test
 ```
 
-The full gate is also required when CI evidence is unavailable before promotion from draft or merge, but this harness never promotes or merges. On macOS, start Docker before `make test`; if Docker is unavailable, report `BLOCKED` and do not substitute `make test-native`.
+For every other change, CI runs the full suite on the PR; do not run `make test` locally. The full gate is also required locally when CI is unavailable before promotion from draft or merge, but this harness never promotes or merges. On macOS, start Docker before `make test`; if Docker is unavailable, report `BLOCKED` and do not substitute `make test-native`.
 
 ## Scope Rules
 
 - Never run the full suite with `cargo test`; use `make test` only when the full gate applies.
 - A focused nextest run is required for the scoped gate. Missing or invalid test scope is `FAIL`, not a reason to skip.
-- Widen a scoped plan to the full local gate only for concrete risk and explain why.
+- Do not widen a scoped plan to the full local gate on your own; report the concrete risk instead and let CI run the full suite.
 - Distinguish failures caused by the change from verified pre-existing failures, but do not silently ignore either.
 
 ## Reporting Format

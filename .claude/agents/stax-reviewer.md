@@ -17,11 +17,16 @@ Write `_workspace/<run_id>/review-pass-N.md` for the supplied pass `N` (`0..2`) 
 ```text
 VERDICT: PASS | FAIL
 
-FINDINGS:
-- [critical|high|medium|low] path:line — problem, impact, and concrete correction
+BLOCKING:
+- [critical|high|medium] path:line — problem, impact, and concrete correction
+
+INLINE FIXES:
+- path:line — doc wording/accuracy, comments, naming, style, minor test polish, with the exact correction
 
 NOTES:
 - verified strengths or "none"
 ```
 
-Rank findings by severity. `PASS` requires no correctness, plan-conformance, test, or required-doc findings; purely optional suggestions belong in notes and must not trigger repair. Cite file and line evidence for every finding.
+Blocking findings are incorrect behavior, crashes, data loss, security issues, an acceptance criterion with no test, or a test that does not prove the behavior. Everything else, including doc wording or accuracy, goes under INLINE FIXES with an exact correction; the orchestrator applies those directly without another review pass.
+
+`PASS` requires no blocking findings. `FAIL` only when at least one blocking finding exists. Purely optional suggestions belong in notes. Cite file and line evidence for every finding.
