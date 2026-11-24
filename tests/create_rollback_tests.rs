@@ -84,9 +84,11 @@ fn wait_for_hook_start(repo: &TestRepo) {
 #[cfg(unix)]
 fn run_stax_until_hook_then_interrupt(repo: &TestRepo, args: &[&str]) -> std::process::Output {
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let home = repo.clean_home();
     let child = Command::new(stax_bin())
         .args(args)
         .current_dir(repo.path())
+        .env("HOME", &home)
         .env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
         .env_remove("STAX_SHELL_INTEGRATION")
