@@ -127,12 +127,20 @@ impl std::error::Error for SilentExit {}
 #[derive(Debug)]
 pub struct DirtyWorkingTree;
 
+/// Dirty-tree message naming the flag the failing command actually accepts,
+/// or no flag when none is safe to suggest.
+pub fn dirty_working_tree_message(retry_flag: Option<&str>) -> String {
+    match retry_flag {
+        Some(flag) => format!(
+            "Working tree is dirty. Commit or stash your changes, or re-run with {flag} to stash them automatically."
+        ),
+        None => "Working tree is dirty. Commit or stash your changes, then re-run.".to_string(),
+    }
+}
+
 impl std::fmt::Display for DirtyWorkingTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Working tree is dirty. Commit or stash your changes, or re-run with --stash to stash them automatically."
-        )
+        write!(f, "{}", dirty_working_tree_message(Some("--stash")))
     }
 }
 

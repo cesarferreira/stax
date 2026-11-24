@@ -98,7 +98,7 @@ pub fn run(options: GetOptions) -> Result<()> {
     let trunk = repo.trunk_branch()?;
 
     let Some(requested) = options.branch.as_deref() else {
-        return crate::commands::sync::run(
+        let result = crate::commands::sync::run(
             !options.no_restack,
             false, // full
             true,  // delete_merged
@@ -115,6 +115,7 @@ pub fn run(options: GetOptions) -> Result<()> {
             false,
             crate::commands::sync::GetScope::Off,
         );
+        return crate::commands::sync::with_dirty_tree_hint(result, None);
     };
 
     let target = resolve_requested_target(&repo, &config, requested, options.parent.as_deref())?;

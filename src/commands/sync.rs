@@ -307,7 +307,7 @@ pub(crate) fn all_tracked_branches_parent_first(stack: &Stack) -> Vec<String> {
 /// Controls how sync handles a dirty working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StashPolicy {
-    /// Prompt the user (default). In quiet/json mode, bail.
+    /// Prompt the user (default). In quiet/json mode, or without a terminal, bail unless auto-confirmed.
     Prompt,
     /// Stash automatically without prompting (--stash).
     Always,
@@ -324,6 +324,26 @@ impl StashPolicy {
         } else {
             StashPolicy::Prompt
         }
+    }
+
+    /// Commands without `--stash` (pull, refresh) treat `--auto-stash-pop` as consent to stash.
+    pub(crate) fn from_auto_stash_pop(auto_stash_pop: bool) -> Self {
+        if auto_stash_pop {
+            StashPolicy::Always
+        } else {
+            StashPolicy::Prompt
+        }
+    }
+}
+
+/// Rewrite a `DirtyWorkingTree` error so its hint names a flag the calling
+/// command has. Other errors pass through untouched.
+pub(crate) fn with_dirty_tree_hint<T>(result: Result<T>, retry_flag: Option<&str>) -> Result<T> {
+    match result {
+        Err(error) if error.downcast_ref::<DirtyWorkingTree>().is_some() => Err(anyhow::anyhow!(
+            crate::errors::dirty_working_tree_message(retry_flag)
+        )),
+        other => other,
     }
 }
 
@@ -552,6 +572,9 @@ impl SyncContext {
                 }
                 StashPolicy::Prompt => {
                     if self.quiet {
+                        return Err(DirtyWorkingTree.into());
+                    }
+                    if !self.auto_confirm && !self.can_prompt {
                         return Err(DirtyWorkingTree.into());
                     }
 
@@ -6303,6 +6326,45 @@ mod tests {
             ("a2", Some("a1"), &[]),
             ("b", Some("main"), &[]),
         ])
+    }
+
+    #[test]
+    fn stash_policy_from_auto_stash_pop_maps_flag() {
+        assert_eq!(StashPolicy::from_auto_stash_pop(true), StashPolicy::Always);
+        assert_eq!(StashPolicy::from_auto_stash_pop(false), StashPolicy::Prompt);
+    }
+
+    #[test]
+    fn with_dirty_tree_hint_rewrites_only_dirty_tree_errors() {
+        let err =
+            with_dirty_tree_hint::<()>(Err(DirtyWorkingTree.into()), Some("--auto-stash-pop"))
+                .unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("re-run with --auto-stash-pop"), "{text}");
+        assert!(!text.contains("--stash"), "{text}");
+
+        let err = with_dirty_tree_hint::<()>(Err(DirtyWorkingTree.into()), None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Working tree is dirty. Commit or stash your changes, then re-run."
+        );
+
+        let err =
+            with_dirty_tree_hint::<()>(Err(anyhow::anyhow!("boom")), Some("--x")).unwrap_err();
+        assert_eq!(err.to_string(), "boom");
+
+        let err = with_dirty_tree_hint::<()>(Err(ConflictStopped.into()), Some("--x")).unwrap_err();
+        assert!(err.downcast_ref::<ConflictStopped>().is_some());
+
+        assert_eq!(with_dirty_tree_hint(Ok(3), None).unwrap(), 3);
+    }
+
+    #[test]
+    fn dirty_working_tree_display_keeps_sync_text() {
+        assert_eq!(
+            DirtyWorkingTree.to_string(),
+            "Working tree is dirty. Commit or stash your changes, or re-run with --stash to stash them automatically."
+        );
     }
 
     #[test]

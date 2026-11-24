@@ -70,12 +70,8 @@ pub fn run(o: PullOptions) -> Result<()> {
 }
 
 fn run_sync(o: &PullOptions, restack: bool) -> Result<()> {
-    let stash_policy = if restack && o.auto_stash_pop {
-        StashPolicy::Always
-    } else {
-        StashPolicy::Prompt
-    };
-    sync::run(
+    let stash_policy = StashPolicy::from_auto_stash_pop(o.auto_stash_pop);
+    let result = sync::run(
         restack,
         false, // full
         !o.no_delete,
@@ -91,7 +87,8 @@ fn run_sync(o: &PullOptions, restack: bool) -> Result<()> {
         &[],
         restack, // skip_interactive_plan
         GetScope::AllStacks,
-    )
+    );
+    sync::with_dirty_tree_hint(result, Some("--auto-stash-pop"))
 }
 
 fn run_dry_run(o: &PullOptions) -> Result<()> {

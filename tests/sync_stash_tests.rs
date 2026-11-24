@@ -262,3 +262,203 @@ fn dry_run_warns_stash_flags_are_ignored() {
         "stderr must warn that --stash is ignored by --dry-run; got: {stderr:?}"
     );
 }
+
+// ─── Non-TTY dirty-tree stash prompt ─────────────────────────────────────────
+
+fn refs_snapshot(repo: &TestRepo) -> String {
+    TestRepo::stdout(&repo.git(&[
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/heads",
+        "refs/remotes",
+    ]))
+}
+
+/// Asserts a no-terminal dirty-tree run failed cleanly and changed nothing.
+fn assert_clean_dirty_failure(
+    repo: &TestRepo,
+    out: &std::process::Output,
+    stash_before: usize,
+    refs_before: &str,
+    file: &str,
+    content: &str,
+) {
+    let stderr = TestRepo::stderr(out);
+    assert!(
+        !out.status.success(),
+        "dirty run should fail; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Working tree is dirty"),
+        "expected dirty-tree error: {stderr}"
+    );
+    assert!(
+        !stderr.contains("not a terminal"),
+        "must not attempt a prompt: {stderr}"
+    );
+    assert!(
+        !TestRepo::stdout(out).contains("Syncing repository..."),
+        "sync must not start: {}",
+        TestRepo::stdout(out)
+    );
+    assert_eq!(stash_count(repo), stash_before, "no stash may be created");
+    assert_eq!(refs_snapshot(repo), refs_before, "refs must be unchanged");
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join(file)).unwrap(),
+        content,
+        "dirty file must be untouched"
+    );
+}
+
+fn dirty_synced_repo() -> TestRepo {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+    repo.simulate_remote_commit("remote.txt", "r\n", "Advance trunk");
+    repo.create_file("dirty.txt", "unstaged change");
+    repo
+}
+
+#[test]
+fn non_tty_sync_dirty_tree_fails_cleanly_with_stash_hint() {
+    let repo = dirty_synced_repo();
+    let stash_before = stash_count(&repo);
+    let refs_before = refs_snapshot(&repo);
+
+    let out = repo.run_stax(&["rs"]);
+
+    assert_clean_dirty_failure(
+        &repo,
+        &out,
+        stash_before,
+        &refs_before,
+        "dirty.txt",
+        "unstaged change",
+    );
+    assert!(
+        TestRepo::stderr(&out).contains("--stash"),
+        "{}",
+        TestRepo::stderr(&out)
+    );
+}
+
+#[test]
+fn non_tty_sync_force_still_auto_stashes() {
+    let repo = dirty_synced_repo();
+    let before = stash_count(&repo);
+
+    let out = repo.run_stax(&["rs", "--force"]);
+
+    assert!(out.status.success(), "{}", TestRepo::stderr(&out));
+    assert_eq!(stash_count(&repo), before);
+    assert!(TestRepo::stdout(&out).contains("Stashed working tree changes."));
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "unstaged change"
+    );
+}
+
+#[test]
+fn non_tty_sync_stash_flag_still_auto_stashes() {
+    let repo = dirty_synced_repo();
+    let before = stash_count(&repo);
+
+    let out = repo.run_stax(&["rs", "--stash"]);
+
+    assert!(out.status.success(), "{}", TestRepo::stderr(&out));
+    assert_eq!(stash_count(&repo), before);
+    assert!(TestRepo::stdout(&out).contains("Restored stashed changes."));
+}
+
+#[test]
+fn non_tty_sync_quiet_force_dirty_tree_still_errors() {
+    let repo = dirty_synced_repo();
+    let before = stash_count(&repo);
+
+    let out = repo.run_stax(&["rs", "--quiet", "--force"]);
+
+    assert!(!out.status.success());
+    assert!(TestRepo::stderr(&out).contains("--stash"));
+    assert_eq!(stash_count(&repo), before);
+}
+
+#[test]
+fn non_tty_refresh_dirty_tree_fails_cleanly_with_auto_stash_pop_hint() {
+    let repo = dirty_synced_repo();
+    let stash_before = stash_count(&repo);
+    let refs_before = refs_snapshot(&repo);
+
+    let out = repo.run_stax(&["refresh", "--no-submit"]);
+
+    assert_clean_dirty_failure(
+        &repo,
+        &out,
+        stash_before,
+        &refs_before,
+        "dirty.txt",
+        "unstaged change",
+    );
+    let stderr = TestRepo::stderr(&out);
+    assert!(stderr.contains("--auto-stash-pop"), "{stderr}");
+    assert!(!stderr.contains("re-run with --stash"), "{stderr}");
+}
+
+#[test]
+fn non_tty_refresh_auto_stash_pop_stashes_and_restores() {
+    let repo = dirty_synced_repo();
+    let before = stash_count(&repo);
+
+    let out = repo.run_stax(&["refresh", "--no-submit", "--auto-stash-pop"]);
+
+    assert!(out.status.success(), "{}", TestRepo::stderr(&out));
+    assert!(!TestRepo::stderr(&out).contains("not a terminal"));
+    assert_eq!(stash_count(&repo), before);
+    assert!(TestRepo::stdout(&out).contains("Stashed working tree changes."));
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "unstaged change"
+    );
+}
+
+#[test]
+fn non_tty_get_dirty_tree_fails_cleanly_without_flag_hint() {
+    let repo = dirty_synced_repo();
+    let stash_before = stash_count(&repo);
+    let refs_before = refs_snapshot(&repo);
+
+    let out = repo.run_stax(&["get"]);
+
+    assert_clean_dirty_failure(
+        &repo,
+        &out,
+        stash_before,
+        &refs_before,
+        "dirty.txt",
+        "unstaged change",
+    );
+    let stderr = TestRepo::stderr(&out);
+    assert!(stderr.contains("Commit or stash your changes"), "{stderr}");
+    assert!(!stderr.contains("--stash"), "{stderr}");
+    assert!(!stderr.contains("--force"), "{stderr}");
+}
+
+#[test]
+fn tty_sync_dirty_tree_still_prompts_to_stash() {
+    let repo = dirty_synced_repo();
+    repo.set_trunk("main");
+
+    let out = crate::common::run_stax_in_script(
+        &repo.path(),
+        &["rs"],
+        "wait_for_tui_text 'Stash them before sync?'; printf 'y\\n'; sleep 3",
+    );
+
+    let transcript = format!("{}{}", TestRepo::stdout(&out), TestRepo::stderr(&out));
+    assert!(
+        transcript.contains("Stash them before sync?"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Stashed working tree changes."),
+        "{transcript}"
+    );
+}
