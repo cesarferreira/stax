@@ -224,6 +224,82 @@ enum DeleteConfirmStrategy {
     BulkNonBlocking,
 }
 
+/// Which branches `--get` reconciles against their remote refs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GetScope {
+    #[default]
+    Off,
+    CurrentStack,
+    AllStacks,
+}
+
+impl GetScope {
+    pub fn from_flags(get: bool, all_stacks: bool) -> Self {
+        match (get, all_stacks) {
+            (false, _) => GetScope::Off,
+            (true, false) => GetScope::CurrentStack,
+            (true, true) => GetScope::AllStacks,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        self != GetScope::Off
+    }
+
+    /// Branches to reconcile, parent before child. On trunk there is no current stack,
+    /// so the current-stack scope widens to every tracked branch.
+    pub(crate) fn branches(self, stack: &Stack, current: &str) -> Vec<String> {
+        match self {
+            GetScope::Off => Vec::new(),
+            GetScope::AllStacks => all_tracked_branches_parent_first(stack),
+            GetScope::CurrentStack => {
+                if current == stack.trunk {
+                    all_tracked_branches_parent_first(stack)
+                } else if stack.branches.contains_key(current) {
+                    stack.current_stack(current)
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+    pub(crate) fn is_all_branches(self, stack: &Stack, current: &str) -> bool {
+        match self {
+            GetScope::Off => false,
+            GetScope::AllStacks => true,
+            GetScope::CurrentStack => current == stack.trunk,
+        }
+    }
+}
+
+/// Every tracked non-trunk branch reachable from trunk, parents before children, siblings
+/// alphabetical. Iterative with a visited set so corrupt metadata cannot loop.
+pub(crate) fn all_tracked_branches_parent_first(stack: &Stack) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(stack.trunk.clone());
+    let mut pending = vec![stack.trunk.clone()];
+
+    while let Some(name) = pending.pop() {
+        if name != stack.trunk {
+            result.push(name.clone());
+        }
+        let Some(info) = stack.branches.get(&name) else {
+            continue;
+        };
+        let mut children = info.children.clone();
+        children.sort();
+        for child in children.into_iter().rev() {
+            if stack.branches.contains_key(&child) && visited.insert(child.clone()) {
+                pending.push(child);
+            }
+        }
+    }
+
+    result
+}
+
 /// Controls how sync handles a dirty working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StashPolicy {
@@ -346,7 +422,7 @@ struct SyncContext {
     /// Merged-branch detection from the interactive sync plan (pre-trunk-update).
     /// Reused after trunk moves to avoid a second full patch-id scan of the stack.
     planned_merged_detection: Option<PlannedMergedDetection>,
-    get: bool,
+    get: GetScope,
 }
 
 #[derive(Debug, Clone)]
@@ -375,7 +451,7 @@ impl SyncContext {
         json: bool,
         extra_fetch_refs: &[String],
         skip_interactive_plan: bool,
-        get: bool,
+        get: GetScope,
     ) -> Result<(Self, GitRepo)> {
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
@@ -2373,7 +2449,7 @@ impl SyncContext {
     }
 
     fn get_phase(&mut self, repo: &GitRepo) -> Result<()> {
-        if !self.get {
+        if !self.get.is_enabled() {
             return Ok(());
         }
 
@@ -2387,13 +2463,12 @@ impl SyncContext {
             return Ok(());
         }
 
-        let scope_order: Vec<String> = if self.current != self.stack.trunk
-            && self.stack.branches.contains_key(&self.current)
-        {
-            self.stack.current_stack(&self.current)
-        } else {
-            Vec::new()
-        };
+        let scope_order: Vec<String> = self
+            .get
+            .branches(&self.stack, &self.current)
+            .into_iter()
+            .filter(|branch| local_branch_exists(&self.workdir, branch))
+            .collect();
 
         let mut frozen_branches = Vec::new();
         let mut candidate_branches: Vec<String> = Vec::new();
@@ -2452,7 +2527,12 @@ impl SyncContext {
 
         if !self.quiet {
             println!();
-            println!("{}", "Fetching stack branches from remote...".bold());
+            let heading = if self.get.is_all_branches(&self.stack, &self.current) {
+                "Fetching tracked branches from remote..."
+            } else {
+                "Fetching stack branches from remote..."
+            };
+            println!("{}", heading.bold());
         }
 
         for branch in &branches {
@@ -3068,7 +3148,7 @@ pub fn run(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
-    get: bool,
+    get: GetScope,
 ) -> Result<()> {
     run_with_repo(
         GitRepo::open()?,
@@ -3112,7 +3192,7 @@ pub(crate) fn run_at(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
-    get: bool,
+    get: GetScope,
 ) -> Result<()> {
     let repo = GitRepo::open_from_path(repository)?;
     for worktree in repo.list_worktrees()? {
@@ -3164,7 +3244,7 @@ fn run_with_repo(
     json: bool,
     extra_fetch_refs: &[String],
     skip_interactive_plan: bool,
-    get: bool,
+    get: GetScope,
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let (mut ctx, repo) = SyncContext::new(
@@ -6110,5 +6190,95 @@ mod tests {
         assert!(is_merged_pr(&stack, "a"));
         assert!(!is_merged_pr(&stack, "b"));
         assert!(!is_merged_pr(&stack, "missing"));
+    }
+
+    fn scope_stack(nodes: &[(&str, Option<&str>, &[&str])]) -> Stack {
+        let mut branches = HashMap::new();
+        for (name, parent, children) in nodes {
+            branches.insert(
+                name.to_string(),
+                crate::engine::stack::StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(str::to_string),
+                    parent_revision: None,
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        }
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    fn forked_scope_stack() -> Stack {
+        scope_stack(&[
+            ("main", None, &["b", "a"]),
+            ("a", Some("main"), &["a1"]),
+            ("a1", Some("a"), &["a2"]),
+            ("a2", Some("a1"), &[]),
+            ("b", Some("main"), &[]),
+        ])
+    }
+
+    #[test]
+    fn get_scope_from_flags_maps_all_combinations() {
+        assert_eq!(GetScope::from_flags(false, false), GetScope::Off);
+        assert_eq!(GetScope::from_flags(false, true), GetScope::Off);
+        assert_eq!(GetScope::from_flags(true, false), GetScope::CurrentStack);
+        assert_eq!(GetScope::from_flags(true, true), GetScope::AllStacks);
+    }
+
+    #[test]
+    fn all_tracked_branches_parent_first_orders_parents_before_children_and_sorts_siblings() {
+        assert_eq!(
+            all_tracked_branches_parent_first(&forked_scope_stack()),
+            vec!["a", "a1", "a2", "b"]
+        );
+    }
+
+    #[test]
+    fn all_tracked_branches_parent_first_survives_cycles() {
+        let stack = scope_stack(&[
+            ("main", None, &["c", "c"]),
+            ("c", Some("main"), &[]),
+            ("x", Some("y"), &["y"]),
+            ("y", Some("x"), &["x"]),
+        ]);
+        assert_eq!(all_tracked_branches_parent_first(&stack), vec!["c"]);
+    }
+
+    #[test]
+    fn get_scope_branches_current_stack_on_trunk_returns_all() {
+        let stack = forked_scope_stack();
+        assert_eq!(
+            GetScope::CurrentStack.branches(&stack, "main"),
+            vec!["a", "a1", "a2", "b"]
+        );
+        assert!(GetScope::CurrentStack.is_all_branches(&stack, "main"));
+        assert!(GetScope::Off.branches(&stack, "main").is_empty());
+    }
+
+    #[test]
+    fn get_scope_branches_current_stack_off_trunk_returns_current_stack() {
+        let stack = forked_scope_stack();
+        assert_eq!(
+            GetScope::CurrentStack.branches(&stack, "a1"),
+            stack.current_stack("a1")
+        );
+        assert!(!GetScope::CurrentStack.is_all_branches(&stack, "a1"));
+        assert!(
+            GetScope::CurrentStack
+                .branches(&stack, "untracked")
+                .is_empty()
+        );
+        assert_eq!(
+            GetScope::AllStacks.branches(&stack, "a1"),
+            vec!["a", "a1", "a2", "b"]
+        );
     }
 }

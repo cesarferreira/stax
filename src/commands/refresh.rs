@@ -80,7 +80,7 @@ pub fn run(
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
-        get,
+        commands::sync::GetScope::from_flags(get, false),
     )?;
 
     if repo.rebase_in_progress()? {
@@ -289,7 +289,7 @@ fn run_all_stacks(
         false, // json
         &submit_fetch_refs,
         true, // refresh/update is an explicit workflow — no Sync plan prompt
-        get,
+        commands::sync::GetScope::from_flags(get, true),
     ) {
         if let Some(root) = sync_root.as_deref() {
             print_all_stacks_progress(&plans, &[], root);

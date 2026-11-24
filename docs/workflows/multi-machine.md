@@ -37,16 +37,32 @@ rebase locally.
 flow (sync trunk → reconcile each stack branch against its own remote →
 restack → push and update PRs). `st refresh --get --force` is equivalent to
 `st rs --get --restack --force`, except that refresh does not delete merged
-branches unless you also pass `--delete-merged`. Note that with
-`--all-stacks`, `--get` still only reconciles the branches of the *current*
-stack; other stacks are restacked from their local commits. If you're checked
-out on trunk itself, there is no current stack to reconcile, so `--get` is a
-silent no-op — check out a stack branch first.
+branches unless you also pass `--delete-merged`.
+
+### Every stack at once
+
+By default, from a stack branch, `--get` reconciles only the *current* stack.
+To reconcile every tracked branch in every stack, use either of:
+
+```bash
+st rs --get --all-stacks          # reconcile every tracked branch (--all-stacks requires --get)
+st rs --get                       # same thing when run from trunk (no current stack exists)
+st refresh --all-stacks --get     # reconcile everything, then restack and submit every stack
+```
+
+Branches are reconciled parent before child, with sibling stacks in
+alphabetical order. Frozen branches and branches checked out in another
+worktree are skipped and reported, in every scope. `--dry-run` previews the
+same branch set.
+
+`--all-stacks` on `st sync` widens only `--get`. `st rs --get --all-stacks
+--restack` still restacks just the current stack; to restack every stack, use
+`st refresh --all-stacks --get` or `st restack --all`.
 
 `st get <branch>` remains useful for a single named branch, or for a branch
 that isn't checked out locally yet at all (it creates the local tracking
-branch). `--get` only reconciles branches that already exist locally in your
-current stack.
+branch). `--get` only reconciles branches that already exist locally in the
+reconciled scope.
 
 ### Why not bare `st rs` / bare `st get`
 
@@ -67,6 +83,9 @@ st refresh          # or: st submit / st restack + push
 
 # On the other machine
 st rs --get --restack     # or: st refresh --get   (also pushes + updates PRs)
+
+# Everything: every stack, reconciled, restacked, pushed
+st refresh --all-stacks --get
 ```
 
 ## Related

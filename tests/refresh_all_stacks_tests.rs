@@ -107,7 +107,7 @@ fn all_stacks_restacks_every_stack() {
 }
 
 #[test]
-fn all_stacks_get_reconciles_only_the_current_stack() {
+fn all_stacks_get_reconciles_every_stack() {
     let repo = TestRepo::new_with_remote();
     repo.git(&["push", "-u", "origin", "main"]);
     let current_stack = repo.create_stack(&["get-scope-current"]);
@@ -125,7 +125,7 @@ fn all_stacks_get_reconciles_only_the_current_stack() {
         "current-stack-remote.txt",
         "current stack remote update",
     );
-    let other_remote_sha = update_remote_branch_in_clone(
+    update_remote_branch_in_clone(
         &repo,
         other_branch,
         "other-stack-remote.txt",
@@ -156,17 +156,16 @@ fn all_stacks_get_reconciles_only_the_current_stack() {
         TestRepo::stdout(&output)
     );
     assert!(
-        !repo
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &other_remote_sha,
-                other_branch,
-            ])
-            .status
-            .success(),
-        "the other stack's remote update must remain unreconciled"
+        TestRepo::stdout(&output).contains(&format!("Reset {other_branch} to remote tip.")),
+        "--all-stacks --get must reconcile every stack; stdout:\n{}",
+        TestRepo::stdout(&output)
     );
+    repo.git(&[
+        "cat-file",
+        "-e",
+        &format!("{other_branch}:other-stack-remote.txt"),
+    ])
+    .assert_success();
     for branch in current_stack.iter().chain(other_stack.iter()) {
         repo.git(&["merge-base", "--is-ancestor", "main", branch])
             .assert_success();

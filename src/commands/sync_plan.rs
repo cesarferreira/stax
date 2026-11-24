@@ -1,6 +1,6 @@
 use crate::commands::sync::{
-    BlockingWorktreeCleanup, MergeType, MergedBranchInfo, PartialMergeReason, StashPolicy,
-    count_commits_between, diff_line_stats_between, find_merged_branches,
+    BlockingWorktreeCleanup, GetScope, MergeType, MergedBranchInfo, PartialMergeReason,
+    StashPolicy, count_commits_between, diff_line_stats_between, find_merged_branches,
     find_partially_merged_notes, find_upstream_gone_branches, imported_branches_for_cleanup,
     init_forge_client, is_ancestor, local_branch_exists, plan_blocking_worktree_cleanup,
     print_cleanup_candidates, print_retained_closed_prs, resolve_fallback_parent_skipping_doomed,
@@ -30,7 +30,7 @@ pub struct SyncPlanOptions {
     pub auto_stash_pop: bool,
     pub stash_policy: StashPolicy,
     pub json: bool,
-    pub get: bool,
+    pub get: GetScope,
 }
 
 #[derive(Debug, Clone)]
@@ -449,63 +449,6 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         render_trunk_plan(&trunk, &trunk_plan);
     }
 
-    if get && !quiet && !json {
-        println!();
-        println!("{}", "Get (stack branches vs remote)".bold());
-
-        let scope_order: Vec<String> =
-            if current != trunk && stack.branches.contains_key(current.as_str()) {
-                stack.current_stack(&current)
-            } else {
-                Vec::new()
-            };
-
-        if scope_order.is_empty() {
-            println!("  {}", "No stack branches in scope.".dimmed());
-        } else {
-            match &remote_heads_by_branch {
-                Some(remote_heads) => {
-                    for branch in &scope_order {
-                        let local_oid = resolve_ref_oid(&workdir, branch);
-                        let remote_oid = remote_heads.get(branch);
-                        match (local_oid.as_deref(), remote_oid.map(String::as_str)) {
-                            (_, None) => {
-                                println!(
-                                    "  {} {} {}",
-                                    "○".dimmed(),
-                                    branch.cyan(),
-                                    "no remote branch".dimmed()
-                                );
-                            }
-                            (Some(local), Some(remote)) if local == remote => {
-                                println!(
-                                    "  {} {} {}",
-                                    "✓".green(),
-                                    branch.cyan(),
-                                    "up to date".dimmed()
-                                );
-                            }
-                            _ => {
-                                println!(
-                                    "  {} {} {}",
-                                    "→".cyan(),
-                                    branch.cyan().bold(),
-                                    "would reconcile (diverged)".dimmed()
-                                );
-                            }
-                        }
-                    }
-                }
-                None => {
-                    println!(
-                        "  {}",
-                        "Could not reach remote — --get preview unavailable".dimmed()
-                    );
-                }
-            }
-        }
-    }
-
     let restack_would_fail = matches!(
         trunk_plan,
         TrunkPlan::Diverged { .. } | TrunkPlan::ObjectsAbsent { .. }
@@ -783,6 +726,98 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
                 gone_deletable_count = deletable.len();
             } else if !quiet && protected.is_empty() {
                 println!("  {}", "No upstream-gone branches to delete.".dimmed());
+            }
+        }
+    }
+
+    if get.is_enabled() && !quiet && !json {
+        let all_branches = get.is_all_branches(&stack, &current);
+        println!();
+        println!(
+            "{}",
+            if all_branches {
+                "Get (all tracked branches vs remote)"
+            } else {
+                "Get (stack branches vs remote)"
+            }
+            .bold()
+        );
+
+        let doomed: HashSet<&str> = plan_data
+            .merged_candidates
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.disposition,
+                    "would_delete" | "would_prompt_then_delete" | "would_rebase_children"
+                )
+            })
+            .map(|c| c.name.as_str())
+            .chain(
+                plan_data
+                    .upstream_gone_deletable
+                    .iter()
+                    .map(|g| g.name.as_str()),
+            )
+            .collect();
+        let scope_order: Vec<String> = get
+            .branches(&stack, &current)
+            .into_iter()
+            .filter(|branch| {
+                !doomed.contains(branch.as_str()) && local_branch_exists(&workdir, branch)
+            })
+            .collect();
+
+        if scope_order.is_empty() {
+            println!(
+                "  {}",
+                if all_branches {
+                    "No tracked branches in scope."
+                } else {
+                    "No stack branches in scope."
+                }
+                .dimmed()
+            );
+        } else {
+            match &remote_heads_by_branch {
+                Some(remote_heads) => {
+                    for branch in &scope_order {
+                        let local_oid = resolve_ref_oid(&workdir, branch);
+                        let remote_oid = remote_heads.get(branch);
+                        match (local_oid.as_deref(), remote_oid.map(String::as_str)) {
+                            (_, None) => {
+                                println!(
+                                    "  {} {} {}",
+                                    "○".dimmed(),
+                                    branch.cyan(),
+                                    "no remote branch".dimmed()
+                                );
+                            }
+                            (Some(local), Some(remote)) if local == remote => {
+                                println!(
+                                    "  {} {} {}",
+                                    "✓".green(),
+                                    branch.cyan(),
+                                    "up to date".dimmed()
+                                );
+                            }
+                            _ => {
+                                println!(
+                                    "  {} {} {}",
+                                    "→".cyan(),
+                                    branch.cyan().bold(),
+                                    "would reconcile (diverged)".dimmed()
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    println!(
+                        "  {}",
+                        "Could not reach remote — --get preview unavailable".dimmed()
+                    );
+                }
             }
         }
     }

@@ -539,9 +539,12 @@ pub(crate) enum Commands {
         /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
         #[arg(long, conflicts_with = "continue")]
         json: bool,
-        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        /// Reconcile each current-stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking; on trunk or with --all-stacks, every tracked branch
         #[arg(long)]
         get: bool,
+        /// With --get, reconcile every tracked branch in every stack, not just the current stack
+        #[arg(long, requires = "get")]
+        all_stacks: bool,
     },
 
     /// List and optionally clean up local branches (merged, closed PR, upstream-gone, stale)
@@ -635,13 +638,13 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during sync/restack
         #[arg(long)]
         auto_stash_pop: bool,
-        /// Refresh every stack in the repo, not just the current one
+        /// Refresh every stack in the repo, not just the current one (with --get, reconcile every tracked branch)
         #[arg(long)]
         all_stacks: bool,
         /// Delete local branches whose PRs were merged (off by default, unlike `stax sync`)
         #[arg(long)]
         delete_merged: bool,
-        /// Reconcile each stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking
+        /// Reconcile each current-stack branch against its own remote ref (fetch + fast-forward/rebase) before restacking; on trunk or with --all-stacks, every tracked branch
         #[arg(long)]
         get: bool,
     },

@@ -492,7 +492,9 @@ pub fn run() -> Result<()> {
             dry_run,
             json,
             get,
+            all_stacks,
         } => {
+            let get_scope = commands::sync::GetScope::from_flags(get, all_stacks);
             if prune {
                 eprintln!("{}", commands::sync::prune_deprecation_warning());
             }
@@ -510,7 +512,7 @@ pub fn run() -> Result<()> {
                     auto_stash_pop,
                     stash_policy,
                     json,
-                    get,
+                    get: get_scope,
                 })
             } else {
                 commands::sync::run(
@@ -528,7 +530,7 @@ pub fn run() -> Result<()> {
                     json,
                     &[],
                     false,
-                    get,
+                    get_scope,
                 )
             }
         }

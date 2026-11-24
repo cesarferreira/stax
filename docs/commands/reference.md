@@ -38,7 +38,8 @@ Merged-branch CI history recording is throttled by `[sync] ci_history_interval_d
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), report closed-but-unmerged PR branches without deleting them, reparent children, and move you to the next branch of the stack if yours was deleted |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone, except known closed-but-unmerged PRs |
-| `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
+| `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack (every tracked branch when on trunk) from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
+| `st sync --get --all-stacks` | `rs --get --all-stacks` | Reconcile every tracked branch in every stack (parent before child) instead of only the current stack; `--all-stacks` requires `--get` and does not widen `--restack` |
 | `st sync --stash` | `rs --stash` | Stash the current working tree before sync starts without prompting; works with `--quiet` and `--json`; does NOT auto-confirm branch deletions; conflicts with `--no-stash` at parse time |
 | `st sync --no-stash` | `rs --no-stash` | Fail if the working tree is dirty; overrides `--force`; conflicts with `--stash` at parse time |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
@@ -57,8 +58,8 @@ Merged-branch CI history recording is throttled by `[sync] ci_history_interval_d
 | `st refresh` | `r` | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack (pass `--delete-merged` to opt into `sync`-style cleanup) |
 | `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
-| `st refresh --all-stacks` | | Refresh every stack in the repo (fetch/trunk sync once, then restack + submit each stack); stops at the first conflict |
-| `st refresh --get` | | Reconcile each current-stack branch against its own remote ref before restacking (cross-machine convergence); `--force` resets to the remote tip |
+| `st refresh --all-stacks` | | Refresh every stack in the repo (fetch/trunk sync once, then restack + submit each stack); with `--get`, also reconciles every tracked branch; stops at the first conflict |
+| `st refresh --get` | | Reconcile each current-stack branch (every tracked branch with `--all-stacks`, or when run on trunk) against its own remote ref before restacking (cross-machine convergence); `--force` resets to the remote tip |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
 | `st cascade` | | Restack the stack and submit updates, without fetching trunk (offline-friendly) |
 | `st diff` | | Show per-branch diffs vs parent |

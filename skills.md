@@ -378,7 +378,8 @@ stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
-stax sync --get                    # Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
+stax sync --get                    # Before restacking, fetch each branch of the current stack (every tracked branch when on trunk) from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
+stax sync --get --all-stacks       # Reconcile every tracked branch in every stack (parent before child); requires --get; frozen/other-worktree branches are skipped; does not widen --restack
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
@@ -404,11 +405,11 @@ stax stats --json                   # Machine-readable RepoStats document
 stax stats --ci                     # Add an opt-in CI roll-up (network call); omitted (non-fatal) without forge auth — always exits 0
 
 stax refresh|r                      # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
-stax refresh --get                  # Before restacking, reconcile each branch in the current stack against its remote ref; use after another machine rebased/force-pushed the stack (add --force to let the remote win)
+stax refresh --get                  # Before restacking, reconcile each branch in the current stack (every tracked branch with --all-stacks, or when run on trunk) against its remote ref; use after another machine rebased/force-pushed the stack (add --force to let the remote win)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
-# With --all-stacks, --get still reconciles only the current stack; other stacks restack from local commits.
+stax refresh --all-stacks --get     # Reconcile every tracked branch against its remote, then restack/submit every stack
 stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
