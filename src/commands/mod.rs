@@ -1,5 +1,6 @@
 pub mod abort;
 pub mod absorb;
+pub mod all_stacks;
 pub mod auth;
 pub mod board;
 pub mod branch;
@@ -37,6 +38,7 @@ pub mod navigate;
 pub mod open;
 pub mod pr;
 pub mod pr_browse;
+pub mod pull;
 pub mod range_diff;
 pub mod ready;
 pub mod redo;

@@ -441,6 +441,65 @@ fn sync_continue_is_marked_as_rebase_safe() {
 }
 
 #[test]
+fn pull_dry_run_is_rebase_safe() {
+    for flag in ["--dry-run", "--plan"] {
+        let cli = parse_cli(&["stax", "pull", flag]);
+        let cmd = cli.command.expect("command");
+        assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+    }
+}
+
+#[test]
+fn pull_requires_clean_repo_state() {
+    let cli = parse_cli(&["stax", "pull"]);
+    let cmd = cli.command.expect("command");
+    assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
+    assert!(!cmd.allows_during_rebase());
+}
+
+#[test]
+fn pull_parses_passthrough_flags() {
+    let cli = parse_cli(&[
+        "stax",
+        "pull",
+        "-f",
+        "--no-restack",
+        "--no-delete",
+        "--safe",
+        "--quiet",
+        "-v",
+        "--auto-stash-pop",
+    ]);
+    match cli.command.expect("command") {
+        Commands::Pull {
+            dry_run,
+            force,
+            no_restack,
+            no_delete,
+            safe,
+            quiet,
+            verbose,
+            auto_stash_pop,
+        } => {
+            assert!(!dry_run);
+            assert!(force && no_restack && no_delete && safe && quiet && verbose);
+            assert!(auto_stash_pop);
+        }
+        _ => panic!("expected pull"),
+    }
+}
+
+#[test]
+fn pull_rejects_sync_only_flags() {
+    for flag in ["--json", "--get", "--all-stacks", "--continue", "--stash"] {
+        assert!(
+            try_parse_cli(&["stax", "pull", flag]).is_err(),
+            "pull must reject {flag}"
+        );
+    }
+}
+
+#[test]
 fn status_is_read_only_during_rebase() {
     let cli = parse_cli(&["stax", "status"]);
     let cmd = cli.command.expect("command");

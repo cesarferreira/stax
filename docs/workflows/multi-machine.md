@@ -22,7 +22,7 @@ your local branches) and labels each one against its own remote ref:
 ○ feature-a [origin: diverged 1↑/3↓]
 ○ main      [origin: in sync]
 
-↓ 2 branches behind or diverged from origin. Run st rs --get --all-stacks to reconcile.
+↓ 2 branches behind or diverged from origin. Run st pull to reconcile.
 ```
 
 Use `--no-fetch` to compare against cached remote-tracking refs when you are
@@ -33,7 +33,34 @@ Plain `st status` / `st ls` compares each branch with its parent, so it may show
 elsewhere, the local and remote histories have diverged and a plain pull will
 either conflict or silently create a merge commit.
 
-## The fix: `st rs --get --restack` (or `st refresh --get`)
+## The fix: `st pull`
+
+```bash
+st pull
+```
+
+`st pull` reconciles every tracked branch in every stack with its own remote
+ref, then restacks every stack onto its updated parents. It does not push. It
+is `st sync --get --all-stacks --restack` followed by a restack of each stack,
+so it also works from trunk. Frozen branches are skipped.
+
+- A clean working tree is required unless you pass `--auto-stash-pop`, which
+  stashes and pops dirty worktrees (including the current one) while restacking.
+- `st pull --force` lets the remote win outright: diverged branches are hard-reset
+  to their remote tip, and prompts are skipped.
+- `st pull --no-restack` only reconciles branches (same as
+  `st sync --get --all-stacks`).
+- `st pull --dry-run` (alias `--plan`) previews the reconciliation and lists the
+  stacks it would restack. It makes no changes and does not predict conflicts.
+- It stops at the first conflict. Resolve it, run `st continue`, then re-run
+  `st pull`. Finished stacks are no-ops on the re-run.
+- It records one undo receipt per operation; `st undo` reverts only the most
+  recent one.
+- There is no `--json`. Use `st sync --get --all-stacks --json` for machine output.
+
+To also push and update PRs, use `st refresh --all-stacks --get`.
+
+## Narrower: `st rs --get --restack` (or `st refresh --get`)
 
 ```bash
 st rs --get --restack
@@ -60,10 +87,12 @@ branches unless you also pass `--delete-merged`.
 
 ### Every stack at once
 
-By default, from a stack branch, `--get` reconciles only the *current* stack.
-To reconcile every tracked branch in every stack, use either of:
+Start with `st pull`. The lower-level forms below are for finer control. By
+default, from a stack branch, `--get` reconciles only the *current* stack.
+To reconcile every tracked branch in every stack, use any of:
 
 ```bash
+st pull                          # reconcile + restack every stack, no push
 st rs --get --all-stacks          # reconcile every tracked branch (--all-stacks requires --get)
 st rs --get                       # same thing when run from trunk (no current stack exists)
 st refresh --all-stacks --get     # reconcile everything, then restack and submit every stack
@@ -74,9 +103,11 @@ alphabetical order. Frozen branches and branches checked out in another
 worktree are skipped and reported, in every scope. `--dry-run` previews the
 same branch set.
 
-`--all-stacks` on `st sync` widens only `--get`. `st rs --get --all-stacks
---restack` still restacks just the current stack; to restack every stack, use
-`st refresh --all-stacks --get` or `st restack --all`.
+`st pull` does both halves for every stack. `--all-stacks` on `st sync` widens
+only `--get`: `st rs --get --all-stacks --restack` still restacks just the
+current stack. To restack every stack and also push and update PRs, use
+`st refresh --all-stacks --get`; `st restack --all` restacks without
+reconciling.
 
 `st get <branch>` remains useful for a single named branch, or for a branch
 that isn't checked out locally yet at all (it creates the local tracking
@@ -101,9 +132,10 @@ a force-push (and can conflict with what's already on the remote).
 st refresh          # or: st submit / st restack + push
 
 # On the other machine
-st rs --get --restack     # or: st refresh --get   (also pushes + updates PRs)
+st status --remote  # see drift
+st pull             # reconcile + restack every stack (add --force to let the remote win)
 
-# Everything: every stack, reconciled, restacked, pushed
+# Everything, including push and PR updates
 st refresh --all-stacks --get
 ```
 

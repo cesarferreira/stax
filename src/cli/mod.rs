@@ -554,6 +554,25 @@ pub fn run() -> Result<()> {
                 )
             }
         }
+        Commands::Pull {
+            dry_run,
+            force,
+            no_restack,
+            no_delete,
+            safe,
+            quiet,
+            verbose,
+            auto_stash_pop,
+        } => commands::pull::run(commands::pull::PullOptions {
+            dry_run,
+            force,
+            no_restack,
+            no_delete,
+            safe,
+            quiet,
+            verbose,
+            auto_stash_pop,
+        }),
         Commands::Sweep {
             delete,
             include_stale,

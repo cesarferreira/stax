@@ -83,6 +83,7 @@ Once `auth-api` merges, run `st refresh` from each remaining branch to rebase it
 | Open or update PRs for the current branch and all its descendants | `st upstack submit` |
 | Preview a submit without making changes | `st ss --plan` |
 | Sync trunk, rebase, and update the stack's PRs | `st refresh` |
+| Catch up after working on another machine | `st status --remote`, then `st pull` |
 | See which CI checks are failing | `st ci` |
 | Merge from the bottom up to my current PR | `st merge` |
 | Recover local branch state after a restack or sync | `st undo` |

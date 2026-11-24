@@ -106,6 +106,8 @@ mod pr_open_tests;
 mod pr_template_tests;
 #[path = "prev_watch_tmux_tests.rs"]
 mod prev_watch_tmux_tests;
+#[path = "pull_tests.rs"]
+mod pull_tests;
 #[path = "ready_tests.rs"]
 mod ready_tests;
 #[path = "refresh_all_stacks_tests.rs"]

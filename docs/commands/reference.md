@@ -41,6 +41,7 @@ Merged-branch CI history recording is throttled by `[sync] ci_history_interval_d
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone, except known closed-but-unmerged PRs |
 | `st sync --get` | `rs --get` | Before restacking, fetch each branch of the current stack (every tracked branch when on trunk) from its own remote ref and fast-forward/rebase the local branch onto it — for reconciling a stack after another machine rebased and force-pushed it; see [multi-machine workflows](../workflows/multi-machine.md) |
 | `st sync --get --all-stacks` | `rs --get --all-stacks` | Reconcile every tracked branch in every stack (parent before child) instead of only the current stack; `--all-stacks` requires `--get` and does not widen `--restack` |
+| `st pull` | | Reconcile every tracked branch with its remote ref, then restack every stack; does not push; clean tree required unless `--auto-stash-pop`; flags: `-f/--force`, `--dry-run`/`--plan`, `--no-restack`, `--no-delete`, `--safe`, `--quiet`, `-v/--verbose`, `--auto-stash-pop`; no `--json` (use `st sync --get --all-stacks --json`); `st refresh --all-stacks --get` is the variant that also pushes and updates PRs |
 | `st sync --stash` | `rs --stash` | Stash the current working tree before sync starts without prompting; works with `--quiet` and `--json`; does NOT auto-confirm branch deletions; conflicts with `--no-stash` at parse time |
 | `st sync --no-stash` | `rs --no-stash` | Fail if the working tree is dirty; overrides `--force`; conflicts with `--stash` at parse time |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, `--stash`, `--no-stash`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
@@ -322,7 +323,7 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--no-fetch` (requires `--remote`) skips all network calls and uses cached remote-tracking refs. If the fetch fails (for example offline), stax prints a warning on stderr, uses cached refs and exits 0.
 - `--remote` conflicts with `--compact` and fails with a clear error when the configured remote does not exist.
 - `--json --remote` adds `remote_parity` (`state`: `in_sync` | `ahead` | `behind` | `diverged` | `no_remote`, `ahead`, `behind`, `remote_ref`) to each branch and a top-level `remote` (`name`, `fetched`). Without `--remote` the JSON is unchanged.
-- When something is behind or diverged, a hint suggests `st rs --get --all-stacks` (`st rs --get` with `--stack` / `--current`).
+- When something is behind or diverged, a hint suggests `st pull` (`st rs --get` with `--stack` / `--current`).
 
 ### `st submit`
 

@@ -258,6 +258,35 @@ fn test_sync_alias_rs() {
 }
 
 #[test]
+fn test_pull_help() {
+    let output = stax(&["pull", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for needle in [
+        "every stack",
+        "--force",
+        "--dry-run",
+        "--no-restack",
+        "--auto-stash-pop",
+    ] {
+        assert!(stdout.contains(needle), "missing {needle}: {stdout}");
+    }
+    for absent in ["--json", "--get", "--continue"] {
+        assert!(
+            !stdout.lines().any(|l| l.trim_start().starts_with(absent)),
+            "unexpected {absent} option: {stdout}"
+        );
+    }
+
+    let top = stax(&["--help"]);
+    let top = String::from_utf8_lossy(&top.stdout);
+    assert!(
+        top.lines().any(|l| l.trim_start().starts_with("pull ")),
+        "{top}"
+    );
+}
+
+#[test]
 fn test_refresh_help() {
     let output = stax(&["refresh", "--help"]);
     assert!(output.status.success());
