@@ -1,8 +1,12 @@
+use crate::application::{
+    RemoteParity, RemoteParityState, classify_remote_parity, refs_needing_fetch,
+};
 use crate::cache::CiCache;
 use crate::commands::stack_palette;
 use crate::config::Config;
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::{GitRepo, command};
+use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
@@ -43,6 +47,125 @@ fn divergence_labels(ahead: usize, behind: usize) -> String {
     labels
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusRemoteMode {
+    Off,
+    Fetch,
+    Cached,
+}
+
+impl StatusRemoteMode {
+    pub fn from_flags(remote: bool, no_fetch: bool) -> Self {
+        match (remote, no_fetch) {
+            (false, _) => Self::Off,
+            (true, false) => Self::Fetch,
+            (true, true) => Self::Cached,
+        }
+    }
+}
+
+fn remote_parity_label(remote: &str, parity: &RemoteParity) -> String {
+    let text = match parity.state {
+        RemoteParityState::InSync => format!("[{}: in sync]", remote).dimmed().to_string(),
+        RemoteParityState::Ahead => format!("[{}: {}↑ unpushed]", remote, parity.ahead)
+            .green()
+            .to_string(),
+        RemoteParityState::Behind => format!("[{}: {}↓ behind]", remote, parity.behind)
+            .red()
+            .to_string(),
+        RemoteParityState::Diverged => format!(
+            "[{}: diverged {}↑/{}↓]",
+            remote, parity.ahead, parity.behind
+        )
+        .yellow()
+        .to_string(),
+        RemoteParityState::NoRemote => format!("[{}: no remote]", remote).dimmed().to_string(),
+    };
+    format!(" {}", text)
+}
+
+fn collect_remote_parity(
+    repo: &GitRepo,
+    remote_name: &str,
+    branches: &[String],
+    mode: StatusRemoteMode,
+    quiet: bool,
+    json: bool,
+) -> Result<(HashMap<String, RemoteParity>, bool)> {
+    if repo.inner().find_remote(remote_name).is_err() {
+        anyhow::bail!(
+            "--remote needs a git remote named '{}'; none is configured.",
+            remote_name
+        );
+    }
+    let workdir = repo.workdir()?;
+
+    let mut fetched = false;
+    let mut existing: Option<HashSet<String>> = None;
+    if mode == StatusRemoteMode::Fetch {
+        let _timer =
+            LiveTimer::maybe_new_stderr(!quiet && !json, &format!("Fetching {} ...", remote_name));
+        let result = (|| -> Result<HashSet<String>> {
+            let heads = remote::ls_remote_head_oids(workdir, remote_name)?;
+            let cached: HashMap<String, String> = branches
+                .iter()
+                .filter_map(|b| {
+                    let reference = repo
+                        .inner()
+                        .find_reference(&format!("refs/remotes/{}/{}", remote_name, b))
+                        .ok()?;
+                    let oid = reference.resolve().ok()?.target()?;
+                    Some((b.clone(), oid.to_string()))
+                })
+                .collect();
+            let to_fetch = refs_needing_fetch(branches, &heads, &cached);
+            remote::fetch_remote_tracking_refs(workdir, remote_name, &to_fetch)?;
+            Ok(branches
+                .iter()
+                .filter(|b| heads.contains_key(*b))
+                .cloned()
+                .collect())
+        })();
+        drop(_timer);
+        match result {
+            Ok(set) => {
+                existing = Some(set);
+                fetched = true;
+            }
+            Err(err) => {
+                eprintln!(
+                    "warning: could not fetch from '{}': {}; showing cached remote-tracking refs",
+                    remote_name,
+                    err.to_string().trim()
+                );
+            }
+        }
+    }
+    let existing = existing.unwrap_or_else(|| {
+        remote::get_existing_remote_branches_from_repo(repo.inner(), remote_name, branches)
+    });
+
+    let pairs: Vec<(String, String)> = branches
+        .iter()
+        .filter(|b| existing.contains(*b))
+        .map(|b| (format!("{}/{}", remote_name, b), b.clone()))
+        .collect();
+    let results = repo.commits_ahead_behind_many(&pairs);
+    let mut by_branch: HashMap<String, Option<(usize, usize)>> = HashMap::new();
+    for ((_, branch), result) in pairs.iter().zip(results) {
+        by_branch.insert(branch.clone(), result.ok());
+    }
+
+    let parity = branches
+        .iter()
+        .map(|b| {
+            let ab = by_branch.get(b).copied().flatten();
+            (b.clone(), classify_remote_parity(existing.contains(b), ab))
+        })
+        .collect();
+    Ok((parity, fetched))
+}
+
 fn missing_parent_label(parent: &str) -> String {
     format!(
         "{}",
@@ -69,6 +192,22 @@ struct BranchStatusJson {
     lines_added: usize,
     lines_deleted: usize,
     has_remote: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_parity: Option<RemoteParityJson>,
+}
+
+#[derive(Serialize, Clone)]
+struct RemoteParityJson {
+    state: RemoteParityState,
+    ahead: usize,
+    behind: usize,
+    remote_ref: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StatusRemoteJson {
+    name: String,
+    fetched: bool,
 }
 
 #[derive(Serialize)]
@@ -76,6 +215,8 @@ struct StatusJson {
     trunk: String,
     current: String,
     branches: Vec<BranchStatusJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote: Option<StatusRemoteJson>,
 }
 
 pub fn run(
@@ -85,6 +226,7 @@ pub fn run(
     compact: bool,
     quiet: bool,
     verbose: bool,
+    remote_mode: StatusRemoteMode,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let snapshot = StackSnapshot::load(&repo)?;
@@ -153,6 +295,19 @@ pub fn run(
     let mut ordered_branches: Vec<String> =
         display_branches.iter().map(|b| b.name.clone()).collect();
     ordered_branches.push(stack.trunk.clone());
+    let remote_parity: Option<(HashMap<String, RemoteParity>, bool)> =
+        if remote_mode != StatusRemoteMode::Off {
+            Some(collect_remote_parity(
+                &repo,
+                config.remote_name(),
+                &ordered_branches,
+                remote_mode,
+                quiet,
+                json,
+            )?)
+        } else {
+            None
+        };
     let remote_branches = remote::get_existing_remote_branches_from_repo(
         repo.inner(),
         config.remote_name(),
@@ -246,6 +401,16 @@ pub fn run(
             lines_added,
             lines_deleted,
             has_remote: remote_branches.contains(name),
+            remote_parity: remote_parity
+                .as_ref()
+                .and_then(|(map, _)| map.get(name))
+                .map(|p| RemoteParityJson {
+                    state: p.state,
+                    ahead: p.ahead,
+                    behind: p.behind,
+                    remote_ref: (p.state != RemoteParityState::NoRemote)
+                        .then(|| format!("{}/{}", config.remote_name(), name)),
+                }),
         };
 
         branch_status_map.insert(name.clone(), entry.clone());
@@ -257,6 +422,10 @@ pub fn run(
             trunk: stack.trunk.clone(),
             current: current.clone(),
             branches: branch_statuses,
+            remote: remote_parity.as_ref().map(|(_, fetched)| StatusRemoteJson {
+                name: config.remote_name().to_string(),
+                fetched: *fetched,
+            }),
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
@@ -365,7 +534,12 @@ pub fn run(
         }
 
         if let Some(entry) = entry {
-            info_str.push_str(&divergence_labels(entry.ahead, entry.behind));
+            match remote_parity.as_ref().and_then(|(map, _)| map.get(branch)) {
+                Some(parity) => {
+                    info_str.push_str(&remote_parity_label(config.remote_name(), parity))
+                }
+                None => info_str.push_str(&divergence_labels(entry.ahead, entry.behind)),
+            }
             if let Some(parent) = &entry.missing_parent {
                 info_str.push_str(&format!(" {}", missing_parent_label(parent)));
             } else if entry.needs_restack {
@@ -460,7 +634,13 @@ pub fn run(
 
     // Show commits ahead/behind for trunk (compared to origin)
     if let Some(entry) = branch_status_map.get(&stack.trunk) {
-        trunk_info.push_str(&divergence_labels(entry.ahead, entry.behind));
+        match remote_parity
+            .as_ref()
+            .and_then(|(map, _)| map.get(&stack.trunk))
+        {
+            Some(parity) => trunk_info.push_str(&remote_parity_label(config.remote_name(), parity)),
+            None => trunk_info.push_str(&divergence_labels(entry.ahead, entry.behind)),
+        }
     }
 
     println!("{}{}", trunk_tree, trunk_info);
@@ -519,6 +699,45 @@ pub fn run(
             "stax rs --restack".bright_cyan()
         );
         printed_stack_hint = true;
+    }
+
+    if let Some((parity_map, _)) = &remote_parity
+        && !quiet
+        && config.ui.tips
+    {
+        let drifted = ordered_branches
+            .iter()
+            .filter(|b| {
+                parity_map.get(*b).is_some_and(|p| {
+                    matches!(
+                        p.state,
+                        RemoteParityState::Behind | RemoteParityState::Diverged
+                    )
+                })
+            })
+            .count();
+        if drifted > 0 {
+            if !printed_stack_hint {
+                println!();
+            }
+            let command = if stack_filter.is_some() || current_only {
+                "st rs --get"
+            } else {
+                "st rs --get --all-stacks"
+            };
+            println!(
+                "{} Run {} to reconcile.",
+                format!(
+                    "↓ {} {} behind or diverged from {}.",
+                    drifted,
+                    if drifted == 1 { "branch" } else { "branches" },
+                    config.remote_name()
+                )
+                .bright_yellow(),
+                command.bright_cyan()
+            );
+            printed_stack_hint = true;
+        }
     }
 
     // Show additional stats only in verbose mode (ll command)

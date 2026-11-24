@@ -349,6 +349,12 @@ pub(crate) enum Commands {
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
+        /// Compare each shown branch with its own remote ref (<remote>/<branch>); fetches those refs first
+        #[arg(long, conflicts_with = "compact")]
+        remote: bool,
+        /// With --remote: skip fetching and use cached remote-tracking refs
+        #[arg(long = "no-fetch", requires = "remote")]
+        no_fetch: bool,
     },
 
     /// Show all stacks with PR URLs and full details

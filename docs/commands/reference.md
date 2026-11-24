@@ -28,6 +28,7 @@ Merged-branch CI history recording is throttled by `[sync] ci_history_interval_d
 | Command | Alias | Description |
 |---|---|---|
 | `st status` | `ls` | Show stack |
+| `st status --remote` | `ls --remote` | Per-branch parity against its own remote ref (`<remote>/<branch>`) |
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
@@ -315,6 +316,13 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 ### `st status` / `st ll` / `st log`
 
 - `--stack <branch>` · `--current` · `--compact` · `--json` · `--quiet`
+- `st status --remote` (also `st ls --remote`; not available on `st ll` / `st log`) compares each shown branch and trunk with its own remote ref, `<remote>/<branch>`, and replaces the parent-relative `N↑ N↓` labels with one label per line:
+  - `[origin: in sync]`, `[origin: N↑ unpushed]`, `[origin: N↓ behind]`, `[origin: diverged N↑/M↓]`, `[origin: no remote]`
+- By default it first runs one `git ls-remote --heads` and fetches only the shown branches whose remote tip differs from the cached tracking ref. This updates only `refs/remotes/<remote>/*`; local branches, metadata and worktrees are never changed. A branch deleted on the remote shows `no remote` and is not pruned.
+- `--no-fetch` (requires `--remote`) skips all network calls and uses cached remote-tracking refs. If the fetch fails (for example offline), stax prints a warning on stderr, uses cached refs and exits 0.
+- `--remote` conflicts with `--compact` and fails with a clear error when the configured remote does not exist.
+- `--json --remote` adds `remote_parity` (`state`: `in_sync` | `ahead` | `behind` | `diverged` | `no_remote`, `ahead`, `behind`, `remote_ref`) to each branch and a top-level `remote` (`name`, `fetched`). Without `--remote` the JSON is unchanged.
+- When something is behind or diverged, a hint suggests `st rs --get --all-stacks` (`st rs --get` with `--stack` / `--current`).
 
 ### `st submit`
 

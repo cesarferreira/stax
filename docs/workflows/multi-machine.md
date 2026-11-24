@@ -8,9 +8,28 @@ feature branches themselves get rebased and force-pushed to a new SHA.
 
 ## Recognizing the situation
 
-On the machine you didn't just use, `st status` / `st ls` typically shows `⟳`
-(needs restack) next to branches, or a branch that's simply behind its own
-remote tip. Don't `git pull` a stacked branch in this state — if it was rebased
+On the machine you didn't just use, run:
+
+```bash
+st status --remote
+```
+
+It fetches the remote tips of the branches it shows (only `refs/remotes/*`, never
+your local branches) and labels each one against its own remote ref:
+
+```text
+○ feature-b [origin: 2↓ behind]
+○ feature-a [origin: diverged 1↑/3↓]
+○ main      [origin: in sync]
+
+↓ 2 branches behind or diverged from origin. Run st rs --get --all-stacks to reconcile.
+```
+
+Use `--no-fetch` to compare against cached remote-tracking refs when you are
+offline (a failed fetch also falls back to cached refs with a warning).
+Plain `st status` / `st ls` compares each branch with its parent, so it may show `⟳`
+(needs restack) but not whether a branch is behind its own remote tip; use
+`st status --remote` for that comparison. Don't `git pull` a stacked branch in this state — if it was rebased
 elsewhere, the local and remote histories have diverged and a plain pull will
 either conflict or silently create a merge commit.
 
