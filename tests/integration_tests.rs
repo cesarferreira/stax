@@ -58,6 +58,7 @@ fn hermetic_git_command() -> Command {
 /// A test repository that creates a temporary git repo with proper initialization
 struct TestRepo {
     dir: TempDir,
+    home_dir: TempDir,
     /// Optional bare repository acting as "origin" remote
     #[allow(dead_code)]
     remote_dir: Option<TempDir>,
@@ -71,6 +72,7 @@ impl TestRepo {
 
         Self {
             dir,
+            home_dir: test_tempdir(),
             remote_dir: None,
         }
     }
@@ -260,6 +262,7 @@ impl TestRepo {
     /// Run a stax command in this repository
     fn run_stax(&self, args: &[&str]) -> Output {
         sanitized_stax_command()
+            .env("HOME", self.home_dir.path())
             .args(args)
             .current_dir(self.path())
             .output()
@@ -268,7 +271,10 @@ impl TestRepo {
 
     fn run_stax_with_env(&self, args: &[&str], envs: &[(&str, &Path)]) -> Output {
         let mut command = sanitized_stax_command();
-        command.args(args).current_dir(self.path());
+        command
+            .env("HOME", self.home_dir.path())
+            .args(args)
+            .current_dir(self.path());
         for (key, value) in envs {
             command.env(key, value);
         }
@@ -840,6 +846,7 @@ fn test_status_marks_branches_checked_out_in_linked_worktrees() {
 
     let output = sanitized_stax_command()
         .args(["status"])
+        .env("HOME", repo.home_dir.path())
         .env("STAX_NERD_ICONS", "0")
         .current_dir(repo.path())
         .output()
@@ -3403,14 +3410,40 @@ fn test_config_command() {
 // =============================================================================
 
 #[test]
+fn test_local_test_repo_isolates_home_from_developer_config() {
+    let repo = TestRepo::new();
+    let out = repo.run_stax(&["config"]);
+    let stdout = TestRepo::stdout(&out);
+    let mut lines = stdout.lines();
+    let mut path = None;
+    while let Some(line) = lines.next() {
+        if line.contains("Config path:") {
+            path = lines.next().map(|l| PathBuf::from(l.trim()));
+            break;
+        }
+    }
+    let path = path.unwrap_or_else(|| panic!("no config path in output: {stdout}"));
+    assert!(path.ends_with(".config/stax/config.toml"), "{path:?}");
+    if let Some(home) = std::env::var_os("HOME") {
+        assert_ne!(
+            path,
+            Path::new(&home).join(".config/stax/config.toml"),
+            "local TestRepo leaked the developer's HOME"
+        );
+    }
+}
+
+#[test]
 fn test_status_outside_git_repo() {
     #[cfg(unix)]
     let dir = TempDir::new_in("/tmp").expect("Failed to create external temp dir");
     #[cfg(not(unix))]
     let dir = TempDir::new().expect("Failed to create external temp dir");
 
+    let home = test_tempdir();
     let output = sanitized_stax_command()
         .args(["status"])
+        .env("HOME", home.path())
         .current_dir(dir.path())
         .output()
         .expect("Failed to execute stax");

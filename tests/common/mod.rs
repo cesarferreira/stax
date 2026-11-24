@@ -124,13 +124,21 @@ fn sanitized_stax_command() -> Command {
 
 fn apply_sanitized_test_env(cmd: &mut Command) {
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
-    // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
+    // Keep tests hermetic and avoid accidentally hitting real forge APIs or the
+    // developer's config (callers must also point HOME at a temp dir).
     cmd.env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
         .env_remove("STAX_SHELL_INTEGRATION")
         .env_remove("STAX_CONFIG_DIR")
         .env_remove("STAX_BROWSER_COMMAND")
         .env_remove("GH_TOKEN")
+        .env_remove("STAX_GITLAB_TOKEN")
+        .env_remove("STAX_GITEA_TOKEN")
+        .env_remove("STAX_FORGE_TOKEN")
+        .env_remove("GITLAB_TOKEN")
+        .env_remove("GITEA_TOKEN")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("GH_CONFIG_DIR")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
@@ -156,6 +164,8 @@ pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Outp
     run_stax_in_script_with_env(cwd, args, input_script, &[])
 }
 
+/// The child gets an empty per-run HOME unless `env` supplies HOME; pass
+/// STAX_CONFIG_DIR to pin a specific config.
 pub fn run_stax_in_script_with_env(
     cwd: &Path,
     args: &[&str],
@@ -164,6 +174,8 @@ pub fn run_stax_in_script_with_env(
 ) -> Output {
     let stax_bin = stax_bin();
     let transcript_dir = test_tempdir();
+    let default_home = transcript_dir.path().join("home");
+    fs::create_dir_all(default_home.join(".config").join("stax")).expect("create default HOME");
     let transcript_path = transcript_dir.path().join("tui-transcript");
     let input_status_path = transcript_dir.path().join("input-status");
     fs::write(&transcript_path, "").expect("create TUI transcript");
@@ -217,6 +229,7 @@ wait_for_tui_text() {{
     let mut cmd = Command::new("sh");
     cmd.args(["-c", &shell_script]).current_dir(cwd);
     apply_sanitized_test_env(&mut cmd);
+    cmd.env("HOME", &default_home);
     for (key, val) in env {
         cmd.env(key, val);
     }
@@ -1016,6 +1029,96 @@ mod tests {
                     .iter()
                     .any(|(key, value)| key.to_string_lossy() == token && value.is_none()),
                 "expected {token} to be explicitly removed"
+            );
+        }
+    }
+
+    fn printed_config_path(stdout: &[u8]) -> PathBuf {
+        let text = String::from_utf8_lossy(stdout).replace('\r', "");
+        let mut lines = text.lines();
+        while let Some(line) = lines.next() {
+            if line.contains("Config path:") {
+                let path = lines.next().expect("config path line").trim();
+                return PathBuf::from(path);
+            }
+        }
+        panic!("no config path in output: {text}");
+    }
+
+    fn real_home_config_path() -> Option<PathBuf> {
+        std::env::var_os("HOME").map(|home| Path::new(&home).join(".config/stax/config.toml"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_helper_isolates_home_by_default() {
+        let repo = TestRepo::new();
+        let out = run_stax_in_script(&repo.path(), &["config"], "true");
+        let path = printed_config_path(&out.stdout);
+        assert!(path.ends_with(".config/stax/config.toml"), "{path:?}");
+        if let Some(real) = real_home_config_path() {
+            assert_ne!(path, real, "PTY helper leaked the developer's HOME");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_helper_respects_caller_home() {
+        let repo = TestRepo::new();
+        let custom_home = repo.clean_home();
+        let out = run_stax_in_script_with_env(
+            &repo.path(),
+            &["config"],
+            "true",
+            &[("HOME", custom_home.as_str())],
+        );
+        assert_eq!(
+            printed_config_path(&out.stdout),
+            Path::new(&custom_home).join(".config/stax/config.toml")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_helper_respects_caller_stax_config_dir() {
+        let repo = TestRepo::new();
+        let dir = test_tempdir();
+        let dir_str = dir.path().to_string_lossy().into_owned();
+        let out = run_stax_in_script_with_env(
+            &repo.path(),
+            &["config"],
+            "true",
+            &[("STAX_CONFIG_DIR", dir_str.as_str())],
+        );
+        assert_eq!(
+            printed_config_path(&out.stdout),
+            dir.path().join("config.toml")
+        );
+    }
+
+    #[test]
+    fn sanitized_env_detaches_user_config_locations() {
+        let mut command = Command::new("true");
+        apply_sanitized_test_env(&mut command);
+        let envs = command.get_envs().collect::<Vec<_>>();
+
+        for key in [
+            "XDG_CONFIG_HOME",
+            "GH_CONFIG_DIR",
+            "STAX_CONFIG_DIR",
+            "STAX_GITHUB_TOKEN",
+            "STAX_GITLAB_TOKEN",
+            "STAX_GITEA_TOKEN",
+            "STAX_FORGE_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITLAB_TOKEN",
+            "GITEA_TOKEN",
+        ] {
+            assert!(
+                envs.iter()
+                    .any(|(k, v)| k.to_string_lossy() == key && v.is_none()),
+                "expected {key} to be explicitly removed"
             );
         }
     }

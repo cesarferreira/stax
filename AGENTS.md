@@ -47,7 +47,7 @@ make test                    # full suite; see rules below
 - For full-suite validation, always use `make test`.
 - On macOS, `make test` intentionally routes to the Docker fast path.
 - **On Linux, do not use Docker for tests.** `make test` already runs the suite natively via `make test-local-fast`, and the native Linux filesystem is the fast one. Use `make test-docker` on Linux only to reproduce CI's container environment.
-- If the interactive PTY tests (`test_sync_interactive_*`) time out natively on Linux, run `which -a script`. A non-system `script` (for example linuxbrew's) ahead of `/usr/bin/script` breaks them. Fix `PATH` instead of switching to Docker.
+- If the interactive PTY tests (`test_sync_interactive_*`) time out natively on Linux, check two causes in order. First, leaked user config: a PTY or stax test helper that does not give the child a temp `HOME` reads `~/.config/stax/config.toml`, and settings such as `[sync] confirm_delete = false` change the prompt flow so the input script waits forever. Check any new helper for this. Second, a non-system `script` (for example linuxbrew's) ahead of `/usr/bin/script`: run `which -a script` and fix `PATH`. Do not switch to Docker.
 - Use native paths only when explicitly needed:
   - `make test-native` (guarded nextest path; validates the file-descriptor limit)
   - `make test-local-ramdisk`
