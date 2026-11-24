@@ -371,6 +371,7 @@ stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
 # A deleted remote head does not make a known CLOSED PR merged. Closed branches stay local; stax sweep --delete --include-closed discards them explicitly.
 # Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
+# Non-interactive runs (no TTY, e.g. agents/CI): sync/pull/refresh skip the Sync plan and merged-branch deletion prompts; under the default `confirm_delete = true` merged branches are KEPT with a `Next:` hint, and linked-worktree branches are skipped. A dirty tree is not covered by this skip: `st sync`/`st rs` need `--stash` or `--no-stash` (otherwise the stash prompt is unanswerable); `st pull` stops unless `--auto-stash-pop`; `st refresh` has no `--stash`/`--no-stash` (stash or commit first; `--all-stacks` stops unless `--auto-stash-pop`). Use `stax sync --force` (or `--json --force`) to delete.
 # [sync] confirm_delete = false in config: sync/rs and bare `stax get` delete merged branches without the prompt (linked-worktree branches still ask; --quiet/--json still skip deletions).
 # [sync] ci_history_interval_days = 3: sync records merged-branch CI timings (for st ci ETAs) at most once per N days; 0 = every sync.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead

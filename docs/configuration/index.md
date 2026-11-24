@@ -104,8 +104,9 @@ single_stack = "on"    # "on" | "off"
 # preflight_warn = true        # print a notice when that automatic repair happens
 
 [sync]
-# confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking
-                        # (branches checked out in a linked worktree still prompt)
+# confirm_delete = true # false: `st sync` / `st get` delete merged branches without asking;
+                        # without a terminal, true keeps them (use `st sync --force`)
+                        # (branches checked out in a linked worktree still prompt on a terminal)
 # ci_history_interval_days = 3 # record CI timings of merged branches during sync at most once
                                # per N days (0 = every sync). Sync skipped by the throttle does
                                # not sample the branches it deletes; `st ci` and `st merge`

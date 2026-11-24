@@ -64,14 +64,14 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone, except known closed-but-unmerged PRs |
 | `st rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward or rebase the local branch onto it — use after another machine rebased and force-pushed your stack |
 | `st rs --get --all-stacks` | Reconcile every tracked branch in every stack against its remote ref (also the default for `--get` on trunk); `--all-stacks` requires `--get` and widens only the get phase, not `--restack` |
-| `st pull` | Reconcile every tracked branch in every stack with its remote ref, then restack every stack; no push; needs a clean tree unless `--auto-stash-pop`; stops at the first conflict (`st continue`, then re-run `st pull`) |
+| `st pull` | Reconcile every tracked branch in every stack with its remote ref, then restack every stack; no push; needs a clean tree unless `--auto-stash-pop`; stops at the first conflict (`st continue`, then re-run `st pull`); without a terminal, merged branches are kept under the default `confirm_delete = true` (not prompted) and a hint is printed |
 | `st pull --force` | Let the remote win: hard-reset diverged branches to their remote tip and skip prompts |
 | `st pull --no-restack` | Only reconcile branches (same as `st sync --get --all-stacks`) |
 | `st pull --dry-run` | Preview the reconciliation and the stacks that would be restacked; changes nothing (alias `--plan`) |
 | `st pull --auto-stash-pop` | Auto-stash and pop dirty worktrees while restacking |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
-| `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json`; `[sync] confirm_delete = false` deletes listed branches without asking |
+| `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json`; `[sync] confirm_delete = false` deletes listed branches without asking; without a terminal (stdin/stderr not a TTY) the plan is skipped and merged branches are kept unless `--force` or `confirm_delete = false`, and linked-worktree branches are always kept without `--force` |
 | `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
 | `st rs --dry-run --json` | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`) instead of human text |
 | `st rs --json` | Run sync and emit the result as a versioned JSON document (`kind: "sync"`, schema version 1); implies non-interactive; failures still emit JSON and exit non-zero |

@@ -16,6 +16,8 @@ This page covers repo-wide behavior across linked checkouts. For the `st worktre
 
 When a cleanup candidate is checked out in another worktree, interactive sync offers to keep the worktree (the default), remove it, or skip the branch. Keeping it preserves ignored, untracked, and modified files. If switching the worktree to trunk would overwrite local changes, stax leaves it on a detached `HEAD` at its existing commit instead.
 
+Without a terminal and without `--force`, sync does not prompt about deletion: it leaves the linked worktree and its branch untouched.
+
 `st sync --force` also keeps the worktree. In this command, `--force` skips prompts but never authorizes worktree removal. If stax cannot switch or detach the worktree safely—for example, because a merge is in progress—it keeps the worktree, branch, remote branch, and metadata and reports the commands needed for manual recovery.
 
 ## Dirty worktrees

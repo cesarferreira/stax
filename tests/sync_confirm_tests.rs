@@ -274,3 +274,179 @@ fn sync_rejects_non_bool_confirm_delete() {
     );
     assert!(branch_exists(&repo, &feature));
 }
+
+fn rev(repo: &TestRepo, name: &str) -> String {
+    TestRepo::stdout(&repo.git(&["rev-parse", name]))
+        .trim()
+        .to_string()
+}
+
+fn next_hint_count(stdout: &str) -> usize {
+    stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Next:"))
+        .count()
+}
+
+fn assert_non_tty_kept_with_hint(repo: &TestRepo, feature: &str, out: &std::process::Output) {
+    let stdout = TestRepo::stdout(out);
+    let stderr = TestRepo::stderr(out);
+    assert!(out.status.success(), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        branch_exists(repo, feature),
+        "merged branch must be kept without a terminal"
+    );
+    assert!(
+        !stderr.contains("not a terminal"),
+        "must not hit a dialoguer failure: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Sync plan") && !stdout.contains("How should sync proceed?"),
+        "plan prompt must be skipped: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "Cleanup skipped for {feature} (no terminal to confirm deletion)"
+        )),
+        "skip reason missing: {stdout}"
+    );
+    assert!(stdout.contains("st sync --force"), "hint missing: {stdout}");
+    assert!(
+        stdout.contains("sync.confirm_delete = false"),
+        "hint missing: {stdout}"
+    );
+    assert_eq!(next_hint_count(&stdout), 1, "stdout: {stdout}");
+}
+
+#[test]
+fn non_tty_rs_keeps_merged_branch_with_hint() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-rs");
+    repo.simulate_remote_commit("upstream.txt", "upstream", "Upstream commit");
+
+    let out = repo.run_stax(&["rs"]);
+    assert_non_tty_kept_with_hint(&repo, &feature, &out);
+    assert_eq!(
+        rev(&repo, "main"),
+        rev(&repo, "origin/main"),
+        "trunk should still be updated"
+    );
+}
+
+#[test]
+fn non_tty_pull_keeps_merged_branch_with_hint() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-pull");
+    repo.simulate_remote_commit("upstream.txt", "upstream", "Upstream commit");
+
+    let out = repo.run_stax(&["pull"]);
+    assert_non_tty_kept_with_hint(&repo, &feature, &out);
+    assert_eq!(rev(&repo, "main"), rev(&repo, "origin/main"));
+}
+
+#[test]
+fn non_tty_refresh_delete_merged_keeps_merged_branch() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-refresh");
+
+    let out = repo.run_stax(&["refresh", "--no-submit", "--delete-merged"]);
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        out.status.success(),
+        "stdout: {stdout}\nstderr: {}",
+        TestRepo::stderr(&out)
+    );
+    assert!(branch_exists(&repo, &feature));
+    assert!(
+        stdout.contains("no terminal to confirm deletion"),
+        "reason missing: {stdout}"
+    );
+}
+
+#[test]
+fn non_tty_confirm_delete_false_still_deletes() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-nodelconfirm");
+    let home = repo.clean_home();
+    write_home_config(&home, "[sync]\nconfirm_delete = false\n");
+
+    let out = repo.run_stax(&["rs"]);
+    assert!(out.status.success(), "stderr: {}", TestRepo::stderr(&out));
+    assert!(!branch_exists(&repo, &feature));
+}
+
+#[test]
+fn non_tty_force_still_deletes_merged_branch() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-force");
+
+    let out = repo.run_stax(&["rs", "--force"]);
+    assert!(out.status.success(), "stderr: {}", TestRepo::stderr(&out));
+    assert!(!branch_exists(&repo, &feature));
+}
+
+#[test]
+fn non_tty_quiet_keeps_merged_branch() {
+    let (repo, feature) = repo_with_merged_feature("feat-non-tty-quiet");
+
+    let out = repo.run_stax(&["sync", "--quiet"]);
+    assert!(out.status.success(), "stderr: {}", TestRepo::stderr(&out));
+    assert!(branch_exists(&repo, &feature));
+}
+
+fn assert_non_tty_keeps_linked_worktree(prefix: &str, config: Option<&str>) {
+    let (repo, feature) = repo_with_merged_feature(prefix);
+    let worktree_root = tempfile::tempdir().expect("create worktree root");
+    let worktree = worktree_root.path().join("feature-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &feature,
+        ])
+        .status
+        .success()
+    );
+    if let Some(config) = config {
+        write_home_config(&repo.clean_home(), config);
+    }
+
+    let out = repo.run_stax(&["sync"]);
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        out.status.success(),
+        "stdout: {stdout}\nstderr: {}",
+        TestRepo::stderr(&out)
+    );
+    assert!(branch_exists(&repo, &feature));
+    assert!(worktree.exists(), "linked worktree must be left untouched");
+    let head = repo.git(&[
+        "-C",
+        worktree.to_str().expect("utf8 path"),
+        "rev-parse",
+        "--abbrev-ref",
+        "HEAD",
+    ]);
+    assert_eq!(
+        TestRepo::stdout(&head).trim(),
+        feature,
+        "worktree HEAD must not be switched"
+    );
+    assert!(
+        stdout.contains("no terminal to confirm deletion"),
+        "reason missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("What should stax do?"),
+        "must not prompt: {stdout}"
+    );
+}
+
+#[test]
+fn non_tty_confirm_delete_false_skips_linked_worktree_branch() {
+    assert_non_tty_keeps_linked_worktree(
+        "feat-non-tty-wt-nodel",
+        Some("[sync]\nconfirm_delete = false\n"),
+    );
+}
+
+#[test]
+fn non_tty_default_skips_linked_worktree_branch() {
+    assert_non_tty_keeps_linked_worktree("feat-non-tty-wt-default", None);
+}
