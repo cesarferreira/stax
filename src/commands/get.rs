@@ -113,7 +113,7 @@ pub fn run(options: GetOptions) -> Result<()> {
             false, // json
             &[],
             false,
-            false, // get
+            crate::commands::sync::GetScope::Off,
         );
     };
 

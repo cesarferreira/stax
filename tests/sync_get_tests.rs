@@ -477,3 +477,388 @@ fn refresh_without_get_leaves_branch_untouched() {
         "refresh without --get must not reconcile the branch against its remote ref"
     );
 }
+
+fn push_all(repo: &TestRepo, branches: &[String]) {
+    for branch in branches {
+        repo.git(&["push", "-u", "origin", branch]).assert_success();
+    }
+}
+
+/// Two independent pushed stacks off trunk; leaves `main` checked out.
+fn two_pushed_stacks(repo: &TestRepo, a: &[&str], b: &[&str]) -> (Vec<String>, Vec<String>) {
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+    let stack_a = repo.create_stack(a);
+    repo.git(&["checkout", "main"]).assert_success();
+    let stack_b = repo.create_stack(b);
+    repo.git(&["checkout", "main"]).assert_success();
+    push_all(repo, &stack_a);
+    push_all(repo, &stack_b);
+    (stack_a, stack_b)
+}
+
+fn parse_json(out: &std::process::Output) -> serde_json::Value {
+    let stdout = TestRepo::stdout(out);
+    serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}\n---\n{stdout}"))
+}
+
+fn reconciled_names(parsed: &serde_json::Value) -> Vec<String> {
+    parsed["reconciled_branches"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| entry["branch"].as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn assert_skipped(parsed: &serde_json::Value, branch: &str, reason: &str) {
+    assert!(
+        parsed["skipped_branches"]
+            .as_array()
+            .is_some_and(|skipped| skipped
+                .iter()
+                .any(|entry| entry["name"] == branch && entry["reason"] == reason)),
+        "{branch} missing from skipped_branches with reason {reason:?}: {parsed}"
+    );
+}
+
+#[test]
+fn sync_get_all_stacks_reconciles_every_stack() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["gas-a"], &["gas-b"]);
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+
+    let remote_a = update_remote_branch_in_clone(&repo, &stack_a[0], "a.txt", "a remote");
+    let remote_b = update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+
+    let out = repo.run_stax(&["sync", "--get", "--all-stacks", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --all-stacks failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let parsed = parse_json(&out);
+    for branch in [&stack_a[0], &stack_b[0]] {
+        let entry = parsed["reconciled_branches"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|e| e["branch"] == branch.as_str()))
+            .unwrap_or_else(|| panic!("{branch} missing from reconciled_branches: {parsed}"));
+        assert_eq!(entry["action"], "fast_forwarded");
+    }
+    assert_eq!(repo.get_commit_sha(&stack_a[0]), remote_a);
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), remote_b);
+}
+
+#[test]
+fn rs_get_all_stacks_alias_reconciles_other_stack() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["rsas-a"], &["rsas-b"]);
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+
+    let remote_b = update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+
+    let out = repo.run_stax(&["rs", "--get", "--all-stacks"]);
+    assert!(
+        out.status.success(),
+        "rs --get --all-stacks failed: {}",
+        TestRepo::stderr(&out)
+    );
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), remote_b);
+}
+
+#[test]
+fn sync_get_on_trunk_reconciles_all_tracked_branches() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["gtrunk-a"], &["gtrunk-b"]);
+    assert_eq!(repo.current_branch(), "main");
+
+    let remote_a = update_remote_branch_in_clone(&repo, &stack_a[0], "a.txt", "a remote");
+    let remote_b = update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get on trunk failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let names = reconciled_names(&parse_json(&out));
+    assert!(names.contains(&stack_a[0]), "got {names:?}");
+    assert!(names.contains(&stack_b[0]), "got {names:?}");
+    assert_eq!(repo.get_commit_sha(&stack_a[0]), remote_a);
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), remote_b);
+}
+
+#[test]
+fn sync_get_all_stacks_reconciles_parents_before_children() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["gord-parent", "gord-child"], &["gord-b"]);
+    repo.git(&["checkout", &stack_b[0]]).assert_success();
+
+    update_remote_branch_in_clone(&repo, &stack_a[0], "parent.txt", "parent remote");
+    update_remote_branch_in_clone(&repo, &stack_a[1], "child.txt", "child remote");
+
+    let out = repo.run_stax(&["sync", "--get", "--all-stacks", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --all-stacks failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let names = reconciled_names(&parse_json(&out));
+    let parent_idx = names.iter().position(|n| n == &stack_a[0]);
+    let child_idx = names.iter().position(|n| n == &stack_a[1]);
+    assert!(
+        parent_idx.is_some() && child_idx.is_some() && parent_idx < child_idx,
+        "parent must be reconciled before child; got {names:?}"
+    );
+}
+
+#[test]
+fn sync_get_all_stacks_dry_run_previews_every_stack() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["gdry-a"], &["gdry-b"]);
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+    repo.create_file("local.txt", "local");
+    repo.commit("Local commit on A");
+
+    update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+    let head_before = repo.head_sha();
+    let a_before = repo.get_commit_sha(&stack_a[0]);
+    let b_before = repo.get_commit_sha(&stack_b[0]);
+
+    let out = repo.run_stax(&["sync", "--get", "--all-stacks", "--dry-run"]);
+    assert!(
+        out.status.success(),
+        "dry-run failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains("Get (all tracked branches vs remote)"),
+        "missing all-branches heading: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains(&stack_b[0]) && l.contains("would reconcile")),
+        "preview must list {}: {stdout}",
+        stack_b[0]
+    );
+    assert_eq!(repo.head_sha(), head_before);
+    assert_eq!(repo.get_commit_sha(&stack_a[0]), a_before);
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), b_before);
+}
+
+#[test]
+fn sync_get_on_trunk_dry_run_previews_all_branches() {
+    let repo = TestRepo::new_with_remote();
+    let (_stack_a, stack_b) = two_pushed_stacks(&repo, &["gtdry-a"], &["gtdry-b"]);
+    update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+
+    let out = repo.run_stax(&["sync", "--get", "--dry-run"]);
+    assert!(
+        out.status.success(),
+        "dry-run failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        !stdout.contains("No stack branches in scope."),
+        "unexpected empty scope: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains(&stack_b[0]) && l.contains("would reconcile")),
+        "preview must list {}: {stdout}",
+        stack_b[0]
+    );
+}
+
+#[test]
+fn sync_all_stacks_requires_get() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+    let stack = repo.create_stack(&["greq-a"]);
+    let head_before = repo.head_sha();
+
+    let out = repo.run_stax(&["sync", "--all-stacks"]);
+    out.assert_failure();
+    assert!(
+        TestRepo::stderr(&out).contains("--get"),
+        "stderr must name --get: {}",
+        TestRepo::stderr(&out)
+    );
+    assert_eq!(repo.head_sha(), head_before);
+    assert_eq!(repo.current_branch(), stack[0]);
+}
+
+#[test]
+fn sync_get_off_trunk_without_all_stacks_leaves_other_stacks_untouched() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["goff-a"], &["goff-b"]);
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+
+    let remote_a = update_remote_branch_in_clone(&repo, &stack_a[0], "a.txt", "a remote");
+    update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+    let b_before = repo.get_commit_sha(&stack_b[0]);
+
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let names = reconciled_names(&parse_json(&out));
+    assert!(names.contains(&stack_a[0]), "got {names:?}");
+    assert!(!names.contains(&stack_b[0]), "got {names:?}");
+    assert_eq!(repo.get_commit_sha(&stack_a[0]), remote_a);
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), b_before);
+}
+
+#[test]
+fn sync_get_all_stacks_skips_frozen_and_worktree_branches() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, stack_b) = two_pushed_stacks(&repo, &["gskip-a"], &["gskip-b"]);
+    let stack_c = repo.create_stack(&["gskip-c"]);
+    repo.git(&["checkout", "main"]).assert_success();
+    push_all(&repo, &stack_c);
+
+    repo.run_stax(&["freeze", &stack_b[0]]).assert_success();
+    let linked = TempDir::new().expect("linked worktree");
+    repo.git(&[
+        "worktree",
+        "add",
+        linked.path().to_str().unwrap(),
+        &stack_c[0],
+    ])
+    .assert_success();
+
+    update_remote_branch_in_clone(&repo, &stack_b[0], "b.txt", "b remote");
+    update_remote_branch_in_clone(&repo, &stack_c[0], "c.txt", "c remote");
+    let b_before = repo.get_commit_sha(&stack_b[0]);
+    let c_before = repo.get_commit_sha(&stack_c[0]);
+
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+    let out = repo.run_stax(&["sync", "--get", "--all-stacks", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --all-stacks failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let parsed = parse_json(&out);
+    assert_skipped(&parsed, &stack_b[0], "frozen");
+    assert_skipped(&parsed, &stack_c[0], "checked out in another worktree");
+    assert_eq!(repo.get_commit_sha(&stack_b[0]), b_before);
+    assert_eq!(repo.get_commit_sha(&stack_c[0]), c_before);
+}
+
+#[test]
+fn sync_get_all_stacks_skips_unpushed_branch_and_succeeds() {
+    let repo = TestRepo::new_with_remote();
+    let (stack_a, _stack_b) = two_pushed_stacks(&repo, &["gnp-a"], &["gnp-b"]);
+    let stack_c = repo.create_stack(&["gnp-c"]);
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+
+    let out = repo.run_stax(&["sync", "--get", "--all-stacks", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --all-stacks failed: {}",
+        TestRepo::stderr(&out)
+    );
+    assert_skipped(&parse_json(&out), &stack_c[0], "no remote branch");
+}
+
+#[test]
+fn sync_get_on_trunk_with_no_tracked_branches_is_noop() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+
+    let out = repo.run_stax(&["sync", "--get", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get failed: {}",
+        TestRepo::stderr(&out)
+    );
+    assert!(reconciled_names(&parse_json(&out)).is_empty());
+}
+
+fn merged_branch_on_trunk_sync_get(deny_deletes: bool) -> (TestRepo, String, serde_json::Value) {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+    let stack = repo.create_stack(&["gmerged-a"]);
+    repo.git(&["checkout", "main"]).assert_success();
+    push_all(&repo, &stack);
+    repo.merge_branch_on_remote(&stack[0]);
+    if deny_deletes {
+        let remote = repo.remote_path().expect("remote path");
+        run_git_in(&remote, &["config", "receive.denyDeletes", "true"]);
+    }
+
+    let out = repo.run_stax(&["sync", "--get", "--force", "--json"]);
+    assert!(
+        out.status.success(),
+        "sync --get --force failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let parsed = parse_json(&out);
+    (repo, stack[0].clone(), parsed)
+}
+
+fn local_branch_listed(repo: &TestRepo, branch: &str) -> bool {
+    !TestRepo::stdout(&repo.git(&["branch", "--list", branch]))
+        .trim()
+        .is_empty()
+}
+
+#[test]
+fn sync_get_on_trunk_does_not_recreate_merged_branch_when_remote_ref_survives() {
+    let (repo, branch, parsed) = merged_branch_on_trunk_sync_get(true);
+
+    assert!(
+        !local_branch_listed(&repo, &branch),
+        "merged branch was recreated locally by --get"
+    );
+    assert!(!reconciled_names(&parsed).contains(&branch));
+}
+
+#[test]
+fn sync_get_on_trunk_does_not_report_deleted_merged_branch_as_skipped() {
+    let (repo, branch, parsed) = merged_branch_on_trunk_sync_get(false);
+
+    assert!(!local_branch_listed(&repo, &branch));
+    assert!(!reconciled_names(&parsed).contains(&branch));
+    let skipped_mentions = parsed["skipped_branches"]
+        .as_array()
+        .is_some_and(|skipped| skipped.iter().any(|entry| entry["name"] == branch.as_str()));
+    assert!(
+        !skipped_mentions,
+        "deleted branch reported as skipped: {parsed}"
+    );
+}
+
+#[test]
+fn sync_get_on_trunk_dry_run_omits_merged_branch_it_would_delete() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]).assert_success();
+    let stack = repo.create_stack(&["gmerged-dry"]);
+    repo.git(&["checkout", "main"]).assert_success();
+    push_all(&repo, &stack);
+    repo.merge_branch_on_remote(&stack[0]);
+    repo.git(&["fetch", "origin"]).assert_success();
+
+    let out = repo.run_stax(&["sync", "--get", "--force", "--dry-run"]);
+    assert!(
+        out.status.success(),
+        "sync --get --dry-run failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let stdout = TestRepo::stdout(&out);
+    let get_section = stdout.split("Get (").nth(1).unwrap_or_default().to_string();
+    assert!(
+        !get_section.contains(&stack[0]),
+        "dry-run get preview lists a branch the sync would delete:\n{stdout}"
+    );
+}

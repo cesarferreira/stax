@@ -531,7 +531,7 @@ pub fn run(
                 false, // json
                 &[],
                 false,
-                false, // get
+                crate::commands::sync::GetScope::Off,
             ) && !quiet
             {
                 println!();

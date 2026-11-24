@@ -62,6 +62,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone, except known closed-but-unmerged PRs |
 | `st rs --get` | Before restacking, fetch each branch of the current stack from its own remote ref and fast-forward or rebase the local branch onto it — use after another machine rebased and force-pushed your stack |
+| `st rs --get --all-stacks` | Reconcile every tracked branch in every stack against its remote ref (also the default for `--get` on trunk); `--all-stacks` requires `--get` and widens only the get phase, not `--restack` |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
 | `st rs` (interactive) | After fetch + PR refresh, one **Sync plan** (trunk, merged/upstream-gone branches with PR # when known, optional `--restack` preview); deletion prompts only when branches are listed; trunk/restack-only uses **Continue sync** / **Cancel sync**; skipped with `--force`, `--quiet`, or `--json`; `[sync] confirm_delete = false` deletes listed branches without asking |
@@ -74,7 +75,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; requires a clean tree unless `--auto-stash-pop` is set, and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
-| `st refresh --get` | Also reconcile each branch of the current stack against its own remote ref before restacking (see [multi-machine](../workflows/multi-machine.md)); add `--force` to let the remote win outright |
+| `st refresh --get` | Also reconcile each branch of the current stack (every tracked branch with `--all-stacks`, or when run on trunk) against its own remote ref before restacking (see [multi-machine](../workflows/multi-machine.md)); add `--force` to let the remote win outright |
 
 ## Branch housekeeping
 
