@@ -380,7 +380,12 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
 stax sync --get                    # Before restacking, fetch each branch of the current stack (every tracked branch when on trunk) from its own remote ref and fast-forward/rebase the local branch onto it (use after another machine rebased/force-pushed your stack); pair with --restack (st rs --get --restack) to converge and restack in one command
-stax status --remote              # Multi-machine: see drift per branch first, then reconcile with `stax rs --get --all-stacks`
+stax status --remote              # Multi-machine: see drift per branch first, then reconcile with `stax pull`
+stax pull                         # Reconcile every tracked branch in every stack with its remote, then restack every stack; no push; needs a clean tree unless --auto-stash-pop; stops at first conflict (stax continue, then re-run stax pull)
+stax pull --force                 # Same, but the remote wins: diverged branches are hard-reset to the remote tip; skips prompts
+stax pull --no-restack            # Only reconcile branches (same as sync --get --all-stacks)
+stax pull --dry-run               # Preview reconcile + the stacks that would be restacked; changes nothing
+stax pull --auto-stash-pop        # Stash/pop dirty worktrees while restacking
 stax sync --get --all-stacks       # Reconcile every tracked branch in every stack (parent before child); requires --get; frozen/other-worktree branches are skipped; does not widen --restack
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.

@@ -723,7 +723,7 @@ pub fn run(
             let command = if stack_filter.is_some() || current_only {
                 "st rs --get"
             } else {
-                "st rs --get --all-stacks"
+                "st pull"
             };
             println!(
                 "{} Run {} to reconcile.",

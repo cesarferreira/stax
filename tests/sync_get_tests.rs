@@ -22,7 +22,7 @@ fn run_git_in(cwd: &Path, args: &[&str]) -> std::process::Output {
 
 /// Check out `branch` in a fresh clone of `repo`'s remote, add a new commit, and push it —
 /// simulating another machine advancing the branch independently.
-fn update_remote_branch_in_clone(
+pub(crate) fn update_remote_branch_in_clone(
     repo: &TestRepo,
     branch: &str,
     file: &str,
@@ -478,14 +478,18 @@ fn refresh_without_get_leaves_branch_untouched() {
     );
 }
 
-fn push_all(repo: &TestRepo, branches: &[String]) {
+pub(crate) fn push_all(repo: &TestRepo, branches: &[String]) {
     for branch in branches {
         repo.git(&["push", "-u", "origin", branch]).assert_success();
     }
 }
 
 /// Two independent pushed stacks off trunk; leaves `main` checked out.
-fn two_pushed_stacks(repo: &TestRepo, a: &[&str], b: &[&str]) -> (Vec<String>, Vec<String>) {
+pub(crate) fn two_pushed_stacks(
+    repo: &TestRepo,
+    a: &[&str],
+    b: &[&str],
+) -> (Vec<String>, Vec<String>) {
     repo.git(&["push", "-u", "origin", "main"]).assert_success();
     let stack_a = repo.create_stack(a);
     repo.git(&["checkout", "main"]).assert_success();
@@ -496,13 +500,13 @@ fn two_pushed_stacks(repo: &TestRepo, a: &[&str], b: &[&str]) -> (Vec<String>, V
     (stack_a, stack_b)
 }
 
-fn parse_json(out: &std::process::Output) -> serde_json::Value {
+pub(crate) fn parse_json(out: &std::process::Output) -> serde_json::Value {
     let stdout = TestRepo::stdout(out);
     serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout was not valid JSON: {e}\n---\n{stdout}"))
 }
 
-fn reconciled_names(parsed: &serde_json::Value) -> Vec<String> {
+pub(crate) fn reconciled_names(parsed: &serde_json::Value) -> Vec<String> {
     parsed["reconciled_branches"]
         .as_array()
         .map(|entries| {
@@ -514,7 +518,7 @@ fn reconciled_names(parsed: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn assert_skipped(parsed: &serde_json::Value, branch: &str, reason: &str) {
+pub(crate) fn assert_skipped(parsed: &serde_json::Value, branch: &str, reason: &str) {
     assert!(
         parsed["skipped_branches"]
             .as_array()

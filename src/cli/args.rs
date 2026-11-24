@@ -553,6 +553,34 @@ pub(crate) enum Commands {
         all_stacks: bool,
     },
 
+    /// Pull every stack: reconcile all tracked branches with their remote refs, then restack every stack (no push)
+    Pull {
+        /// Preview what pull would do without changing anything
+        #[arg(long = "dry-run", visible_alias = "plan")]
+        dry_run: bool,
+        /// Let the remote win: hard-reset diverged branches to their remote tip; skip prompts
+        #[arg(short, long)]
+        force: bool,
+        /// Only reconcile branches; skip all restacking (same as `st sync --get --all-stacks`)
+        #[arg(long)]
+        no_restack: bool,
+        /// Don't delete merged branches
+        #[arg(long)]
+        no_delete: bool,
+        /// Avoid hard reset when updating trunk
+        #[arg(long)]
+        safe: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+        /// Show detailed output including git errors
+        #[arg(short, long)]
+        verbose: bool,
+        /// Auto-stash and pop dirty worktrees while restacking; otherwise a clean tree is required
+        #[arg(long)]
+        auto_stash_pop: bool,
+    },
+
     /// List and optionally clean up local branches (merged, closed PR, upstream-gone, stale)
     Sweep {
         /// Delete merged and upstream-gone branches (safe to remove)
@@ -2068,7 +2096,9 @@ impl Commands {
                 CommandPolicy::RebaseControl
             }
             Commands::Undo { .. } | Commands::Redo { .. } => CommandPolicy::RebaseSafe,
-            Commands::Sync { dry_run: true, .. } => CommandPolicy::RebaseSafe,
+            Commands::Sync { dry_run: true, .. } | Commands::Pull { dry_run: true, .. } => {
+                CommandPolicy::RebaseSafe
+            }
             Commands::Restack {
                 r#continue: true, ..
             }

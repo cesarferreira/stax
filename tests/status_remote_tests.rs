@@ -121,6 +121,7 @@ fn status_remote_reports_in_sync_unpushed_and_no_remote() {
     );
     assert!(line_for(&stdout, "main").contains("in sync"), "{stdout}");
     assert!(!stdout.contains("st rs --get"), "{stdout}");
+    assert!(!stdout.contains("st pull"), "{stdout}");
 }
 
 #[test]
@@ -137,7 +138,8 @@ fn status_remote_fetches_and_reports_behind_from_other_machine() {
         line_for(&stdout, &branch).contains("[origin: 1↓ behind]"),
         "{stdout}"
     );
-    assert!(stdout.contains("st rs --get --all-stacks"), "{stdout}");
+    assert!(stdout.contains("st pull"), "{stdout}");
+    assert!(!stdout.contains("st rs --get --all-stacks"), "{stdout}");
     assert_eq!(
         repo.get_commit_sha(&format!("origin/{}", branch)),
         remote_sha
@@ -347,6 +349,7 @@ fn status_remote_current_scope_fetches_only_shown_branches() {
     assert!(line_for(&stdout, &a).contains("1↓ behind"), "{stdout}");
     assert!(stdout.contains("st rs --get"), "{stdout}");
     assert!(!stdout.contains("--all-stacks"), "{stdout}");
+    assert!(!stdout.contains("st pull"), "{stdout}");
     assert_eq!(repo.get_commit_sha(&format!("origin/{}", b)), b_cached);
 }
 
