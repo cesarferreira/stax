@@ -325,6 +325,9 @@ pub struct UiConfig {
     /// Whether to show contextual tips/suggestions (default: true)
     #[serde(default = "default_tips")]
     pub tips: bool,
+    /// Whether to show release notes on the first run after an upgrade (default: true)
+    #[serde(default = "default_whats_new")]
+    pub whats_new: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -590,6 +593,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             tips: default_tips(),
+            whats_new: default_whats_new(),
         }
     }
 }
@@ -625,6 +629,10 @@ fn default_remote_base_url() -> String {
 }
 
 fn default_tips() -> bool {
+    true
+}
+
+fn default_whats_new() -> bool {
     true
 }
 

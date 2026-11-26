@@ -23,6 +23,7 @@ mod remote;
 mod tui;
 mod update;
 pub mod web;
+mod whats_new;
 
 pub mod github;
 pub use forge::ForgeClient;

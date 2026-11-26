@@ -45,6 +45,7 @@
 
 [ui]
 # tips = true # stax user tips --enable | --disable
+# whats_new = true # show release notes once on the first run after an upgrade
 
 [display]
 # worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)
