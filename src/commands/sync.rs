@@ -2142,7 +2142,7 @@ impl SyncContext {
                 println!(
                     "  {:<35} {}",
                     "delete merged branches",
-                    format!("{:.3}s", delete_elapsed.as_secs_f64()).dimmed()
+                    crate::duration_fmt::format_elapsed(delete_elapsed).dimmed()
                 );
             }
             Ok(repo)
@@ -2427,7 +2427,7 @@ impl SyncContext {
                 println!(
                     "  {:<35} {}",
                     "delete upstream-gone branches",
-                    format!("{:.3}s", delete_elapsed.as_secs_f64()).dimmed()
+                    crate::duration_fmt::format_elapsed(delete_elapsed).dimmed()
                 );
             }
         }
@@ -5102,7 +5102,7 @@ fn record_ci_history_for_merged(
 }
 
 fn format_duration(duration: Duration) -> String {
-    format!("{:.3}s", duration.as_secs_f64())
+    crate::duration_fmt::format_elapsed(duration)
 }
 
 fn print_restack_branch_timings(restack_branch_timings: &[RestackBranchTiming]) {

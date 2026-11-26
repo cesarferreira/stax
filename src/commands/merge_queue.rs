@@ -433,7 +433,8 @@ pub fn run(
                             "✓".green(),
                             pr,
                             branch,
-                            format!("({}s)", elapsed.as_secs()).dimmed()
+                            format!("({})", crate::duration_fmt::format_secs(elapsed.as_secs()))
+                                .dimmed()
                         );
                     }
                 }
@@ -446,9 +447,9 @@ pub fn run(
         if !pending.is_empty() && !quiet {
             let names: Vec<String> = pending.iter().map(|(_, pr)| format!("#{}", pr)).collect();
             print!(
-                "\r  ⏳ {}  {}",
+                "\r\x1b[2K  ⏳ {}  {}",
                 names.join(", "),
-                format!("({}s)", elapsed.as_secs()).dimmed()
+                format!("({})", crate::duration_fmt::format_secs(elapsed.as_secs())).dimmed()
             );
             // Flush without newline so the line updates in-place
             use std::io::Write;

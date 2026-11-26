@@ -10,6 +10,7 @@ mod ci;
 pub mod cli;
 mod commands;
 mod config;
+mod duration_fmt;
 mod engine;
 pub mod entrypoint;
 pub mod errors;

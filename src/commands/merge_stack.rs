@@ -777,11 +777,11 @@ fn wait_for_tip_ready(
                 if !quiet {
                     let elapsed = start.elapsed().as_secs();
                     let status_text = format!(
-                        "      {} Waiting for selected tip {}: {}... ({}s)",
+                        "      {} Waiting for selected tip {}: {}... ({})",
                         "⏳".yellow(),
                         item_label(forge, pr_number),
                         reason,
-                        elapsed
+                        crate::duration_fmt::format_secs(elapsed)
                     );
                     if last_status.is_some() {
                         print!("\r{}\r", " ".repeat(96));

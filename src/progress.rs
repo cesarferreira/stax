@@ -71,7 +71,7 @@ impl LiveTimer {
         let thread = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let elapsed = bar_clone.elapsed();
-                let time_str = format!("{:.3}s", elapsed.as_secs_f64());
+                let time_str = crate::duration_fmt::format_elapsed(elapsed);
                 let detail_text = lock_detail(&detail_for_thread).clone();
                 let detail_rendered = if detail_text.is_empty() {
                     String::new()
@@ -144,7 +144,7 @@ impl LiveTimer {
         let elapsed = self.bar.elapsed();
         self.stop_thread();
         self.bar.finish_and_clear();
-        let time_str = format!("{:.3}s", elapsed.as_secs_f64());
+        let time_str = crate::duration_fmt::format_elapsed(elapsed);
         self.finish_line(format!(
             "  {} {:<35} {} {}",
             "✓".green(),
@@ -160,7 +160,7 @@ impl LiveTimer {
         let elapsed = self.bar.elapsed();
         self.stop_thread();
         self.bar.finish_and_clear();
-        let time_str = format!("{:.3}s", elapsed.as_secs_f64());
+        let time_str = crate::duration_fmt::format_elapsed(elapsed);
         self.finish_line(format!(
             "  {} {:<35} {}",
             "✓".green(),
@@ -300,8 +300,8 @@ mod tests {
     #[test]
     fn timer_message_is_one_row_without_detail() {
         assert_eq!(
-            format_timer_message("Restack feature", "65.776s", ""),
-            "Restack feature                     65.776s"
+            format_timer_message("Restack feature", "1m 5s", ""),
+            "Restack feature                     1m 5s"
         );
     }
 
@@ -310,10 +310,10 @@ mod tests {
         assert_eq!(
             format_timer_message(
                 "Restack feature",
-                "65.776s",
+                "1m 5s",
                 "Rebasing commit 12/31 · Fix Kotlin compiler warnings"
             ),
-            "Restack feature                     65.776s\n    └─ Rebasing commit 12/31 · Fix Kotlin compiler warnings"
+            "Restack feature                     1m 5s\n    └─ Rebasing commit 12/31 · Fix Kotlin compiler warnings"
         );
     }
 

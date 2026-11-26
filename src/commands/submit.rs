@@ -4388,11 +4388,7 @@ fn print_verbose_network_summary(
 }
 
 fn format_duration(duration: Duration) -> String {
-    if duration.as_secs_f64() < 0.001 {
-        "0.000s".to_string()
-    } else {
-        format!("{:.3}s", duration.as_secs_f64())
-    }
+    crate::duration_fmt::format_elapsed(duration)
 }
 
 #[cfg(test)]
