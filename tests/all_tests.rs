@@ -200,6 +200,8 @@ mod user_tests;
 mod validate_tests;
 #[path = "web_tests.rs"]
 mod web_tests;
+#[path = "whats_new_tests.rs"]
+mod whats_new_tests;
 #[path = "worktree_cli_tests.rs"]
 mod worktree_cli_tests;
 #[path = "worktree_pool_tests.rs"]

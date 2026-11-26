@@ -37,6 +37,10 @@ st user submit-body --disable
 
 If `branch.format` is already set, `branch-date --enable`/`--disable` prints a warning: `format` takes precedence and the date toggle has no effect until `format` is unset.
 
+## Release notes after an upgrade
+
+The first time you run stax in a terminal after an upgrade, it prints the changelog entries for every release since the version you last ran (up to three releases). It then records the current version in `~/.config/stax/last_seen_version`, so the notes appear once. Runs whose stderr is not a terminal (for example CI, or `2>file`) never print the notes and leave the record unchanged, so the next terminal run still shows them. A fresh install records its version without printing anything. Set `whats_new = false` under `[ui]` in the global config to turn the notes off.
+
 ## Example config
 
 Run `st --default-config` for the full annotated template (every section, with allowed values in comments). Copy the output to `~/.config/stax/config.toml` and uncomment only the keys you want to override.
@@ -93,6 +97,7 @@ single_stack = "on"    # "on" | "off"
 
 [ui]
 # tips = true
+# whats_new = true # release notes on the first run after an upgrade
 
 [display]
 # worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)

@@ -425,6 +425,7 @@ stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompt
 stax refresh --verbose              # Show detailed sync/restack/submit timings
 # refresh inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
 # `stax update` is a separate top-level command: it upgrades the CLI, then offers to refresh installed AI agent skill files.
+# The first terminal run after an upgrade prints that release's changelog to stderr once ([ui] whats_new = false to hide); runs with non-terminal stderr defer it.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack

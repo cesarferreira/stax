@@ -167,9 +167,12 @@ pub(crate) fn check_latest_version() -> VersionCheck {
     }
 }
 
-/// Check for cached update info and display if a new version is available.
+/// Show post-command notices: release notes on the first run after an upgrade,
+/// then cached update info if a newer version is available.
 /// This reads from cache only - it won't make network requests or block.
 pub fn show_update_notification() {
+    crate::whats_new::show_if_upgraded();
+
     if update_checks_disabled() {
         return;
     }
