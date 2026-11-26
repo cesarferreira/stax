@@ -1,6 +1,7 @@
 use crate::cache::CiCache;
 use crate::ci::{CheckRunInfo, history};
 use crate::config::Config;
+use crate::duration_fmt::format_secs as format_duration;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
@@ -1359,31 +1360,6 @@ fn run_watch_mode(
     }
 }
 
-/// Format duration in seconds to human-readable string
-fn format_duration(secs: u64) -> String {
-    match secs {
-        0..60 => format!("{}s", secs),
-        60..3600 => {
-            let mins = secs / 60;
-            let secs_remainder = secs % 60;
-            if secs_remainder == 0 {
-                format!("{}m", mins)
-            } else {
-                format!("{}m {}s", mins, secs_remainder)
-            }
-        }
-        _ => {
-            let hours = secs / 3600;
-            let mins = (secs % 3600) / 60;
-            if mins == 0 {
-                format!("{}h", hours)
-            } else {
-                format!("{}h {}m", hours, mins)
-            }
-        }
-    }
-}
-
 pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
     let cache_dir = match repo.common_git_dir() {
         Ok(path) => path,
@@ -2000,29 +1976,6 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("no-pr-branch"));
         assert!(json.contains("null"));
-    }
-
-    #[test]
-    fn test_format_duration_seconds() {
-        assert_eq!(format_duration(0), "0s");
-        assert_eq!(format_duration(30), "30s");
-        assert_eq!(format_duration(59), "59s");
-    }
-
-    #[test]
-    fn test_format_duration_minutes() {
-        assert_eq!(format_duration(60), "1m");
-        assert_eq!(format_duration(90), "1m 30s");
-        assert_eq!(format_duration(150), "2m 30s");
-        assert_eq!(format_duration(3599), "59m 59s");
-    }
-
-    #[test]
-    fn test_format_duration_hours() {
-        assert_eq!(format_duration(3600), "1h");
-        assert_eq!(format_duration(3660), "1h 1m");
-        assert_eq!(format_duration(7200), "2h");
-        assert_eq!(format_duration(7320), "2h 2m");
     }
 
     #[test]

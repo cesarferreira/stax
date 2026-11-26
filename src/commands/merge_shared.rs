@@ -177,10 +177,10 @@ pub(crate) fn wait_for_pr_ready(
         if !quiet {
             let elapsed = start.elapsed().as_secs();
             let status_text = format!(
-                "      {} Waiting for {}... ({}s)",
+                "      {} Waiting for {}... ({})",
                 "⏳".yellow(),
                 status.status_text(policy).to_lowercase(),
-                elapsed
+                crate::duration_fmt::format_secs(elapsed)
             );
 
             // Clear and rewrite the line

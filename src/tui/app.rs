@@ -1396,30 +1396,29 @@ fn live_ci_summary_text(summary: &CiSummary) -> (String, bool) {
     }
     if let Some(elapsed_secs) = summary.elapsed_secs(now) {
         if summary.is_complete() {
-            parts.push(format!("{} total", format_duration_compact(elapsed_secs)));
+            parts.push(format!(
+                "{} total",
+                crate::duration_fmt::format_secs(elapsed_secs)
+            ));
         } else {
-            parts.push(format!("{} elapsed", format_duration_compact(elapsed_secs)));
+            parts.push(format!(
+                "{} elapsed",
+                crate::duration_fmt::format_secs(elapsed_secs)
+            ));
         }
     }
     if let Some(eta_secs) = summary.eta_secs(now)
         && summary.is_active()
         && eta_secs > 0
     {
-        parts.push(format!("~{} left", format_duration_compact(eta_secs)));
+        parts.push(format!(
+            "~{} left",
+            crate::duration_fmt::format_secs(eta_secs)
+        ));
     }
 
     let is_dimmed = summary.failed == 0 && !summary.is_active();
     (format!("Live CI: {}", parts.join("  •  ")), is_dimmed)
-}
-
-fn format_duration_compact(secs: u64) -> String {
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
-    }
 }
 
 fn spawn_branch_details_loader(
