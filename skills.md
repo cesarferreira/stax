@@ -23,6 +23,7 @@ stax status|ls                # Stack status (tree)
 stax status --remote [--no-fetch]   # Per-branch parity vs own <remote>/<branch> (in sync / N↑ unpushed / N↓ behind / diverged / no remote); read-only, fetches only shown refs; also `stax ls --remote`; add --json for remote_parity fields
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
+stax history|hist [git-log-args]  # One-line git history: hash, date, refs, subject, committer (e.g. -n 20, main..HEAD)
 stax web [path] [--port <n>] [--no-open]  # Start localhost workspace; busy ports fall back automatically
 
 stax submit|ss                 # Submit full stack
@@ -492,6 +493,7 @@ stax downstack get                 # Show branches below current
 stax ls                            # Fast stack tree
 stax ll                            # Stack + PR URLs
 stax log                           # Stack + commit details
+stax history -n 20                 # Compact one-line git history, independent of git config
 stax diff                          # Diff each branch vs parent + aggregate stack diff
 stax range-diff                    # Range-diff branches needing restack
 

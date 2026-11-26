@@ -31,6 +31,7 @@ Merged-branch CI history recording is throttled by `[sync] ci_history_interval_d
 | `st status --remote` | `ls --remote` | Per-branch parity against its own remote ref (`<remote>/<branch>`) |
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
+| `st history [git-log-args]` | `hist` | One line per commit: short hash, date, refs, subject, committer. Extra args go to `git log` (`-n 20`, `main..HEAD`, `-- path`). Ignores your git log/color config |
 | `st submit` | `ss` | Submit full current stack |
 | `st stack link` | | Register the current PR stack as a native GitHub Stack via `gh stack link` |
 | `st stack unlink [<stack-number>]` | | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |

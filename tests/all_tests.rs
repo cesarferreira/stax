@@ -88,6 +88,8 @@ mod github_failure_tests;
 mod github_list_tests;
 #[path = "guard_rail_tests.rs"]
 mod guard_rail_tests;
+#[path = "history_tests.rs"]
+mod history_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
 #[path = "merge_ignore_failed_ci_tests.rs"]

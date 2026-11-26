@@ -397,6 +397,21 @@ pub(crate) enum Commands {
         quiet: bool,
     },
 
+    /// Show a compact one-line-per-commit git history
+    ///
+    /// Each line shows the short hash, date, refs, subject, and committer.
+    /// Extra arguments go to `git log`, e.g. `stax history -n 20 main..HEAD`.
+    #[command(visible_alias = "hist")]
+    History {
+        /// Arguments passed through to `git log` (revisions, paths, -n, --author, ...)
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "GIT_LOG_ARGS"
+        )]
+        args: Vec<String>,
+    },
+
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss", hide = true)]
     Submit {
@@ -2109,6 +2124,7 @@ impl Commands {
             Commands::Status { .. }
             | Commands::Ll { .. }
             | Commands::Log { .. }
+            | Commands::History { .. }
             | Commands::Ready { .. }
             | Commands::Board { .. }
             | Commands::Ci { .. }
