@@ -500,6 +500,7 @@ pub fn run() -> Result<()> {
             restack,
             prune,
             full,
+            tags,
             no_delete,
             delete_upstream_gone,
             force,
@@ -524,6 +525,7 @@ pub fn run() -> Result<()> {
                 commands::sync_plan::run(commands::sync_plan::SyncPlanOptions {
                     restack,
                     full,
+                    tags,
                     delete_merged: !no_delete,
                     delete_upstream_gone,
                     force,
@@ -539,6 +541,7 @@ pub fn run() -> Result<()> {
                 commands::sync::run(
                     restack,
                     full,
+                    tags,
                     !no_delete,
                     delete_upstream_gone,
                     force,

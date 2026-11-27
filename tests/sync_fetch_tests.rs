@@ -209,3 +209,108 @@ fn sync_full_fetches_remote_only_tags_while_default_sync_does_not() {
         "sync --full must fetch a tag that exists only on origin"
     );
 }
+
+/// Push a tag on a commit that no remote branch reaches, then remove every
+/// local trace of it. Only an explicit `--tags` fetch can bring it back;
+/// tag auto-following from fetched branches cannot.
+fn publish_unreachable_remote_tag(repo: &TestRepo, tag: &str) {
+    repo.git(&["checkout", "-q", "-b", "tag-source"]);
+    repo.create_file("tag-source.txt", "tagged");
+    repo.commit("Commit only reachable from a tag");
+    repo.git(&["tag", tag, "HEAD"]);
+    repo.git(&["push", "origin", &format!("refs/tags/{tag}")]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["branch", "-D", "tag-source"]);
+    repo.git(&["tag", "--delete", tag]);
+    assert!(
+        !tag_exists_locally(repo, tag),
+        "test setup must leave the tag on origin only"
+    );
+}
+
+#[test]
+fn sync_tags_fetches_all_remote_tags() {
+    for extra_args in [&[][..], &["--no-delete"][..], &["--full"][..]] {
+        let repo = TestRepo::new_with_remote();
+        let tag = "unreachable-release-tag";
+        publish_unreachable_remote_tag(&repo, tag);
+
+        let mut args = vec!["--trace", "rs", "--tags", "--force"];
+        args.extend_from_slice(extra_args);
+        let output = repo.run_stax(&args);
+        assert!(
+            output.status.success(),
+            "rs {extra_args:?} --tags failed: {}",
+            TestRepo::stderr(&output)
+        );
+        assert!(
+            tag_exists_locally(&repo, tag),
+            "rs {extra_args:?} --tags must fetch a tag that only origin has"
+        );
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            stderr.lines().any(|line| line.contains("git fetch")
+                && line.contains("--tags")
+                && !line.contains("--no-tags")),
+            "rs {extra_args:?} --tags must pass --tags to git fetch:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn sync_full_tags_keeps_local_only_tags() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["tag", "local-only-tag", "main"]);
+
+    let output = repo.run_stax(&["rs", "--full", "--tags", "--force"]);
+    assert!(
+        output.status.success(),
+        "rs --full --tags failed: {}",
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        tag_exists_locally(&repo, "local-only-tag"),
+        "--prune with --tags must not delete local-only tags"
+    );
+}
+
+#[test]
+fn sync_dry_run_warns_that_tags_is_ignored() {
+    let repo = TestRepo::new_with_remote();
+    let output = repo.run_stax(&["rs", "--dry-run", "--tags"]);
+    assert!(
+        output.status.success(),
+        "rs --dry-run --tags failed: {}",
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        TestRepo::stderr(&output).contains("--tags is ignored by --dry-run"),
+        "missing --tags dry-run warning:\n{}",
+        TestRepo::stderr(&output)
+    );
+}
+
+#[test]
+fn sync_tags_keeps_diverged_local_tag_and_still_restacks() {
+    let repo = TestRepo::new_with_remote();
+    let tag = "diverged-tag";
+    publish_unreachable_remote_tag(&repo, tag);
+    repo.git(&["tag", tag, "main"]);
+    let local_tag = TestRepo::stdout(&repo.git(&["rev-parse", tag]));
+
+    let output = repo.run_stax(&["rs", "--tags", "--restack", "--force"]);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        output.status.success(),
+        "rs --tags --restack must not stop on a tag conflict:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("kept local tag(s)") && stderr.contains(tag),
+        "missing warning naming the conflicting tag:\n{stderr}"
+    );
+    assert_eq!(
+        TestRepo::stdout(&repo.git(&["rev-parse", tag])),
+        local_tag,
+        "sync must not overwrite the local tag"
+    );
+}

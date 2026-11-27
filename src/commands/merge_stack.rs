@@ -1228,6 +1228,7 @@ fn run_post_merge_sync(quiet: bool) {
     if let Err(err) = crate::commands::sync::run(
         false, // restack
         false, // full
+        false, // tags
         false, // keep branch cleanup scoped to this stack merge
         false, // delete upstream-gone branches
         true,  // force

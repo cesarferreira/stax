@@ -21,6 +21,7 @@ use std::process::{Command, Stdio};
 pub struct SyncPlanOptions {
     pub restack: bool,
     pub full: bool,
+    pub tags: bool,
     pub delete_merged: bool,
     pub delete_upstream_gone: bool,
     pub force: bool,
@@ -308,6 +309,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
     let SyncPlanOptions {
         restack,
         full,
+        tags,
         delete_merged,
         delete_upstream_gone,
         force,
@@ -350,6 +352,12 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         eprintln!(
             "{}",
             "warning: --full is ignored by --dry-run (no fetch is performed)".yellow()
+        );
+    }
+    if tags {
+        eprintln!(
+            "{}",
+            "warning: --tags is ignored by --dry-run (no fetch is performed)".yellow()
         );
     }
     if verbose {

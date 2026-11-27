@@ -70,6 +70,7 @@ pub fn run(
     let sync_result = commands::sync::run(
         true,  // restack
         false, // full
+        false, // tags
         delete_merged,
         false, // delete_upstream_gone
         force,
@@ -184,6 +185,7 @@ fn run_all_stacks(
     let sync_result = commands::sync::run(
         true,  // restack
         false, // full
+        false, // tags
         delete_merged,
         false, // delete_upstream_gone
         force,

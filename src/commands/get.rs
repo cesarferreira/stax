@@ -101,6 +101,7 @@ pub fn run(options: GetOptions) -> Result<()> {
         let result = crate::commands::sync::run(
             !options.no_restack,
             false, // full
+            false, // tags
             true,  // delete_merged
             false, // delete_upstream_gone
             options.force,

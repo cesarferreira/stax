@@ -790,6 +790,7 @@ async fn op_sync(
                 true,
                 false,
                 false,
+                false, // tags
                 true,
                 false,
                 false,
