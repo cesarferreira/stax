@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.122.0] - 2026-11-27
+
+### 💼 Other
+
+- Expose structured Stax checkout for pickers ([#958](https://github.com/cesarferreira/stax/issues/958))
+- Isolate integration tests from developer config ([#962](https://github.com/cesarferreira/stax/issues/962))
+- Reconcile all tracked branches with sync --get ([#959](https://github.com/cesarferreira/stax/issues/959))
+- Show local and remote branch drift in status ([#960](https://github.com/cesarferreira/stax/issues/960))
+- Add `st pull` to reconcile and restack every stack ([#963](https://github.com/cesarferreira/stax/issues/963))
+- Keep merged branches when sync runs without a terminal ([#964](https://github.com/cesarferreira/stax/issues/964))
+- Handle dirty trees cleanly in non-interactive sync commands ([#965](https://github.com/cesarferreira/stax/issues/965))
+- Speed up stax-dev for small fixes ([#966](https://github.com/cesarferreira/stax/issues/966))
+- Replace the stax-dev pipeline with a lighter workflow ([#967](https://github.com/cesarferreira/stax/issues/967))
+- Add `stax history` for a compact one-line git log
+- Show release notes on the first run after an upgrade ([#973](https://github.com/cesarferreira/stax/issues/973))
+- Show durations over a minute as minutes and seconds ([#974](https://github.com/cesarferreira/stax/issues/974))
 ## [0.121.0] - 2026-11-20
 
 ### 💼 Other
@@ -11,6 +27,10 @@ All notable changes to this project will be documented in this file.
 - Rewrite the README around the stacked PR workflow ([#954](https://github.com/cesarferreira/stax/issues/954))
 - Add a stax logo to the README header ([#955](https://github.com/cesarferreira/stax/issues/955))
 - Show a helpful link when browser launch fails ([#956](https://github.com/cesarferreira/stax/issues/956))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.120.0] - 2026-11-14
 
 ### 🚀 Features
