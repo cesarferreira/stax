@@ -411,6 +411,8 @@ struct SyncContext {
     merged_this_run: HashSet<String>,
     restack: bool,
     full: bool,
+    /// Fetch all remote tags (`git fetch --tags`) instead of `--no-tags`.
+    tags: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -467,6 +469,7 @@ impl SyncContext {
         sync_started_at: Instant,
         restack: bool,
         full: bool,
+        tags: bool,
         delete_merged: bool,
         delete_upstream_gone: bool,
         force: bool,
@@ -513,6 +516,7 @@ impl SyncContext {
                 merged_this_run: HashSet::new(),
                 restack,
                 full,
+                tags,
                 delete_merged,
                 delete_upstream_gone,
                 force,
@@ -694,9 +698,11 @@ impl SyncContext {
         // 1. Fetch from remote
         // Default: trunk-only fetch + `ls-remote --heads` in parallel (fast on large repos).
         // `--full`: classic `fetch --prune` for all remote-tracking refs, tags included.
+        // `--tags`: fetch every remote tag, not only tags reachable from fetched refs.
         let fetch_timer = LiveTimer::maybe_new(!self.quiet, &format!("Fetch {}", self.remote_name));
 
         let fetch_started_at = Instant::now();
+        let tags_flag = if self.tags { "--tags" } else { "--no-tags" };
         let output;
         // Remote branch names for merged detection (`None` when `--no-delete`: trunk-only fetch).
         let remote_branches_for_merged: Option<HashSet<String>>;
@@ -715,11 +721,13 @@ impl SyncContext {
         );
 
         if self.full {
-            output = crate::git::command::output(
-                &self.workdir,
-                &["fetch", "--prune", self.remote_name.as_str()],
-            )
-            .context("Failed to fetch")?;
+            let mut full_fetch_args = vec!["fetch", "--prune"];
+            if self.tags {
+                full_fetch_args.push("--tags");
+            }
+            full_fetch_args.push(self.remote_name.as_str());
+            output = crate::git::command::output(&self.workdir, &full_fetch_args)
+                .context("Failed to fetch")?;
             remote_branches_for_merged = if self.delete_merged {
                 Some(
                     repo.remote_branch_names(&self.remote_name)
@@ -736,7 +744,7 @@ impl SyncContext {
             let remote_ls = self.remote_name.clone();
 
             let fetch_handle = std::thread::spawn(move || {
-                let mut fetch_args = vec!["fetch", "--no-tags", remote_fetch.as_str()];
+                let mut fetch_args = vec!["fetch", tags_flag, remote_fetch.as_str()];
                 fetch_args.extend(fetch_refs.iter().map(String::as_str));
                 crate::git::command::output(&workdir_fetch, &fetch_args)
             });
@@ -762,7 +770,7 @@ impl SyncContext {
             }
             remote_branches_for_merged = Some(heads);
         } else if self.delete_merged {
-            let mut fetch_args = vec!["fetch", "--no-tags", self.remote_name.as_str()];
+            let mut fetch_args = vec!["fetch", tags_flag, self.remote_name.as_str()];
             fetch_args.extend(fetch_refs.iter().map(String::as_str));
             output = crate::git::command::output(&self.workdir, &fetch_args)
                 .context("Failed to fetch")?;
@@ -777,7 +785,7 @@ impl SyncContext {
             }
             remote_branches_for_merged = Some(heads);
         } else {
-            let mut fetch_args = vec!["fetch", "--no-tags", self.remote_name.as_str()];
+            let mut fetch_args = vec!["fetch", tags_flag, self.remote_name.as_str()];
             fetch_args.extend(fetch_refs.iter().map(String::as_str));
             output = crate::git::command::output(&self.workdir, &fetch_args)
                 .context("Failed to fetch")?;
@@ -789,7 +797,18 @@ impl SyncContext {
             fetch_started_at.elapsed(),
         ));
 
-        let fetch_succeeded = output.status.success();
+        let mut fetch_succeeded = output.status.success();
+        // With `--tags`, git exits non-zero when a remote tag would overwrite a local
+        // tag of the same name, even though every branch ref updated. Report the tags
+        // and continue, instead of treating it as a failed fetch.
+        let clobbered_tags = if self.tags && !fetch_succeeded {
+            tag_clobbers_only(&String::from_utf8_lossy(&output.stderr))
+        } else {
+            None
+        };
+        if clobbered_tags.is_some() {
+            fetch_succeeded = true;
+        }
         if fetch_succeeded {
             LiveTimer::maybe_finish_timed(fetch_timer);
             if !self.quiet && self.verbose {
@@ -811,6 +830,19 @@ impl SyncContext {
                     }
                 }
             }
+        }
+
+        if let Some(tags) = clobbered_tags.filter(|_| !self.quiet) {
+            eprintln!(
+                "{}",
+                format!(
+                    "warning: kept local tag(s) that differ from {}: {}. \
+                     Delete them with `git tag -d <tag>` to take the remote version.",
+                    self.remote_name,
+                    tags.join(", ")
+                )
+                .yellow()
+            );
         }
 
         if self.restack && !fetch_succeeded {
@@ -3182,11 +3214,35 @@ impl SyncContext {
     }
 }
 
+/// Returns the rejected tag names when every error in `git fetch` stderr is a
+/// "would clobber existing tag" rejection, and `None` for any other failure.
+fn tag_clobbers_only(stderr: &str) -> Option<Vec<String>> {
+    let mut tags = Vec::new();
+    for line in stderr.lines().map(str::trim) {
+        if line.starts_with("fatal:") || line.starts_with("error:") {
+            return None;
+        }
+        let Some(rest) = line.strip_prefix("! [rejected]") else {
+            if line.starts_with('!') {
+                return None;
+            }
+            continue;
+        };
+        if !rest.contains("(would clobber existing tag)") {
+            return None;
+        }
+        let tag = rest.split_whitespace().next()?;
+        tags.push(tag.to_string());
+    }
+    (!tags.is_empty()).then_some(tags)
+}
+
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     restack: bool,
     full: bool,
+    tags: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -3207,6 +3263,7 @@ pub fn run(
         force,
         restack,
         full,
+        tags,
         delete_merged,
         delete_upstream_gone,
         force,
@@ -3231,6 +3288,7 @@ pub(crate) fn run_at(
     auto_confirm: bool,
     restack: bool,
     full: bool,
+    tags: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -3260,6 +3318,7 @@ pub(crate) fn run_at(
         auto_confirm,
         restack,
         full,
+        tags,
         delete_merged,
         delete_upstream_gone,
         force,
@@ -3283,6 +3342,7 @@ fn run_with_repo(
     auto_confirm: bool,
     restack: bool,
     full: bool,
+    tags: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -3305,6 +3365,7 @@ fn run_with_repo(
         sync_started_at,
         restack,
         full,
+        tags,
         delete_merged,
         delete_upstream_gone,
         force,
@@ -5506,6 +5567,40 @@ mod tests {
     use super::*;
     use colored::control;
     use std::path::PathBuf;
+
+    #[test]
+    fn tag_clobbers_only_lists_rejected_tags() {
+        let stderr = "From /tmp/r\n * branch main -> FETCH_HEAD\n \
+             ! [rejected] v1     -> v1  (would clobber existing tag)\n \
+             ! [rejected] v2     -> v2  (would clobber existing tag)\n";
+        assert_eq!(
+            tag_clobbers_only(stderr),
+            Some(vec!["v1".to_string(), "v2".to_string()])
+        );
+    }
+
+    #[test]
+    fn tag_clobbers_only_rejects_other_failures() {
+        assert_eq!(tag_clobbers_only(""), None);
+        assert_eq!(
+            tag_clobbers_only("fatal: could not read from remote repository"),
+            None
+        );
+        assert_eq!(
+            tag_clobbers_only(
+                " ! [rejected] v1 -> v1  (would clobber existing tag)\n \
+                 ! [rejected] main -> origin/main  (non-fast-forward)"
+            ),
+            None
+        );
+        assert_eq!(
+            tag_clobbers_only(
+                " ! [rejected] v1 -> v1  (would clobber existing tag)\n\
+                 error: cannot lock ref 'refs/remotes/origin/main'"
+            ),
+            None
+        );
+    }
 
     fn linked_worktree_cleanup(blockers: &[&'static str]) -> BlockingWorktreeCleanup {
         BlockingWorktreeCleanup {

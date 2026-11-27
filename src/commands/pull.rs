@@ -74,6 +74,7 @@ fn run_sync(o: &PullOptions, restack: bool) -> Result<()> {
     let result = sync::run(
         restack,
         false, // full
+        false, // tags
         !o.no_delete,
         false, // delete_upstream_gone
         o.force,
@@ -95,6 +96,7 @@ fn run_dry_run(o: &PullOptions) -> Result<()> {
     sync_plan::run(SyncPlanOptions {
         restack: !o.no_restack,
         full: false,
+        tags: false,
         delete_merged: !o.no_delete,
         delete_upstream_gone: false,
         force: o.force,

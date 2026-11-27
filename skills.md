@@ -377,6 +377,7 @@ stax sync --force                  # Force sync without prompts; preserve linked
 # [sync] ci_history_interval_days = 3: sync records merged-branch CI timings (for st ci ETAs) at most once per N days; 0 = every sync.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches and tags with --prune (slower; default is trunk-only fetch + ls-remote)
+stax sync --tags                   # Also fetch every remote tag (default fetch passes --no-tags); combines with --full
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time

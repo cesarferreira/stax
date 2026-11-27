@@ -527,6 +527,9 @@ pub(crate) enum Commands {
         /// Fetch all remote branches and tags with `--prune` (slower; default is trunk-only fetch + ls-remote)
         #[arg(long)]
         full: bool,
+        /// Fetch every remote tag, including tags no fetched branch reaches (default trunk-only fetch passes --no-tags)
+        #[arg(long)]
+        tags: bool,
         /// Don't delete merged branches
         #[arg(long)]
         no_delete: bool,

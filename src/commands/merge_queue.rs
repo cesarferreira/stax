@@ -518,6 +518,7 @@ pub fn run(
         if let Err(err) = crate::commands::sync::run(
             false, // restack
             false, // full
+            false, // tags
             true,  // delete merged branches
             false, // delete upstream-gone
             true,  // force

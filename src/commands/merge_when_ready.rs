@@ -630,6 +630,7 @@ pub fn run(
             if let Err(err) = crate::commands::sync::run(
                 false,      // restack
                 false,      // full (fast trunk + ls-remote when deleting merged)
+                false,      // tags
                 !no_delete, // delete merged branches unless explicitly kept
                 false,      // delete upstream-gone branches
                 true,       // force
